@@ -1,59 +1,23 @@
 /**
- * snapshotRetention.test.ts — Retention protection for derived-quarantined
- * historical snapshots (issue #428, policy #426 Section 7).
+ * snapshotRetention.test.ts — Retention protection under the issue #444
+ * V4-minimum policy.
  *
  * pruneSnapshots may delete ONLY snapshots positively classified as
- * restorable; the newest-20 cap applies to the restorable subset, so a
- * project may hold its normal retained restorable snapshots plus protected
- * quarantined or defective historical records. Classification failure keeps
- * the record (fail closed). Retention never rewrites snapshot content.
+ * restorable (structurally valid V4); the newest-20 cap applies to the
+ * restorable subset only. Every pre-V4 (V1/V2/V3) snapshot and every
+ * malformed/unclassifiable record is protected from automatic retention —
+ * deliberate removal happens exclusively through the reviewed pre-V4 purge
+ * command (issue #444). Retention never rewrites snapshot content.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { pruneSnapshots, type SnapshotDbLike } from '../lib/snapshotUtils.js'
-import { QUARANTINE_CLASS_A_REASON } from '../lib/snapshotRestorability.js'
+import { RETIREMENT_REASON } from '../lib/snapshotRestorability.js'
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
-/**
- * A windowless CAPACITY_PLAN snapshot that REMAINS quarantined (Class A):
- * issue #438 made only the EXACT all-windowless-100% shape restorable, so
- * this fixture uses a non-100 percentage — outside the approved predicate,
- * still quarantined (fail closed), still retention-protected.
- */
-function v2WindowlessCapacityPlan(id: string) {
-  return {
-    schemaVersion: 2,
-    epics: [],
-    project: null,
-    resourceTypes: [{
-      id: `rt-${id}`,
-      name: `Role ${id}`,
-      category: 'ENGINEERING',
-      count: 1,
-      hoursPerDay: null,
-      dayRate: null,
-      globalTypeId: null,
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 80,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-    }],
-    namedResources: [],
-    timelineEntries: [],
-    storyTimelineEntries: [],
-    epicDependencies: [],
-    featureDependencies: [],
-    overheadItems: [],
-  }
-}
-
-/**
- * The exact approved Class A snapshot shape (issue #438): every captured
- * entry windowless CAPACITY_PLAN at 100/100 with explicit modes — the
- * classifier verdicts it restorable, so retention may prune it like any
- * other restorable snapshot.
- */
-function v2ExactClassASnapshot(id: string) {
+/** A V2 snapshot — whatever its historical shape, it is retired and must
+ * never be deleted by automatic retention (purge-only removal). */
+function v2LegacySnapshot(id: string) {
   return {
     schemaVersion: 2,
     epics: [],
@@ -120,21 +84,21 @@ function record(id: string, snapshot: unknown) {
   return { id, snapshot }
 }
 
-const quarantined = (id: string) => record(id, v2WindowlessCapacityPlan(id))
+const legacy = (id: string) => record(id, v2LegacySnapshot(id))
 const restorable = (id: string) => record(id, v4RestorableSnapshot(id))
 const malformed = (id: string) => record(id, { schemaVersion: 99, epics: [] })
 
-describe('pruneSnapshots — retention protection (issue #428)', () => {
-  it('creating additional snapshots never deletes a quarantined historical snapshot', async () => {
+describe('pruneSnapshots — retention protection (issue #444)', () => {
+  it('creating additional snapshots never deletes a pre-V4 historical snapshot', async () => {
     const records = [
-      quarantined('q-1'),
+      legacy('legacy-1'),
       ...Array.from({ length: 25 }, (_, i) => restorable(`r-${String(i).padStart(2, '0')}`)),
     ]
     const { db, deleteMany } = makeDb(records)
     await pruneSnapshots(db, 'proj-1')
     const deletedIds = deleteMany.mock.calls[0]?.[0].where.id.in as string[]
     expect(deletedIds).toHaveLength(5) // 25 restorable − 20 cap
-    expect(deletedIds).not.toContain('q-1')
+    expect(deletedIds).not.toContain('legacy-1')
     // The raw record was never rewritten: only a deleteMany is issued.
     expect(deleteMany).toHaveBeenCalledTimes(1)
   })
@@ -162,21 +126,21 @@ describe('pruneSnapshots — retention protection (issue #428)', () => {
   })
 
   it('pruning never rewrites snapshot content (findMany reads, deleteMany deletes, nothing else)', async () => {
-    const records = [quarantined('q-1'), ...Array.from({ length: 22 }, (_, i) => restorable(`r-${i}`))]
+    const records = [legacy('legacy-1'), ...Array.from({ length: 22 }, (_, i) => restorable(`r-${i}`))]
     const { db, deleteMany } = makeDb(records)
     await pruneSnapshots(db, 'proj-1')
     // The only write-capable call is deleteMany; no update/upsert exists on the
     // minimal interface, and the payloads passed to findMany are untouched.
     expect(deleteMany).toHaveBeenCalledTimes(1)
-    expect(records[0]!.snapshot).toEqual(v2WindowlessCapacityPlan('q-1'))
+    expect(records[0]!.snapshot).toEqual(v2LegacySnapshot('legacy-1'))
   })
 
-  it('mixed restorable/quarantined ordering neither consumes nor bypasses the restorable cap', async () => {
-    // Quarantined records are NEWER than the restorable ones: they must not
+  it('mixed restorable/legacy ordering neither consumes nor bypasses the restorable cap', async () => {
+    // Pre-V4 records are NEWER than the restorable ones: they must not
     // consume the 20-restorable cap, and the cap must still hold.
     const records = [
-      quarantined('q-new-1'),
-      quarantined('q-new-2'),
+      legacy('legacy-new-1'),
+      legacy('legacy-new-2'),
       ...Array.from({ length: 25 }, (_, i) => restorable(`r-${String(i).padStart(2, '0')}`)),
     ]
     const { db, deleteMany } = makeDb(records)
@@ -187,37 +151,36 @@ describe('pruneSnapshots — retention protection (issue #428)', () => {
   })
 
   it('a project under the cap keeps everything', async () => {
-    const records = [quarantined('q-1'), restorable('r-1'), restorable('r-2')]
+    const records = [legacy('legacy-1'), restorable('r-1'), restorable('r-2')]
     const { db, deleteMany } = makeDb(records)
     await pruneSnapshots(db, 'proj-1')
     expect(deleteMany).not.toHaveBeenCalled()
   })
 
-  it('quarantined-only projects are never pruned', async () => {
-    const records = Array.from({ length: 30 }, (_, i) => quarantined(`q-${i}`))
+  it('legacy-only projects are never pruned', async () => {
+    const records = Array.from({ length: 30 }, (_, i) => legacy(`legacy-${i}`))
     const { db, deleteMany } = makeDb(records)
     await pruneSnapshots(db, 'proj-1')
     expect(deleteMany).not.toHaveBeenCalled()
   })
 
-  it('exact Class A snapshots return to normal retention eligibility (issue #438)', async () => {
-    // The EXACT all-windowless-100% shape is restorable now, so retention
-    // prunes it like any other restorable snapshot — the amendment changes
-    // eligibility only for the newly restorable shape.
+  it('every pre-V4 version (v1/v2/v3) is retention-protected', async () => {
     const records = [
+      record('v1-1', [{ id: 'e1', name: 'Epic', features: [] }]),
+      record('v3-1', { schemaVersion: 3, epics: [], project: null, resourceTypes: [], namedResources: [], timelineEntries: [], storyTimelineEntries: [], epicDependencies: [], featureDependencies: [], overheadItems: [], capacityProfiles: [] }),
       ...Array.from({ length: 25 }, (_, i) => restorable(`r-${String(i).padStart(2, '0')}`)),
-      record('class-a-1', v2ExactClassASnapshot('class-a-1')),
     ]
     const { db, deleteMany } = makeDb(records)
     await pruneSnapshots(db, 'proj-1')
     const deletedIds = deleteMany.mock.calls[0]?.[0].where.id.in as string[]
-    expect(deletedIds).toHaveLength(6) // 26 restorable − 20 cap
-    expect(deletedIds).toContain('class-a-1')
+    expect(deletedIds).toHaveLength(5)
+    expect(deletedIds).not.toContain('v1-1')
+    expect(deletedIds).not.toContain('v3-1')
   })
 
-  it('the stable quarantine reason is exposed by the classifier used by retention', () => {
-    // Guards the reason constant used in listing/rollback/readiness/remediation.
-    expect(QUARANTINE_CLASS_A_REASON).toContain('non-restorable')
-    expect(QUARANTINE_CLASS_A_REASON).toContain('Class A')
+  it('the stable retirement reason is exposed by the classifier used by retention', () => {
+    // Guards the reason constant used in listing/rollback/readiness.
+    expect(RETIREMENT_REASON).toContain('no longer restorable')
+    expect(RETIREMENT_REASON).toContain('V4 is the minimum supported snapshot version')
   })
 })

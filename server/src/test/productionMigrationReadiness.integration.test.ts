@@ -357,6 +357,22 @@ function v3SnapshotFixture(_projectId: string) {
   }
 }
 
+function v4SnapshotFixture(_projectId: string) {
+  const v3 = v3SnapshotFixture(_projectId) as {
+    schemaVersion: number
+    resourceTypes: Array<Record<string, unknown>>
+    namedResources: Array<Record<string, unknown>>
+  }
+  const { allocationMode: _am, allocationPercent: _ap, allocationStartWeek: _as, allocationEndWeek: _ae, ...rtRest } = v3.resourceTypes[0]!
+  const { startWeek: _sw, endWeek: _ew, allocationPct: _pct, allocationMode: _am2, allocationPercent: _ap2, allocationStartWeek: _as2, allocationEndWeek: _ae2, ...nrRest } = v3.namedResources[0]!
+  return {
+    ...v3,
+    schemaVersion: 4,
+    resourceTypes: [rtRest],
+    namedResources: [nrRest],
+  }
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Scenario 1 — valid representative database passes
 // ═════════════════════════════════════════════════════════════════════════════
@@ -369,8 +385,9 @@ describeIf('readiness — valid database', () => {
     projectId = pair.projectId
     const rtId = await createRoleWithProfile(projectId, 'Readiness Engineer')
     await createNamedPersonWithProfile(projectId, rtId, 'Readiness Person')
-    await createBacklogSnapshot(projectId, v2SnapshotFixture(projectId))
-    await createBacklogSnapshot(projectId, v3SnapshotFixture(projectId))
+    // Issue #444: only V4 snapshots are acceptable. A valid V4 snapshot and
+    // a normal template snapshot must both pass.
+    await createBacklogSnapshot(projectId, v4SnapshotFixture(projectId))
     // Normal template snapshots (FeatureTemplate objects) must never block
     // readiness — they are not project snapshots (issue #418 PR 1 review).
     await createTemplateSnapshot()
@@ -426,7 +443,7 @@ describeIf('readiness — template snapshots are excluded', () => {
     const report = await runProductionMigrationReadiness(prisma)
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
-    expect(text).toContain('unsupported or malformed snapshot data')
+    expect(text).toContain('malformed/unsupported BacklogSnapshots: 1')
   })
 })
 
@@ -545,7 +562,7 @@ describeIf('readiness — blockers fail closed', () => {
     expect(text).toContain('invalid week range')
   })
 
-  it('untranslatable historical snapshot fails', async () => {
+  it('a stored pre-V4 snapshot blocks readiness with an aggregate count (issue #444)', async () => {
     const { projectId } = await createUserProjectPair()
     const rtId = await createRoleWithProfile(projectId, 'Snapshot Role')
     await createNamedPersonWithProfile(projectId, rtId, 'Snapshot Person')
@@ -555,20 +572,36 @@ describeIf('readiness — blockers fail closed', () => {
     const report = await runProductionMigrationReadiness(prisma)
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
-    expect(text).toContain('unknown allocationMode')
+    // The snapshot section reports the aggregate pre-V4 count; it no longer
+    // reasons about historical translation semantics.
+    expect(text).toContain('pre-V4 BacklogSnapshots remain: 1')
+    expect(text).not.toContain('unknown allocationMode')
   })
 
-  it('translatable v2 CAPACITY_PLAN snapshot passes (same rules as rollback)', async () => {
+  it('a valid V4 snapshot passes (same rules as rollback)', async () => {
     const { projectId } = await createUserProjectPair()
     const rtId = await createRoleWithProfile(projectId, 'Plan Role')
     await createNamedPersonWithProfile(projectId, rtId, 'Plan Person')
-    await createBacklogSnapshot(projectId, v2CapacityPlanSnapshotFixture(projectId))
+    await createBacklogSnapshot(projectId, v4SnapshotFixture(projectId))
     const report = await runProductionMigrationReadiness(prisma)
     expect(report.passed).toBe(true)
     expect(formatReadinessReport(report)).toContain('READINESS PASSED')
   })
 
-  it('v2 CAPACITY_PLAN without a captured window is derived-quarantined and passes readiness', async () => {
+  it('an invalid V4 snapshot blocks with an aggregate count', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Invalid V4 Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Invalid V4 Person')
+    const badV4 = v4SnapshotFixture(projectId) as unknown as { capacityProfiles: Array<{ resourceTypeId: string | null }> }
+    badV4.capacityProfiles[0]!.resourceTypeId = null
+    await createBacklogSnapshot(projectId, badV4)
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(false)
+    const text = formatReadinessReport(report)
+    expect(text).toContain('invalid V4 BacklogSnapshots: 1')
+  })
+
+  it('any V2 snapshot blocks regardless of its historical shape (issue #444)', async () => {
     const { projectId } = await createUserProjectPair()
     const rtId = await createRoleWithProfile(projectId, 'No Window Plan Role')
     await createNamedPersonWithProfile(projectId, rtId, 'No Window Plan Person')
@@ -580,64 +613,33 @@ describeIf('readiness — blockers fail closed', () => {
     } as unknown as (typeof badV2.resourceTypes)[0]
     await createBacklogSnapshot(projectId, badV2)
     const report = await runProductionMigrationReadiness(prisma)
-    // Issue #428: the reviewed windowless CAPACITY_PLAN shape is
-    // policy-accepted derived quarantine — reported explicitly, never blocking.
-    expect(report.passed).toBe(true)
+    // Issue #444: the windowless CAPACITY_PLAN shape is deliberately retired
+    // with the other pre-V4 snapshots — the quarantine/Class A policy no
+    // longer applies.
+    expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
-    expect(text).toContain('quarantined (policy-accepted, non-restorable)')
-    expect(text).toContain('Class A')
+    expect(text).toContain('pre-V4 BacklogSnapshots remain: 1')
+    expect(text).not.toContain('quarantined')
+    expect(text).not.toContain('Class A')
   })
 
-  it('v2 CAPACITY_PLAN with a single -1 edge is derived-quarantined and passes readiness', async () => {
+  it('multiple pre-V4 snapshots reconcile to one aggregate count', async () => {
     const { projectId } = await createUserProjectPair()
-    const rtId = await createRoleWithProfile(projectId, 'Single Minus One Role')
-    await createNamedPersonWithProfile(projectId, rtId, 'Single Minus One Person')
-    const v2 = v2CapacityPlanSnapshotFixture(projectId)
-    v2.resourceTypes[0] = {
-      ...v2.resourceTypes[0],
-      allocationStartWeek: -1,
-      allocationEndWeek: 5,
-    } as unknown as (typeof v2.resourceTypes)[0]
-    await createBacklogSnapshot(projectId, v2)
-    const report = await runProductionMigrationReadiness(prisma)
-    expect(report.passed).toBe(true)
-    const text = formatReadinessReport(report)
-    expect(text).toContain('quarantined (policy-accepted, non-restorable)')
-    expect(text).toContain('Class B')
-  })
-
-  it('quarantine plus a real snapshot defect still fails readiness', async () => {
-    const { projectId } = await createUserProjectPair()
-    const rtId = await createRoleWithProfile(projectId, 'Mixed Snapshot Role')
-    await createNamedPersonWithProfile(projectId, rtId, 'Mixed Snapshot Person')
-    const quarantined = v2CapacityPlanSnapshotFixture(projectId)
-    quarantined.resourceTypes[0] = {
-      ...quarantined.resourceTypes[0],
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-    } as unknown as (typeof quarantined.resourceTypes)[0]
-    await createBacklogSnapshot(projectId, quarantined)
-    const defective = v2SnapshotFixture(projectId)
-    defective.resourceTypes[0].allocationMode = 'WARP_DRIVE'
-    await createBacklogSnapshot(projectId, defective)
+    const rtId = await createRoleWithProfile(projectId, 'Multiple Snapshot Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Multiple Snapshot Person')
+    await createBacklogSnapshot(projectId, v2CapacityPlanSnapshotFixture(projectId))
+    await createBacklogSnapshot(projectId, v3SnapshotFixture(projectId))
+    await createBacklogSnapshot(projectId, [{ id: 'e1', name: 'Epic', features: [] }])
     const report = await runProductionMigrationReadiness(prisma)
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
-    expect(text).toContain('unknown allocationMode')
-    // The quarantine is still reported explicitly — never silently hidden.
-    expect(text).toContain('quarantined (policy-accepted, non-restorable)')
+    expect(text).toContain('pre-V4 BacklogSnapshots remain: 3')
   })
 
-  it('quarantine plus unresolved live-state decisions still fails readiness', async () => {
+  it('pre-V4 plus unresolved live-state decisions still fails with both blockers', async () => {
     const { projectId } = await createUserProjectPair()
     const rtId = await createRoleWithProfile(projectId, 'Live Decision Role')
-    const quarantined = v2CapacityPlanSnapshotFixture(projectId)
-    quarantined.resourceTypes[0] = {
-      ...quarantined.resourceTypes[0],
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-    } as unknown as (typeof quarantined.resourceTypes)[0]
-    await createBacklogSnapshot(projectId, quarantined)
+    await createBacklogSnapshot(projectId, v2CapacityPlanSnapshotFixture(projectId))
     // A named resource without a persisted profile is a live-state blocker
     // (the 130 live decisions are this class of blocker — out of scope).
     await prisma.namedResource.create({ data: { name: 'Unprofiled Person', resourceTypeId: rtId } })
@@ -645,15 +647,17 @@ describeIf('readiness — blockers fail closed', () => {
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
     expect(text).toContain('lacks persisted profile')
+    expect(text).toContain('pre-V4 BacklogSnapshots remain: 1')
   })
 
-  it('v2 EFFORT and FULL_PROJECT rows with stale window aliases are translatable', async () => {
+  it('v2 rows with stale window aliases still block (no translation analysis)', async () => {
     const { projectId } = await createUserProjectPair()
     const rtId = await createRoleWithProfile(projectId, 'Stale Alias Role')
     await createNamedPersonWithProfile(projectId, rtId, 'Stale Alias Person')
 
     // EFFORT RT + EFFORT NR and FULL_PROJECT RT + FULL_PROJECT NR, both
-    // carrying stale window aliases the recorded mode never used.
+    // carrying stale window aliases the recorded mode never used. Whatever
+    // their historical translatability, their presence blocks readiness.
     const v2Data = {
       schemaVersion: 2,
       epics: [],
@@ -716,11 +720,11 @@ describeIf('readiness — blockers fail closed', () => {
     }
     await createBacklogSnapshot(projectId, v2Data)
     const report = await runProductionMigrationReadiness(prisma)
-    expect(report.passed).toBe(true)
-    expect(formatReadinessReport(report)).toContain('READINESS PASSED')
+    expect(report.passed).toBe(false)
+    expect(formatReadinessReport(report)).toContain('pre-V4 BacklogSnapshots remain: 1')
   })
 
-  it('orphan v2 NamedResource (missing parent ResourceType) fails readiness', async () => {
+  it('a V2 snapshot with an orphan owner blocks with the aggregate count only', async () => {
     const { projectId } = await createUserProjectPair()
     const rtId = await createRoleWithProfile(projectId, 'Orphan Owner Role')
     await createNamedPersonWithProfile(projectId, rtId, 'Orphan Owner Person')
@@ -764,8 +768,11 @@ describeIf('readiness — blockers fail closed', () => {
     const report = await runProductionMigrationReadiness(prisma)
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
-    expect(text).toContain('nr-v2-orphan')
-    expect(text).toContain('rt-v2-missing')
+    // Issue #444: no historical translation reasoning is emitted; the
+    // snapshot section reports only the aggregate count, never identifiers.
+    expect(text).toContain('pre-V4 BacklogSnapshots remain: 1')
+    expect(text).not.toContain('nr-v2-orphan')
+    expect(text).not.toContain('rt-v2-missing')
   })
 
   it('unsupported snapshot schema fails', async () => {
@@ -776,7 +783,7 @@ describeIf('readiness — blockers fail closed', () => {
     const report = await runProductionMigrationReadiness(prisma)
     expect(report.passed).toBe(false)
     const text = formatReadinessReport(report)
-    expect(text).toContain('unsupported or malformed snapshot data')
+    expect(text).toContain('malformed/unsupported BacklogSnapshots: 1')
   })
 
   it('persisted DEMAND_FOLLOWING with stale windows fails with owner identification', async () => {

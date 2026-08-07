@@ -61,24 +61,22 @@ untouched. `CapacityProfile.legacy` remains in place (retirement tracked by
 - New snapshots are **schemaVersion 4**: `resourceTypes[]` and
   `namedResources[]` omit the candidate columns; capacity is captured entirely
   in `capacityProfiles` / `capacitySegments`.
-- Historical snapshots remain restorable:
-  - **v1** — epic-tree restore only (unchanged contract).
-  - **v2** — full-state restore; the captured legacy capacity values are
-    translated into deterministic profiles by `recreateV2CapacityProfiles`
-    via the shared pure `translateV2SnapshotProfiles` helper (the same rules
-    the readiness command applies, so readiness and rollback always agree).
-    The candidate columns are treated as historical input only and are never
-    written back during restoration. Mode mapping: `EFFORT`/absent →
-    `DEMAND_FOLLOWING`/`FIXED`; `TIMELINE` → `AVAILABILITY_WINDOW`/
-    `AVAILABILITY_WINDOW`; `FULL_PROJECT` → `WHOLE_PROJECT_ALLOCATION`/
-    `FIXED`; `CAPACITY_PLAN` → `AVAILABILITY_WINDOW`/`LEGACY` preserving the
-    captured start/end window. A `CAPACITY_PLAN` owner without a captured
-    window cannot be translated without guessing and is rejected before any
-    rollback write (a segmentless `CAPACITY_PROFILE` role/person profile is
-    invalid authority).
-  - **v3** — full-state restore with exact profile/segment/plan replacement.
-  - **v4** — same exact replacement as v3.
-- **Rollback ownership contract (v2/v3/v4):** the transaction leaves every
+- **Issue #444 — V4 is the minimum supported/restorable snapshot format.**
+  The product accepts the deliberate loss of pre-V4 rollback history:
+  - **v1/v2/v3** — deliberately retired. They are **non-restorable** through
+    the shared restorability classifier with one stable reason
+    (`historical snapshot is no longer restorable: V4 is the minimum
+    supported snapshot version`); listing shows `non-restorable`, rollback is
+    refused pre-write before any transaction, and automatic retention never
+    deletes them. Stored pre-V4 rows are removed only by the explicit purge
+    command (below) before PR 2.
+  - **v4** — the only restorable format. Valid V4 payloads restore with exact
+    profile/segment/plan replacement; invalid V4 payloads are rejected
+    pre-write.
+- The historical v1/v2/v3 parsers/translators remain in the repository for
+  version identification during the purge; they are no longer a migration
+  requirement and no historical translation/restoration is performed.
+- **Rollback ownership contract (v4):** the transaction leaves every
   surviving `ResourceType` and `NamedResource` with valid authoritative
   ownership. Captured owners are exactly replaced from the snapshot;
   post-snapshot named resources are pruned; post-snapshot resource types are
@@ -115,15 +113,19 @@ npm run capacity-profiles:readiness        # from the repository root
     every named resource has exactly one valid profile; every role has a ROLE
     profile unless explicit-only; profile/segment shape follows the
     authoritative validation rules;
-  - historical snapshot parseability and translatability
-    (`parseSnapshotData`, v2 translation validation, `validateSnapshotV3`) —
-    every stored project `BacklogSnapshot` must parse as v1/v2/v3/v4 and
-    carry translatable capacity values. `TemplateSnapshot` rows are
-    deliberately **not** inspected: they store `FeatureTemplate` objects
-    (raw template state), not project snapshots, so they can never contain
-    `ResourceType`/`NamedResource`/`CapacityProfile` capacity state.
-- Reports project/entity identifiers without credentials or unrelated
-  sensitive data.
+  - snapshot version policy (issue #444) — every stored project
+    `BacklogSnapshot` is classified by schema version only (V4 is the
+    minimum supported format). Any pre-V4 (v1/v2/v3) row is a blocker with
+    an aggregate count (`pre-V4 BacklogSnapshots remain: N`) because it must
+    be purged before PR 2; malformed/unsupported payloads block
+    (`malformed/unsupported BacklogSnapshots: N`); structurally invalid V4
+    payloads block (`invalid V4 BacklogSnapshots: N`); valid V4 snapshots
+    pass. No historical translation, quarantine or decision analysis runs.
+    `TemplateSnapshot` rows are deliberately **not** inspected: they store
+    `FeatureTemplate` objects (raw template state), not project snapshots.
+- Reports aggregate counts only for the snapshot section; live-state
+  blockers identify the project/entity. Credentials or unrelated sensitive
+  data are never printed.
 
 ### Exit contract
 
@@ -144,11 +146,79 @@ For each readiness run, the production machine records:
    capacity editing, Squad Planner, planner-to-manual transfer, Resource
    Optimiser, Commercial, exports and snapshot creation/restoration.
 
+## Pre-V4 snapshot purge (Issue #444)
+
+One standalone, explicitly-invoked maintenance command deliberately removes
+every stored pre-V4 (`v1`/`v2`/`v3`) `BacklogSnapshot` row before the
+destructive column migration. It operates ONLY on `BacklogSnapshot` rows.
+
+```bash
+npm run capacity-profiles:purge-pre-v4-snapshots            # DRY RUN (default)
+npm run capacity-profiles:purge-pre-v4-snapshots -- --apply  # destructive apply
+# raw: npx tsx server/src/scripts/purgePreV4Snapshots.ts [--apply]
+```
+
+### Behaviour and safety contract
+
+- **Never** runs during application startup or from an HTTP request; exposes
+  no API or UI; is not invoked by readiness or any other command.
+- Classifies every stored `BacklogSnapshot` payload by schema version only
+  (`parseSnapshotData` + the existing version guards — no second parser):
+  V1, V2, V3, V4, or malformed/unsupported.
+- **DRY RUN (default):** reports sanitized aggregate counts
+  (V1/V2/V3/V4/malformed) and performs **zero writes**.
+- **APPLY (`--apply`):** deletes **only** rows positively classified
+  V1/V2/V3. V4 snapshots can never be deleted by this command. If ANY
+  malformed/unsupported snapshot exists, the whole apply aborts before any
+  deletion with an aggregate reason and a non-zero exit — unexpected data is
+  never worked around.
+- Never touches project/backlog/resource/profile/timeline tables and never
+  synthesises snapshots.
+- Output is aggregate-only: no project names/IDs, snapshot IDs, payloads,
+  user data, database URLs or credentials.
+- The production maintenance window under #404 is responsible for preventing
+  concurrent writes; the tool builds no locking or orchestration.
+
+### Fresh V4 safety snapshots (operational gate, not part of the tool)
+
+Before any purge apply, #404 must, for every current useful project in
+migration scope:
+
+1. create/verify at least one valid V4 snapshot through the normal snapshot
+   flow (the purge command never creates snapshots);
+2. create a fresh PostgreSQL backup and restore-test it successfully — the
+   backup is the disaster-recovery record of the deleted legacy snapshot
+   rows and must be retained through migration acceptance.
+
+## Revised #404 production sequence (after this release is merged)
+
+1. install the exact reviewed release containing this policy/tooling;
+2. verify service/database health;
+3. run the purge command in **dry-run** mode and record the sanitized
+   aggregate pre-V4/V4 counts;
+4. create/verify fresh V4 snapshot(s) for every useful current project;
+5. create a fresh PostgreSQL backup;
+6. restore-test that backup successfully;
+7. enter maintenance mode;
+8. run the purge **apply**;
+9. verify: V1 = 0, V2 = 0, V3 = 0, V4 snapshots remain,
+   malformed/unsupported = 0;
+10. verify a representative V4 restore succeeds;
+11. rerun the readiness command;
+12. continue remediation **only** for remaining **live-state** blockers
+    (the historical snapshot sections of the remediation plan are
+    superseded by the purge);
+13. authorize #418 PR 2 **only** when readiness passes AND the fresh backup
+    has been restore-tested. The purge itself does NOT authorize PR 2.
+
 ## Sequencing and rollback
 
 - **PR 2 (destructive Prisma migration) cannot start** until #404 records
-  that the readiness command passes against the useful database AND a fresh
-  backup has been restore-tested successfully.
+  that the readiness command passes against the useful database (with
+  pre-V4 snapshot count zero and representative V4 restore verified) AND a
+  fresh backup has been restore-tested successfully.
+- Representative V1/V2/V3 restoration is **no longer required** — the
+  product accepts the loss of pre-V4 rollback history (issue #444).
 - **Rollback remains backup restoration.** There is no reverse migration that
   recreates empty legacy columns.
 - **PR 1 performs no production migration.** All database and migration
@@ -163,8 +233,9 @@ historical v2 snapshots). The reviewed remediation command
 (`npm run capacity-profiles:remediate-readiness`, explicit dry-run/apply
 modes) is specified in
 [`docs/domain/capacity-profile-readiness-remediation.md`](capacity-profile-readiness-remediation.md),
-including the deterministic transformation matrix, the historical v2 snapshot
-policy (never-active `-1`/inverted-window normalisation shared by readiness
-and rollback), the decision manifest contract, the ownership-invariant
-migration sequencing, and the exact #404 production handoff. PR 2 remains
-blocked until #404 executes that procedure and records both gates.
+including the deterministic transformation matrix, the decision manifest
+contract, and the ownership-invariant migration sequencing. Issue #444
+supersedes the historical v2 snapshot policy sections of that document:
+pre-V4 snapshots are deliberately purged (see above) instead of being
+remediated, rewritten or translated. PR 2 remains blocked until #404
+executes the revised procedure and records both gates.

@@ -34,7 +34,6 @@ import {
 import { publishEvidenceOutputs } from '../lib/evidenceOutputPublication.js'
 import {
   buildRemediationPlan,
-  canonicalJson,
   computePlanFingerprint,
   computeStateHash,
   type PlanDecisionEntry,
@@ -254,18 +253,20 @@ function compositeState(): RemediationDatabaseState {
 }
 
 const COMPOSITE_COUNTS: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-  quarantinedEntries: 3,
-  quarantinedSnapshots: 1,
-  defectSnapshots: 2,
-  windowlessDecisions: 39,
+  // Issue #444: V2 snapshots are deliberately retired, so no snapshot is
+  // classified quarantined and every V2 snapshot counts as non-restorable.
+  quarantinedEntries: 0,
+  quarantinedSnapshots: 0,
+  defectSnapshots: 4,
+  windowlessDecisions: 41,
   singleMinusOneDecisions: 1,
-  snapshotDecisions: 40,
+  snapshotDecisions: 42,
   liveDecisions: 0,
   unsupported: 0,
   rewriteOperations: 0,
-  topology11Snapshots: 1,
+  topology11Snapshots: 3,
   topology7Snapshots: 1,
-  topology11WindowlessDecisions: 20,
+  topology11WindowlessDecisions: 22,
   topology7WindowlessDecisions: 19,
   topology7SingleMinusOneDecisions: 1,
 }
@@ -346,18 +347,20 @@ describe('buildSnapshotEvidenceReport — composite fixture', () => {
     expect(report.policyDecision).toBe('not-assessed')
     expect(report.formatVersion).toBe(2)
     expect(report.topology).toMatchObject({
-      quarantinedSnapshots: 1,
-      defectSnapshots: 2,
-      windowlessDecisions: 39,
+      quarantinedSnapshots: 0,
+      defectSnapshots: 4,
+      windowlessDecisions: 41,
       singleMinusOneDecisions: 1,
-      snapshotDecisions: 40,
+      snapshotDecisions: 42,
       liveDecisions: 0,
-      elevenSnapshotSubgroup: { snapshots: 1, windowlessDecisions: 20 },
+      elevenSnapshotSubgroup: { snapshots: 3, windowlessDecisions: 22 },
       sevenSnapshotSubgroup: { snapshots: 1, windowlessDecisions: 19, singleMinusOneDecisions: 1, totalDecisions: 20 },
       quarantinedFindingsWithDecisionOrOperationIds: 0,
     })
     expect(report.observedBoundary.snapshotPopulation).toEqual({
-      totalSnapshots: 4, restorable: 1, quarantined: 1, defect: 2,
+      // Issue #444: all four fixture snapshots are V2 — deliberately retired
+      // and therefore non-restorable (counted under defect here).
+      totalSnapshots: 4, restorable: 0, quarantined: 0, defect: 4,
     })
   })
 
@@ -383,13 +386,19 @@ describe('buildSnapshotEvidenceReport — composite fixture', () => {
 
   it('reports the M records with subgroup, decision counts and defect categories', () => {
     const report = buildReport(state, COMPOSITE_COUNTS)
-    expect(report.defectSnapshots).toHaveLength(2)
-    const eleven = report.defectSnapshots.find(m => m.subgroup === 'eleven-windowless-only')!
+    // Issue #444: every V2 snapshot is retired/non-restorable, so all four
+    // fixture snapshots appear as M records.
+    expect(report.defectSnapshots).toHaveLength(4)
+    const eleven = report.defectSnapshots.filter(m => m.subgroup === 'eleven-windowless-only')
     const seven = report.defectSnapshots.find(m => m.subgroup === 'seven-single-minus-one')!
-    expect(eleven.windowlessDecisionCount).toBe(20)
-    expect(eleven.singleMinusOneDecisionCount).toBe(0)
-    expect(eleven.entryErrorCategories['alias-conflict']).toBe(1)
-    expect(eleven.independentDefect).toBe('entry-level')
+    expect(eleven).toHaveLength(3)
+    expect(eleven.map(m => m.windowlessDecisionCount).sort((a, b) => a - b)).toEqual([0, 2, 20])
+    // The 20-windowless eleven record is snap-eleven with its alias-conflict
+    // NamedResource as the independent entry-level defect.
+    const snapEleven = eleven.find(m => m.windowlessDecisionCount === 20)!
+    expect(snapEleven.singleMinusOneDecisionCount).toBe(0)
+    expect(snapEleven.entryErrorCategories['alias-conflict']).toBe(1)
+    expect(snapEleven.independentDefect).toBe('entry-level')
     expect(seven.windowlessDecisionCount).toBe(19)
     expect(seven.singleMinusOneDecisionCount).toBe(1)
     expect(seven.entryErrorCategories['negative-one-window-value']).toBe(1)
@@ -400,18 +409,20 @@ describe('buildSnapshotEvidenceReport — composite fixture', () => {
 
   it('aggregates Class A entries by owner kind, mode source, era and alias shape', () => {
     const report = buildReport(state, COMPOSITE_COUNTS)
-    expect(report.classAAggregates.totalEntries).toBe(3)
-    expect(report.classAAggregates.totalSnapshots).toBe(1)
-    expect(report.classAAggregates.byOwnerKind).toEqual({ resourceType: 2, namedResource: 1, unavailable: 0 })
-    expect(report.classAAggregates.byNamedModeSource).toEqual({ explicit: 0, inherited: 1, other: 0, unavailable: 0 })
-    expect(report.classAAggregates.percentageByCategory.inherited.allocationPercent.hundred).toBe(1)
-    expect(report.classAAggregates.percentageByCategory.resourceType.allocationPercent.hundred).toBe(2)
+    // Issue #444: quarantine classification is retired, so every Class A
+    // aggregate is zero while remaining structurally consistent.
+    expect(report.classAAggregates.totalEntries).toBe(0)
+    expect(report.classAAggregates.totalSnapshots).toBe(0)
+    expect(report.classAAggregates.byOwnerKind).toEqual({ resourceType: 0, namedResource: 0, unavailable: 0 })
+    expect(report.classAAggregates.byNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
+    expect(report.classAAggregates.percentageByCategory.inherited.allocationPercent.hundred).toBe(0)
+    expect(report.classAAggregates.percentageByCategory.resourceType.allocationPercent.hundred).toBe(0)
     expect(report.classAAggregates.aliasShapes).toEqual({
-      primaryAbsentNull: 3, fallbackAbsentNull: 1, populatedAgreeing: 0, conflicting: 0, unavailable: 0,
+      primaryAbsentNull: 0, fallbackAbsentNull: 0, populatedAgreeing: 0, conflicting: 0, unavailable: 0,
     })
-    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 0, namedResourceOnly: 0, mixed: 1 })
-    expect(report.classAAggregates.entriesByEra['2026-05-05-to-2026-07-13']).toBe(3)
-    expect(report.classAAggregates.snapshotsByEra['2026-05-05-to-2026-07-13']).toBe(1)
+    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 0, namedResourceOnly: 0, mixed: 0 })
+    expect(report.classAAggregates.entriesByEra['2026-05-05-to-2026-07-13']).toBe(0)
+    expect(report.classAAggregates.snapshotsByEra['2026-05-05-to-2026-07-13']).toBe(0)
   })
 
   it('redacts every seeded identifier, name and payload', () => {
@@ -447,9 +458,9 @@ describe('buildSnapshotEvidenceReport — composite fixture', () => {
   it('keeps JSON and Markdown in parity (Markdown renders the same object)', () => {
     const report = buildReport(state, COMPOSITE_COUNTS)
     const markdown = renderSnapshotEvidenceMarkdown(report)
-    expect(markdown).toContain('quarantinedSnapshots: 1')
-    expect(markdown).toContain('defectSnapshots: 2')
-    expect(markdown).toContain('windowlessDecisions: 39')
+    expect(markdown).toContain('quarantinedSnapshots: 0')
+    expect(markdown).toContain('defectSnapshots: 4')
+    expect(markdown).toContain('windowlessDecisions: 41')
     expect(markdown).toContain('singleMinusOneDecisions: 1')
     expect(markdown).toContain('policyDecision: not-assessed')
     expect(markdown).toContain('M1')
@@ -460,8 +471,9 @@ describe('buildSnapshotEvidenceReport — composite fixture', () => {
   it('Markdown carries every required Issue #432/#430 evidence category', () => {
     const report = buildReport(state, COMPOSITE_COUNTS)
     const markdown = renderSnapshotEvidenceMarkdown(report)
-    // Topology snapshot and decision counts for both subgroups.
-    expect(markdown).toContain('11-snapshot subgroup: 1 snapshots, 20 windowless decisions')
+    // Topology snapshot and decision counts for both subgroups (issue #444:
+    // all four V2 snapshots are retired/non-restorable).
+    expect(markdown).toContain('11-snapshot subgroup: 3 snapshots, 22 windowless decisions')
     expect(markdown).toContain('7-snapshot subgroup: 1 snapshots, 19 windowless + 1 single-(-1) = 20 total decisions')
     // S records: entry errors AND structural errors, modes, percentages, defect class,
     // sanitized window-field states and per-edge conflict evidence.
@@ -483,18 +495,14 @@ describe('buildSnapshotEvidenceReport — composite fixture', () => {
     expect(sRow).toContain('both')
     // M records: other decision reasons column plus entry/structural categories.
     expect(markdown).toContain('Other decision reasons')
-    const elevenRow = markdown.split('\n').find(line => line.includes('eleven-windowless-only'))!
-    expect(elevenRow).toContain('alias-conflict:1')
-    // Class A percentage evidence for every category (resourceType/explicit/inherited/other/unavailable).
+    expect(markdown).toContain('alias-conflict:1')
+    // Class A percentage evidence section still renders every category row
+    // (all buckets are zero under the retired-quarantine policy).
     expect(markdown).toContain('### Class A percentage evidence (by owner kind / mode source)')
     expect(markdown).toContain('| Category | allocationPercent buckets | allocationPct buckets |')
-    const resourceTypeRow = markdown.split('\n').find(line => line.startsWith('resourceType |'))!
-    expect(resourceTypeRow).toContain('hundred:2')
-    const inheritedRow = markdown.split('\n').find(line => line.startsWith('inherited |'))!
-    expect(inheritedRow).toContain('hundred:1')
-    expect(markdown).toContain('explicit |')
-    expect(markdown).toContain('other |')
-    expect(markdown).toContain('unavailable |')
+    for (const category of ['resourceType', 'explicit', 'inherited', 'other', 'unavailable']) {
+      expect(markdown).toContain(`${category} |`)
+    }
     // JSON carries the same categories (parity over the same evidence object).
     const json = JSON.stringify(report)
     expect(json).toContain('profile-window')
@@ -630,11 +638,11 @@ describe('all four raw -1 orientations', () => {
     })
   }
 
-  it('reports a clean single -1 shape as Class B quarantine, not an S record (no conflicts to report)', () => {
-    // Classifier boundary: a single -1 with no populated alias on the -1 edge
-    // and agreeing/absent aliases on the other edge matches the shared Class B
-    // quarantine predicate, so the plan makes no single-negative decision and
-    // the evidence command reports no S record and no alias conflicts.
+  it('reports a clean single -1 shape as a single-negative decision and S record (issue #444)', () => {
+    // Issue #444: the quarantine gate is retired, so a clean single -1
+    // shape (no populated alias on the -1 edge, agreeing/absent aliases on
+    // the other edge) becomes a plan single-negative decision and the
+    // evidence command emits one S record with no alias conflicts.
     const state = makeState([{
       id: 'snap-class-b',
       projectId: PROJECT_ID,
@@ -644,22 +652,25 @@ describe('all four raw -1 orientations', () => {
       ),
     }])
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 1, quarantinedSnapshots: 1, defectSnapshots: 0,
-      windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
+      windowlessDecisions: 0, singleMinusOneDecisions: 1, snapshotDecisions: 1,
       liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
-      topology11Snapshots: 0, topology7Snapshots: 0,
+      topology11Snapshots: 0, topology7Snapshots: 1,
       topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
-      topology7SingleMinusOneDecisions: 0,
+      topology7SingleMinusOneDecisions: 1,
     }
     const report = buildReport(state, counts)
-    // No single-negative decision exists for a clean Class B shape: the
-    // evidence command reports no S record. The quarantined Class B entry is
-    // outside the reviewed Class A invariant, so the run refuses (fail
-    // closed) exactly as the production command would.
-    expect(report.singleNegativeEntries).toHaveLength(0)
-    expect(report.integrityResult.reconciliationPassed).toBe(false)
-    const mismatches = report.reconciliation.details.filter(detail => detail.includes('MISMATCH'))
-    expect(mismatches.map(m => m.split(':')[0])).toEqual(['class A entries reconcile', 'class A snapshots reconcile'])
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.singleNegativeEntries).toHaveLength(1)
+    const s = report.singleNegativeEntries[0]!
+    expect(s.minusOneField).toBe('allocationStartWeek')
+    expect(s.windowFields).toEqual({
+      allocationStartWeek: 'minus-one',
+      allocationEndWeek: 'populated',
+      startWeek: 'absent-null',
+      endWeek: 'absent-null',
+    })
+    expect(s.aliasConflicts).toEqual({ startEdge: false, endEdge: false })
   })
 
   it('distinguishes a start-edge conflict from an end-edge conflict', () => {
@@ -819,11 +830,11 @@ describe('subgroup snapshot-count gating', () => {
   })
 })
 
-describe('Class A affected-snapshot aggregates', () => {
-  /** One windowless CAPACITY_PLAN RT entry per snapshot that remains
-   * quarantined as Class A. Issue #438: the EXACT all-windowless-100% shape
-   * is now restorable, so these fixtures use a non-100 percentage — outside
-   * the approved predicate, still quarantined (fail closed). */
+describe('Class A affected-snapshot aggregates (issue #444 retired policy)', () => {
+  /** One windowless CAPACITY_PLAN RT entry per snapshot. Under issue #444
+   * the whole V2 snapshot is retired (non-restorable), so it appears as an
+   * M record with a windowless decision while the Class A aggregates stay
+   * zero (quarantine classification is retired). */
   function rtOnlySnapshot(id: string, windowStart: number | null = null, allocationPercent = 80): StateSnapshot {
     return {
       id,
@@ -836,47 +847,46 @@ describe('Class A affected-snapshot aggregates', () => {
   }
 
   /** One windowless CAPACITY_PLAN NR entry (explicit, 100/100) with a
-   * windowed parent: the snapshot stays quarantined (mixed). */
+   * windowed parent. */
   function nrOnlySnapshot(id: string): StateSnapshot {
     return {
       id,
       projectId: PROJECT_ID,
       payload: makeV2Snapshot(
-        // Restorable windowed parent (not itself Class A).
         [makeRt({ id: `rt-${id}`, allocationMode: 'TIMELINE', allocationPercent: 100, allocationStartWeek: 0, allocationEndWeek: 5 })],
         [makeNr({ id: `nr-${id}`, resourceTypeId: `rt-${id}`, allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
       ),
     }
   }
 
-  function countsFor(quarantinedEntries: number, quarantinedSnapshots: number): Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> {
+  /** Every V2 snapshot is retired/non-restorable: one defect M record per
+   * snapshot and one windowless decision per windowless entry. */
+  function countsForRetired(snapshots: number, windowless: number): Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> {
     return {
-      quarantinedEntries, quarantinedSnapshots, defectSnapshots: 0,
-      windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: snapshots,
+      windowlessDecisions: windowless, singleMinusOneDecisions: 0, snapshotDecisions: windowless,
       liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
-      topology11Snapshots: 0, topology7Snapshots: 0,
-      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology11Snapshots: snapshots, topology7Snapshots: 0,
+      topology11WindowlessDecisions: windowless, topology7WindowlessDecisions: 0,
       topology7SingleMinusOneDecisions: 0,
     }
   }
 
-  it('counts a ResourceType-only Class A snapshot under resourceType and unavailable mode source', () => {
+  it('counts a ResourceType-only V2 snapshot as retired with zero Class A aggregates', () => {
     const state = makeState([rtOnlySnapshot('rt-a')])
-    const report = buildReport(state, countsFor(1, 1))
+    const report = buildReport(state, countsForRetired(1, 1))
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 1, namedResource: 0, unavailable: 0 })
-    // ResourceType-only snapshots contribute zero to every NamedResource
-    // mode-source category.
+    expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 0, namedResource: 0, unavailable: 0 })
     expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
-    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 1, namedResourceOnly: 0, mixed: 0 })
+    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 0, namedResourceOnly: 0, mixed: 0 })
+    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 1, restorable: 0, quarantined: 0, defect: 1 })
   })
 
-  it('treats an exact all-windowless-100% snapshot as restorable, never quarantined (issue #438)', () => {
-    // The EXACT approved Class A shape (windowless CAPACITY_PLAN 100/100,
-    // explicit modes, all entries matching) is deterministic full capacity:
-    // the shared classifier verdicts it restorable, so it contributes zero
-    // entries/snapshots to the quarantine Class A aggregates and produces no
-    // windowless decisions.
+  it('treats an exact all-windowless-100% snapshot as retired, never restorable (issue #444)', () => {
+    // Issue #438 previously made the EXACT all-windowless-100% shape
+    // restorable. Issue #444 retires every V2 snapshot without analysis, so
+    // the same payload is now non-restorable and its windowless entries are
+    // plain decisions.
     const state = makeState([{
       id: 'snap-exact-a',
       projectId: PROJECT_ID,
@@ -885,27 +895,24 @@ describe('Class A affected-snapshot aggregates', () => {
         [makeNr({ id: 'nr-a1', resourceTypeId: 'rt-a1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
       ),
     }])
-    const report = buildReport(state, countsFor(0, 0))
+    const report = buildReport(state, countsForRetired(1, 2))
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 1, restorable: 1, quarantined: 0, defect: 0 })
+    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 1, restorable: 0, quarantined: 0, defect: 1 })
     expect(report.classAAggregates.totalEntries).toBe(0)
     expect(report.classAAggregates.totalSnapshots).toBe(0)
-    expect(report.topology.windowlessDecisions).toBe(0)
+    expect(report.topology.windowlessDecisions).toBe(2)
   })
 
-  it('counts a NamedResource-only Class A snapshot under namedResource and explicit mode source', () => {
+  it('counts a NamedResource-only V2 snapshot as retired with zero Class A aggregates', () => {
     const state = makeState([nrOnlySnapshot('nr-a')])
-    const report = buildReport(state, countsFor(1, 1))
+    const report = buildReport(state, countsForRetired(1, 1))
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 0, namedResource: 1, unavailable: 0 })
-    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 1, inherited: 0, other: 0, unavailable: 0 })
-    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 0, namedResourceOnly: 1, mixed: 0 })
+    expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 0, namedResource: 0, unavailable: 0 })
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
+    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 0, namedResourceOnly: 0, mixed: 0 })
   })
 
-  it('counts a mixed ResourceType/NamedResource snapshot once in both owner-kind categories', () => {
-    // The NamedResource carries a non-100 allocationPct so the snapshot is
-    // outside the exact all-windowless-100% predicate and stays quarantined
-    // (both entries remain Class A quarantine candidates).
+  it('counts a mixed ResourceType/NamedResource V2 snapshot with two windowless decisions', () => {
     const state = makeState([{
       id: 'snap-mixed',
       projectId: PROJECT_ID,
@@ -914,23 +921,19 @@ describe('Class A affected-snapshot aggregates', () => {
         [makeNr({ id: 'nr-mix', resourceTypeId: 'rt-mix', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 80, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
       ),
     }])
-    const report = buildReport(state, countsFor(2, 1))
+    const report = buildReport(state, countsForRetired(1, 2))
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 1, namedResource: 1, unavailable: 0 })
-    // The ResourceType entry contributes no mode-source category: only the
-    // explicit NamedResource entry does.
-    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 1, inherited: 0, other: 0, unavailable: 0 })
-    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 0, namedResourceOnly: 0, mixed: 1 })
+    expect(report.classAAggregates.affectedSnapshotsByOwnerKind).toEqual({ resourceType: 0, namedResource: 0, unavailable: 0 })
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
+    expect(report.classAAggregates.snapshotsByOwnerKindMix).toEqual({ resourceTypeOnly: 0, namedResourceOnly: 0, mixed: 0 })
+    expect(report.topology.windowlessDecisions).toBe(2)
   })
 
-  it('counts a snapshot containing explicit and inherited NamedResource Class A entries once in both mode-source categories', () => {
+  it('counts a snapshot with explicit and inherited NamedResource entries: two windowless decisions, zero Class A', () => {
     const state = makeState([{
       id: 'snap-both-modes',
       projectId: PROJECT_ID,
       payload: makeV2Snapshot(
-        // CAPACITY_PLAN parent with absent windows: itself Class A (its
-        // unavailable mode-source category) and the source of the inherited
-        // mode for the raw-mode-null NamedResource.
         [makeRt({ id: 'rt-both', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null })],
         [
           makeNr({ id: 'nr-explicit', resourceTypeId: 'rt-both', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null }),
@@ -938,20 +941,16 @@ describe('Class A affected-snapshot aggregates', () => {
         ],
       ),
     }])
-    const report = buildReport(state, countsFor(3, 1))
+    const report = buildReport(state, countsForRetired(1, 2))
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    // byNamedModeSource counts NamedResource entries only; the ResourceType
-    // entry contributes no mode-source category to either aggregate.
-    expect(report.classAAggregates.byNamedModeSource).toEqual({ explicit: 1, inherited: 1, other: 0, unavailable: 0 })
-    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 1, inherited: 1, other: 0, unavailable: 0 })
+    expect(report.classAAggregates.byNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
+    expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
+    expect(report.topology.windowlessDecisions).toBe(2)
   })
 
-  it('counts a snapshot with genuine unavailable NamedResource provenance correctly (never Class A)', () => {
-    // Shared predicate boundary: a NamedResource whose mode provenance is
-    // genuinely unavailable (no explicit mode, no CAPACITY_PLAN parent)
-    // resolves to a null effective mode and is therefore NOT Class A, so it
-    // cannot contribute to the unavailable mode-source category. The
-    // category is provably fed only by Class A NamedResource entries.
+  it('counts a snapshot with genuinely unavailable NamedResource provenance as retired with no decisions', () => {
+    // Null effective mode is a valid/no-action entry, so the retired
+    // snapshot produces no windowless decision.
     const state = makeState([{
       id: 'snap-unavailable-provenance',
       projectId: PROJECT_ID,
@@ -960,13 +959,13 @@ describe('Class A affected-snapshot aggregates', () => {
         [makeNr({ id: 'nr-u', resourceTypeId: 'rt-u', allocationMode: null, allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
       ),
     }])
-    const report = buildReport(state, countsFor(0, 0))
+    const report = buildReport(state, countsForRetired(1, 0))
     expect(report.integrityResult.reconciliationPassed).toBe(true)
     expect(report.classAAggregates.totalEntries).toBe(0)
     expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
   })
 
-  it('counts repeated Class A entries in one category as a single affected snapshot', () => {
+  it('counts repeated windowless entries in one retired snapshot as decisions', () => {
     const state = makeState([{
       id: 'snap-repeated',
       projectId: PROJECT_ID,
@@ -978,11 +977,12 @@ describe('Class A affected-snapshot aggregates', () => {
         [],
       ),
     }])
-    const report = buildReport(state, countsFor(2, 1))
+    const report = buildReport(state, countsForRetired(1, 2))
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    expect(report.classAAggregates.totalEntries).toBe(2)
-    expect(report.classAAggregates.affectedSnapshotsByOwnerKind.resourceType).toBe(1)
+    expect(report.classAAggregates.totalEntries).toBe(0)
+    expect(report.classAAggregates.affectedSnapshotsByOwnerKind.resourceType).toBe(0)
     expect(report.classAAggregates.affectedSnapshotsByNamedModeSource).toEqual({ explicit: 0, inherited: 0, other: 0, unavailable: 0 })
+    expect(report.topology.windowlessDecisions).toBe(2)
   })
 
   it('renders both aggregates in JSON and Markdown in parity', () => {
@@ -990,25 +990,21 @@ describe('Class A affected-snapshot aggregates', () => {
       rtOnlySnapshot('rt-parity'),
       nrOnlySnapshot('nr-parity'),
     ])
-    const report = buildReport(state, countsFor(2, 2))
+    const report = buildReport(state, countsForRetired(2, 2))
     const json = JSON.stringify(report)
     const markdown = renderSnapshotEvidenceMarkdown(report)
-    expect(json).toContain('"affectedSnapshotsByOwnerKind":{"resourceType":1,"namedResource":1,"unavailable":0}')
-    expect(markdown).toContain('affectedSnapshotsByOwnerKind: {"resourceType":1,"namedResource":1,"unavailable":0}')
-    expect(markdown).toContain('affectedSnapshotsByNamedModeSource: {"explicit":1,"inherited":0,"other":0,"unavailable":0}')
+    expect(json).toContain('"affectedSnapshotsByOwnerKind":{"resourceType":0,"namedResource":0,"unavailable":0}')
+    expect(markdown).toContain('affectedSnapshotsByOwnerKind: {"resourceType":0,"namedResource":0,"unavailable":0}')
+    expect(markdown).toContain('affectedSnapshotsByNamedModeSource: {"explicit":0,"inherited":0,"other":0,"unavailable":0}')
   })
 })
 
-// ═════════════════════════════════════════════════════════════════════════════
-// Issue #440 — sanitized Class A companion evidence (evidence for the #438
-// companion-rule review; never a predicate implementation)
-// ═════════════════════════════════════════════════════════════════════════════
-
-describe('Class A companion evidence (issue #440)', () => {
-  /** Comprehensive selected fixture: one Class-A-quarantined snapshot
-   * containing one exact Class A RT and six companions covering the
-   * reachable shape categories (windowless/populated/minus-one fields,
-   * explicit/inherited/absent modes, 100% and finite non-100%). */
+describe('Class A companion evidence (issue #444: retired population)', () => {
+  /** Comprehensive fixture: one V2 snapshot containing entries that the
+   * issue #438/#440 policy previously classified as exact Class A or
+   * quarantine companions. Under issue #444 the whole V2 snapshot is
+   * deliberately retired, so the companion population is empty and every
+   * quarantine aggregate is zero. */
   function companionState(): RemediationDatabaseState {
     return makeState([
       {
@@ -1016,22 +1012,20 @@ describe('Class A companion evidence (issue #440)', () => {
         projectId: PROJECT_ID,
         payload: makeV2Snapshot(
           [
-            // Exact Class A ResourceType entry.
+            // Previously exact Class A ResourceType entry.
             makeRt({ id: 'rt-a', name: 'Engineers Role', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null }),
-            // Companion: windowless CAPACITY_PLAN at 80% (quarantine-shaped,
-            // non-exact → current plan classification quarantined).
+            // Previously quarantine-shaped companion at 80%.
             makeRt({ id: 'rt-b', name: 'Partial Role', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, allocationPercent: 80 }),
             // Companion: windowless EFFORT at 100% (alreadyValid).
             makeRt({ id: 'rt-c', name: 'Effort Role', allocationMode: 'EFFORT', allocationStartWeek: null, allocationEndWeek: null }),
           ],
           [
-            // Companion: exact S shape (raw (-1,-1) alias pair with populated
+            // Previously exact S shape (raw (-1,-1) alias pair with populated
             // primary end) → deterministic zero classification.
             makeNr({ id: 'nr-s', resourceTypeId: 'rt-a', name: 'Shadowed Person', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: 5, startWeek: -1, endWeek: -1 }),
             // Companion: explicit windowed TIMELINE at 100/100 (alreadyValid).
             makeNr({ id: 'nr-tl', resourceTypeId: 'rt-c', name: 'Timeline Person', allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: 2, allocationEndWeek: 9, startWeek: 2, endWeek: 9 }),
-            // Companion: inherited CAPACITY_PLAN windowless 100/100
-            // (quarantine-shaped, non-exact → quarantined).
+            // Companion: inherited CAPACITY_PLAN windowless 100/100.
             makeNr({ id: 'nr-inherited', resourceTypeId: 'rt-a', name: 'Inherited Person', allocationMode: null, allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null }),
             // Companion: explicit EFFORT windowless 100/100 (alreadyValid).
             makeNr({ id: 'nr-effort', resourceTypeId: 'rt-c', name: 'Effort Person', allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null }),
@@ -1042,153 +1036,67 @@ describe('Class A companion evidence (issue #440)', () => {
   }
 
   const COMPANION_COUNTS: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-    quarantinedEntries: 3,
-    quarantinedSnapshots: 1,
-    defectSnapshots: 0,
-    windowlessDecisions: 0,
+    quarantinedEntries: 0,
+    quarantinedSnapshots: 0,
+    defectSnapshots: 1,
+    windowlessDecisions: 2,
     singleMinusOneDecisions: 0,
-    snapshotDecisions: 0,
+    snapshotDecisions: 2,
     liveDecisions: 0,
     unsupported: 0,
     rewriteOperations: 0,
-    topology11Snapshots: 0,
+    topology11Snapshots: 1,
     topology7Snapshots: 0,
-    topology11WindowlessDecisions: 0,
+    topology11WindowlessDecisions: 2,
     topology7WindowlessDecisions: 0,
     topology7SingleMinusOneDecisions: 0,
   }
 
-  it('selects the mixed Class-A-quarantined snapshot and reports population totals', () => {
+  it('reports an empty companion population under the retired policy', () => {
     const report = buildReport(companionState(), COMPANION_COUNTS)
     expect(report.integrityResult.reconciliationPassed).toBe(true)
     expect(report.formatVersion).toBe(2)
     expect(report.classACompanionEvidence.population).toEqual({
-      classAQuarantinedSnapshots: 1,
-      snapshotsWithCompanions: 1,
-      exactClassAResourceTypeEntries: 1,
+      classAQuarantinedSnapshots: 0,
+      snapshotsWithCompanions: 0,
+      exactClassAResourceTypeEntries: 0,
       exactClassANamedResourceEntries: 0,
-      companionResourceTypeEntries: 2,
-      companionNamedResourceEntries: 4,
-      totalCompanionEntries: 6,
+      companionResourceTypeEntries: 0,
+      companionNamedResourceEntries: 0,
+      totalCompanionEntries: 0,
       excludedMixedClassABSnapshots: 0,
     })
-    // The current quarantine boundary of the fixture is unchanged by the
-    // tooling: the same 3 entries / 1 snapshot stay quarantined.
-    expect(report.observedBoundary.summary.quarantined).toBe(3)
-    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 1, restorable: 0, quarantined: 1, defect: 0 })
+    // The snapshot itself is retired: no quarantine findings, no restorable
+    // verdict — only the two windowless entries become decisions.
+    expect(report.observedBoundary.summary.quarantined).toBe(0)
+    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 1, restorable: 0, quarantined: 0, defect: 1 })
+    expect(report.topology.windowlessDecisions).toBe(2)
   })
 
-  it('emits deterministic sorted shape rows with fixed sanitized categories only', () => {
+  it('emits no companion shape rows under the retired policy', () => {
     const report = buildReport(companionState(), COMPANION_COUNTS)
-    const rows = report.classACompanionEvidence.shapeRows
-    expect(rows).toHaveLength(6)
-    const rowByKind = (kind: 'resourceType' | 'namedResource', rawMode: unknown, classification: string) =>
-      rows.find(row => row.entryKind === kind && (row.rawMode ?? 'null') === (rawMode ?? 'null') && row.currentPlanClassification === classification)
-
-    // RT companion: windowless CAPACITY_PLAN at 80% → quarantined, unavailable aliases/pct.
-    const rt80 = rowByKind('resourceType', 'CAPACITY_PLAN', 'quarantined')!
-    expect(rt80).toMatchObject({
-      parentMode: 'unavailable',
-      effectiveMode: 'CAPACITY_PLAN',
-      modeSource: 'unavailable',
-      allocationStartWeekState: 'absent-null',
-      allocationEndWeekState: 'absent-null',
-      startWeekState: 'unavailable',
-      endWeekState: 'unavailable',
-      allocationPercentCategory: 'one-to-ninety-nine',
-      allocationPctCategory: 'unavailable',
-      count: 1,
-    })
-    // RT companion: windowless EFFORT at 100% → alreadyValid.
-    const rtEffort = rowByKind('resourceType', 'EFFORT', 'alreadyValid')!
-    expect(rtEffort.allocationPercentCategory).toBe('hundred')
-    // NR companion: exact S shape → minus-one aliases, populated non-negative
-    // primary end, explicit mode, deterministic.
-    const nrS = rowByKind('namedResource', 'CAPACITY_PLAN', 'deterministic')!
-    expect(nrS).toMatchObject({
-      parentMode: 'CAPACITY_PLAN',
-      effectiveMode: 'CAPACITY_PLAN',
-      modeSource: 'explicit',
-      allocationStartWeekState: 'absent-null',
-      allocationEndWeekState: 'populated-nonnegative-integer',
-      startWeekState: 'minus-one',
-      endWeekState: 'minus-one',
-      allocationPercentCategory: 'hundred',
-      allocationPctCategory: 'hundred',
-    })
-    // NR companion: explicit windowed TIMELINE → populated non-negative
-    // states, modeSource explicit (raw known mode), alreadyValid.
-    const nrTl = rowByKind('namedResource', 'TIMELINE', 'alreadyValid')!
-    expect(nrTl).toMatchObject({
-      parentMode: 'EFFORT',
-      effectiveMode: 'TIMELINE',
-      modeSource: 'explicit',
-      allocationStartWeekState: 'populated-nonnegative-integer',
-      allocationEndWeekState: 'populated-nonnegative-integer',
-      startWeekState: 'populated-nonnegative-integer',
-      endWeekState: 'populated-nonnegative-integer',
-      allocationPercentCategory: 'hundred',
-      allocationPctCategory: 'hundred',
-    })
-    // NR companion: inherited CAPACITY_PLAN windowless → inherited source, quarantined.
-    const nrInherited = rows.find(row => row.modeSource === 'inherited')!
-    expect(nrInherited).toMatchObject({
-      entryKind: 'namedResource',
-      rawMode: null,
-      parentMode: 'CAPACITY_PLAN',
-      effectiveMode: 'CAPACITY_PLAN',
-      allocationStartWeekState: 'absent-null',
-      allocationEndWeekState: 'absent-null',
-      startWeekState: 'absent-null',
-      endWeekState: 'absent-null',
-      allocationPercentCategory: 'hundred',
-      allocationPctCategory: 'hundred',
-      currentPlanClassification: 'quarantined',
-    })
-    // NR companion: explicit EFFORT windowless → modeSource explicit.
-    const nrEffort = rowByKind('namedResource', 'EFFORT', 'alreadyValid')!
-    expect(nrEffort.modeSource).toBe('explicit')
-
-    // Deterministic ordering: sorted by the same canonical fixed-category
-    // key the builder uses.
-    const keyOf = (row: (typeof rows)[number]): string => canonicalJson({
-      entryKind: row.entryKind,
-      rawMode: row.rawMode,
-      parentMode: row.parentMode,
-      effectiveMode: row.effectiveMode,
-      modeSource: row.modeSource,
-      allocationStartWeekState: row.allocationStartWeekState,
-      allocationEndWeekState: row.allocationEndWeekState,
-      startWeekState: row.startWeekState,
-      endWeekState: row.endWeekState,
-      allocationPercentCategory: row.allocationPercentCategory,
-      allocationPctCategory: row.allocationPctCategory,
-      currentPlanClassification: row.currentPlanClassification,
-    })
-    const keys = rows.map(keyOf)
-    expect([...keys].sort()).toEqual(keys)
-    expect(rows.every(row => row.count === 1)).toBe(true)
+    expect(report.classACompanionEvidence.shapeRows).toEqual([])
   })
 
-  it('reports plan classifications and snapshot-level flags', () => {
+  it('reports zero plan classifications and snapshot-level flags', () => {
     const report = buildReport(companionState(), COMPANION_COUNTS)
     expect(report.classACompanionEvidence.planClassifications).toEqual({
-      deterministic: 1,
+      deterministic: 0,
       decisionRequired: 0,
       unsupported: 0,
-      alreadyValid: 3,
-      quarantined: 2,
+      alreadyValid: 0,
+      quarantined: 0,
     })
     expect(report.classACompanionEvidence.snapshotFlags).toEqual({
       allEntriesWindowless: 0,
-      notAllEntriesWindowless: 1,
+      notAllEntriesWindowless: 0,
       allEntriesApproved100: 0,
-      notAllEntriesApproved100: 1,
+      notAllEntriesApproved100: 0,
       allCompanionsWindowless: 0,
-      notAllCompanionsWindowless: 1,
+      notAllCompanionsWindowless: 0,
       allCompanionsApproved100: 0,
-      notAllCompanionsApproved100: 1,
-      anyCompanionInheritedMode: 1,
+      notAllCompanionsApproved100: 0,
+      anyCompanionInheritedMode: 0,
       noCompanionInheritedMode: 0,
     })
   })
@@ -1198,14 +1106,14 @@ describe('Class A companion evidence (issue #440)', () => {
     expect(report.integrityResult.countsMatch).toBe(true)
     expect(report.reconciliation.passed).toBe(true)
     const details = report.reconciliation.details.join('\n')
-    expect(details).toContain('exact Class A entries plus companions equal captured entries: observed 7, expected 7 — OK')
-    expect(details).toContain('companion by-kind totals reconcile: observed 6, expected 6 — OK')
-    expect(details).toContain('companion shape-row counts reconcile: observed 6, expected 6 — OK')
-    expect(details).toContain('companion plan-classification totals reconcile: observed 6, expected 6 — OK')
-    expect(details).toContain('companion entries are unique: observed 6, expected 6 — OK')
-    expect(details).toContain('no selected entry is omitted: observed 6, expected 6 — OK')
-    expect(details).toContain('snapshot flag pair: entries windowless: observed 1, expected 1 — OK')
-    expect(details).toContain('snapshot flag pair: companion inherited mode: observed 1, expected 1 — OK')
+    expect(details).toContain('exact Class A entries plus companions equal captured entries: observed 0, expected 0 — OK')
+    expect(details).toContain('companion by-kind totals reconcile: observed 0, expected 0 — OK')
+    expect(details).toContain('companion shape-row counts reconcile: observed 0, expected 0 — OK')
+    expect(details).toContain('companion plan-classification totals reconcile: observed 0, expected 0 — OK')
+    expect(details).toContain('companion entries are unique: observed 0, expected 0 — OK')
+    expect(details).toContain('no selected entry is omitted: observed 0, expected 0 — OK')
+    expect(details).toContain('snapshot flag pair: entries windowless: observed 0, expected 0 — OK')
+    expect(details).toContain('snapshot flag pair: companion inherited mode: observed 0, expected 0 — OK')
   })
 
   it('is deterministic across repeated runs', () => {
@@ -1214,13 +1122,12 @@ describe('Class A companion evidence (issue #440)', () => {
     expect(JSON.stringify(first.classACompanionEvidence)).toBe(JSON.stringify(second.classACompanionEvidence))
   })
 
-  it('excludes restorable and defect snapshots from the companion population', () => {
+  it('excludes every snapshot from the companion population (no quarantine selection exists)', () => {
     const state = makeState([
       {
         id: 'snap-exact',
         projectId: PROJECT_ID,
-        // Exact all-Class-A snapshot → restorable under current policy, never
-        // a companion population member.
+        // Previously exact all-Class-A snapshot.
         payload: makeV2Snapshot(
           [makeRt({ id: 'rt-e1', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })],
           [makeNr({ id: 'nr-e1', resourceTypeId: 'rt-e1', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null })],
@@ -1229,7 +1136,7 @@ describe('Class A companion evidence (issue #440)', () => {
       {
         id: 'snap-defect',
         projectId: PROJECT_ID,
-        // Independent defect (partial window) → defect snapshot, excluded.
+        // Independent defect (partial window).
         payload: makeV2Snapshot(
           [makeRt({ id: 'rt-d1', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 3, allocationEndWeek: null })],
           [],
@@ -1238,7 +1145,7 @@ describe('Class A companion evidence (issue #440)', () => {
       {
         id: 'snap-q',
         projectId: PROJECT_ID,
-        // Selected Class-A-quarantined snapshot with one companion.
+        // Previously selected Class-A-quarantined snapshot with one companion.
         payload: makeV2Snapshot(
           [
             makeRt({ id: 'rt-q1', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null }),
@@ -1249,10 +1156,112 @@ describe('Class A companion evidence (issue #440)', () => {
       },
     ])
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 2,
-      quarantinedSnapshots: 1,
+      quarantinedEntries: 0,
+      quarantinedSnapshots: 0,
+      defectSnapshots: 3,
+      windowlessDecisions: 5, // 2 (exact) + 1 (defect partial) + 2 (q)
+      singleMinusOneDecisions: 0,
+      snapshotDecisions: 5,
+      liveDecisions: 0,
+      unsupported: 0,
+      rewriteOperations: 0,
+      topology11Snapshots: 3,
+      topology7Snapshots: 0,
+      topology11WindowlessDecisions: 5,
+      topology7WindowlessDecisions: 0,
+      topology7SingleMinusOneDecisions: 0,
+    }
+    const report = buildReport(state, counts)
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 3, restorable: 0, quarantined: 0, defect: 3 })
+    expect(report.classACompanionEvidence.population).toEqual({
+      classAQuarantinedSnapshots: 0,
+      snapshotsWithCompanions: 0,
+      exactClassAResourceTypeEntries: 0,
+      exactClassANamedResourceEntries: 0,
+      companionResourceTypeEntries: 0,
+      companionNamedResourceEntries: 0,
+      totalCompanionEntries: 0,
+      excludedMixedClassABSnapshots: 0,
+    })
+  })
+
+  it('excludes Class-B-only and mixed Class-A/Class-B snapshots from a population that is empty anyway', () => {
+    const state = makeState([
+      {
+        id: 'snap-b',
+        projectId: PROJECT_ID,
+        // Single -1 edge with non-negative other edge.
+        payload: makeV2Snapshot(
+          [makeRt({ id: 'rt-b1', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 })],
+          [],
+        ),
+      },
+      {
+        id: 'snap-mixed-ab',
+        projectId: PROJECT_ID,
+        // Windowless + single -1 entries.
+        payload: makeV2Snapshot(
+          [
+            makeRt({ id: 'rt-m1', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null }),
+            makeRt({ id: 'rt-m2', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
+          ],
+          [],
+        ),
+      },
+    ])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0,
+      quarantinedSnapshots: 0,
+      defectSnapshots: 2,
+      windowlessDecisions: 1,
+      singleMinusOneDecisions: 2,
+      snapshotDecisions: 3,
+      liveDecisions: 0,
+      unsupported: 0,
+      rewriteOperations: 0,
+      topology11Snapshots: 0,
+      topology7Snapshots: 2,
+      topology11WindowlessDecisions: 0,
+      topology7WindowlessDecisions: 1,
+      topology7SingleMinusOneDecisions: 2,
+    }
+    const report = buildReport(state, counts)
+    // The shared gate passes: quarantine reconciliation is retired, so the
+    // Class A checks are zero-matched instead of refusing.
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
+    expect(report.classACompanionEvidence.population).toEqual({
+      classAQuarantinedSnapshots: 0,
+      snapshotsWithCompanions: 0,
+      exactClassAResourceTypeEntries: 0,
+      exactClassANamedResourceEntries: 0,
+      companionResourceTypeEntries: 0,
+      companionNamedResourceEntries: 0,
+      totalCompanionEntries: 0,
+      excludedMixedClassABSnapshots: 0,
+    })
+    expect(report.classACompanionEvidence.shapeRows).toEqual([])
+  })
+
+  it('never selects a snapshot, so the companion correlation never runs (no ambiguity possible)', () => {
+    // The retired policy cannot construct a selected quarantined snapshot,
+    // so the issue #440 ambiguity path is unreachable: the report builds and
+    // reconciles with an empty companion population.
+    const state = makeState([{
+      id: 'snap-ambig',
+      projectId: PROJECT_ID,
+      payload: makeV2Snapshot(
+        [makeRt({ id: 'same-id', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })],
+        [
+          makeNr({ id: 'same-id', resourceTypeId: 'same-id', allocationMode: null, allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null }),
+        ],
+      ),
+    }])
+    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
+      quarantinedEntries: 0,
+      quarantinedSnapshots: 0,
       defectSnapshots: 1,
-      windowlessDecisions: 1, // snap-defect partial-window RT
+      windowlessDecisions: 1,
       singleMinusOneDecisions: 0,
       snapshotDecisions: 1,
       liveDecisions: 0,
@@ -1266,172 +1275,7 @@ describe('Class A companion evidence (issue #440)', () => {
     }
     const report = buildReport(state, counts)
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 3, restorable: 1, quarantined: 1, defect: 1 })
-    expect(report.classACompanionEvidence.population).toEqual({
-      classAQuarantinedSnapshots: 1,
-      snapshotsWithCompanions: 1,
-      exactClassAResourceTypeEntries: 1,
-      exactClassANamedResourceEntries: 0,
-      companionResourceTypeEntries: 1,
-      companionNamedResourceEntries: 0,
-      totalCompanionEntries: 1,
-      excludedMixedClassABSnapshots: 0,
-    })
-  })
-
-  it('excludes Class-B-only and mixed Class-A/Class-B quarantined snapshots and reports the mixed count separately', () => {
-    const state = makeState([
-      {
-        id: 'snap-b',
-        projectId: PROJECT_ID,
-        // Class-B-only quarantine (single -1 edge with non-negative other).
-        payload: makeV2Snapshot(
-          [makeRt({ id: 'rt-b1', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 })],
-          [],
-        ),
-      },
-      {
-        id: 'snap-mixed-ab',
-        projectId: PROJECT_ID,
-        // Mixed Class A + Class B quarantine: reported separately, excluded
-        // from the companion population.
-        payload: makeV2Snapshot(
-          [
-            makeRt({ id: 'rt-m1', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null }),
-            makeRt({ id: 'rt-m2', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
-          ],
-          [],
-        ),
-      },
-    ])
-    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 3,
-      quarantinedSnapshots: 2,
-      defectSnapshots: 0,
-      windowlessDecisions: 0,
-      singleMinusOneDecisions: 0,
-      snapshotDecisions: 0,
-      liveDecisions: 0,
-      unsupported: 0,
-      rewriteOperations: 0,
-      topology11Snapshots: 0,
-      topology7Snapshots: 0,
-      topology11WindowlessDecisions: 0,
-      topology7WindowlessDecisions: 0,
-      topology7SingleMinusOneDecisions: 0,
-    }
-    const report = buildReport(state, counts)
-    // The reviewed Class A invariant (class A entries/snapshots reconcile to
-    // the expected quarantine totals) intentionally refuses when quarantined
-    // Class-B entries exist — the companion section is observational and must
-    // not mask that refusal (mirrors the existing Class-B fixture contract).
-    expect(report.integrityResult.reconciliationPassed).toBe(false)
-    const mismatches = report.reconciliation.details.filter(detail => detail.includes('MISMATCH'))
-    expect(mismatches.map(m => m.split(':')[0])).toEqual(['class A entries reconcile', 'class A snapshots reconcile'])
-    expect(report.classACompanionEvidence.population).toEqual({
-      classAQuarantinedSnapshots: 0,
-      snapshotsWithCompanions: 0,
-      exactClassAResourceTypeEntries: 0,
-      exactClassANamedResourceEntries: 0,
-      companionResourceTypeEntries: 0,
-      companionNamedResourceEntries: 0,
-      totalCompanionEntries: 0,
-      excludedMixedClassABSnapshots: 1,
-    })
-    expect(report.classACompanionEvidence.shapeRows).toEqual([])
-  })
-
-  it('selects a Class-A-quarantined snapshot while excluding a restorable one', () => {
-    const state = makeState([
-      {
-        id: 'snap-q',
-        projectId: PROJECT_ID,
-        payload: makeV2Snapshot(
-          [
-            makeRt({ id: 'rt-q1', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null }),
-            makeRt({ id: 'rt-q2', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, allocationPercent: 80 }),
-          ],
-          [],
-        ),
-      },
-      {
-        id: 'snap-r',
-        projectId: PROJECT_ID,
-        payload: makeV2Snapshot(
-          [makeRt({ id: 'rt-r1', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })],
-          [],
-        ),
-      },
-    ])
-    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 2,
-      quarantinedSnapshots: 1,
-      defectSnapshots: 0,
-      windowlessDecisions: 0,
-      singleMinusOneDecisions: 0,
-      snapshotDecisions: 0,
-      liveDecisions: 0,
-      unsupported: 0,
-      rewriteOperations: 0,
-      topology11Snapshots: 0,
-      topology7Snapshots: 0,
-      topology11WindowlessDecisions: 0,
-      topology7WindowlessDecisions: 0,
-      topology7SingleMinusOneDecisions: 0,
-    }
-    const report = buildReport(state, counts)
-    expect(report.integrityResult.reconciliationPassed).toBe(true)
-    expect(report.classACompanionEvidence.population).toEqual({
-      classAQuarantinedSnapshots: 1,
-      snapshotsWithCompanions: 1,
-      exactClassAResourceTypeEntries: 1,
-      exactClassANamedResourceEntries: 0,
-      companionResourceTypeEntries: 1,
-      companionNamedResourceEntries: 0,
-      totalCompanionEntries: 1,
-      excludedMixedClassABSnapshots: 0,
-    })
-    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 2, restorable: 1, quarantined: 1, defect: 0 })
-  })
-
-  it('fails closed when companion correlation is ambiguous (shared id across kinds)', () => {
-    const state = makeState([{
-      id: 'snap-ambig',
-      projectId: PROJECT_ID,
-      payload: makeV2Snapshot(
-        [makeRt({ id: 'same-id', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null })],
-        [
-          // Companion whose entryId collides with the exact RT entry's id:
-          // two snapshot-entry findings match the same entryId → ambiguous.
-          makeNr({ id: 'same-id', resourceTypeId: 'same-id', allocationMode: null, allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null }),
-        ],
-      ),
-    }])
-    const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 2,
-      quarantinedSnapshots: 1,
-      defectSnapshots: 0,
-      windowlessDecisions: 0,
-      singleMinusOneDecisions: 0,
-      snapshotDecisions: 0,
-      liveDecisions: 0,
-      unsupported: 0,
-      rewriteOperations: 0,
-      topology11Snapshots: 0,
-      topology7Snapshots: 0,
-      topology11WindowlessDecisions: 0,
-      topology7WindowlessDecisions: 0,
-      topology7SingleMinusOneDecisions: 0,
-    }
-    expect(() => buildReport(state, counts)).toThrowError(SnapshotEvidenceError)
-    try {
-      buildReport(state, counts)
-      expect.unreachable()
-    } catch (error) {
-      expect(error).toBeInstanceOf(SnapshotEvidenceError)
-      expect((error as SnapshotEvidenceError).code).toBe('companion-correlation-failure')
-      expect(String((error as SnapshotEvidenceError).message)).not.toContain('same-id')
-    }
+    expect(report.classACompanionEvidence.population.totalCompanionEntries).toBe(0)
   })
 
   it('never emits identifiers, names, raw week values or unknown mode strings', () => {
@@ -1452,8 +1296,8 @@ describe('Class A companion evidence (issue #440)', () => {
       {
         id: 'snap-bogus-mode',
         projectId: PROJECT_ID,
-        // Unknown mode → defect snapshot (excluded population); the arbitrary
-        // string must never reach either output.
+        // Unknown mode → defect snapshot; the arbitrary string must never
+        // reach either output.
         payload: makeV2Snapshot(
           [makeRt({ id: 'rt-9', allocationMode: 'WARP_DRIVE-TOP-SECRET', allocationStartWeek: 2, allocationEndWeek: 9 })],
           [],
@@ -1461,18 +1305,18 @@ describe('Class A companion evidence (issue #440)', () => {
       },
     ])
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 2,
-      quarantinedSnapshots: 1,
-      defectSnapshots: 1,
-      windowlessDecisions: 0,
+      quarantinedEntries: 0,
+      quarantinedSnapshots: 0,
+      defectSnapshots: 2,
+      windowlessDecisions: 1,
       singleMinusOneDecisions: 0,
-      snapshotDecisions: 0,
+      snapshotDecisions: 1,
       liveDecisions: 0,
       unsupported: 1,
       rewriteOperations: 0,
-      topology11Snapshots: 1,
+      topology11Snapshots: 2,
       topology7Snapshots: 0,
-      topology11WindowlessDecisions: 0,
+      topology11WindowlessDecisions: 1,
       topology7WindowlessDecisions: 0,
       topology7SingleMinusOneDecisions: 0,
     }
@@ -1489,31 +1333,10 @@ describe('Class A companion evidence (issue #440)', () => {
       expect(json).not.toContain(secret)
       expect(markdown).not.toContain(secret)
     }
-    // Populated week numbers are reduced to sanitized categories: the raw -1
-    // sentinel and the populated weeks never appear in the companion section.
     expect(sectionJson).not.toContain('-1')
     expect(sectionJson).not.toContain('17')
     expect(sectionJson).not.toContain('23')
-    // Every shape-row category uses the fixed vocabularies only.
-    const windowStates = ['unavailable', 'absent-null', 'minus-one', 'populated-nonnegative-integer', 'populated-other']
-    const percentCategories = ['unavailable', 'absent-null', 'zero', 'one-to-ninety-nine', 'hundred', 'above-hundred', 'invalid-non-finite']
-    const modes = ['TIMELINE', 'CAPACITY_PLAN', 'EFFORT', 'FULL_PROJECT', null, 'other', 'unavailable']
-    const classifications = ['deterministic', 'decisionRequired', 'unsupported', 'alreadyValid', 'quarantined']
-    for (const row of report.classACompanionEvidence.shapeRows) {
-      expect(['resourceType', 'namedResource']).toContain(row.entryKind)
-      expect(modes).toContain(row.rawMode)
-      expect(modes).toContain(row.parentMode)
-      expect(modes).toContain(row.effectiveMode)
-      expect(['explicit', 'inherited', 'other', 'unavailable']).toContain(row.modeSource)
-      expect(windowStates).toContain(row.allocationStartWeekState)
-      expect(windowStates).toContain(row.allocationEndWeekState)
-      expect(windowStates).toContain(row.startWeekState)
-      expect(windowStates).toContain(row.endWeekState)
-      expect(percentCategories).toContain(row.allocationPercentCategory)
-      expect(percentCategories).toContain(row.allocationPctCategory)
-      expect(classifications).toContain(row.currentPlanClassification)
-      expect(Number.isInteger(row.count) && row.count >= 0).toBe(true)
-    }
+    expect(report.classACompanionEvidence.shapeRows).toEqual([])
   })
 
   it('mirrors the companion evidence in Markdown (JSON/Markdown parity)', () => {
@@ -1521,30 +1344,27 @@ describe('Class A companion evidence (issue #440)', () => {
     const markdown = renderSnapshotEvidenceMarkdown(report)
     expect(markdown).toContain('## Class A companion evidence')
     expect(markdown).toContain('### Population')
-    expect(markdown).toContain('- classAQuarantinedSnapshots: 1')
-    expect(markdown).toContain('- totalCompanionEntries: 6')
+    expect(markdown).toContain('- classAQuarantinedSnapshots: 0')
+    expect(markdown).toContain('- totalCompanionEntries: 0')
     expect(markdown).toContain('- excludedMixedClassABSnapshots: 0')
     expect(markdown).toContain('### Companion shape rows')
     expect(markdown).toContain('| Entry kind | Raw mode | Parent mode | Effective mode | Mode source | allocationStartWeek | allocationEndWeek | startWeek | endWeek | allocationPercent | allocationPct | Plan classification | Count |')
-    expect(markdown).toContain('namedResource | CAPACITY_PLAN | CAPACITY_PLAN | CAPACITY_PLAN | explicit | absent-null | populated-nonnegative-integer | minus-one | minus-one | hundred | hundred | deterministic | 1')
     expect(markdown).toContain('### Plan classifications')
-    expect(markdown).toContain('- alreadyValid: 3')
-    expect(markdown).toContain('- quarantined: 2')
+    expect(markdown).toContain('- alreadyValid: 0')
+    expect(markdown).toContain('- quarantined: 0')
     expect(markdown).toContain('### Snapshot-level flags')
-    expect(markdown).toContain('- anyCompanionInheritedMode: 1')
+    expect(markdown).toContain('- anyCompanionInheritedMode: 0')
     expect(markdown).toContain('- noCompanionInheritedMode: 0')
   })
 
   it('companionModeSourceCategory distinguishes explicit and inherited modes for all known modes', () => {
-    // Explicit known raw modes (issue #440 review: the companion evidence
-    // must not reuse the CAPACITY_PLAN-specific namedModeSourceCategory).
+    // Explicit known raw modes.
     expect(companionModeSourceCategory('TIMELINE', null)).toBe('explicit')
     expect(companionModeSourceCategory('CAPACITY_PLAN', null)).toBe('explicit')
     expect(companionModeSourceCategory('EFFORT', null)).toBe('explicit')
     expect(companionModeSourceCategory('FULL_PROJECT', null)).toBe('explicit')
     expect(companionModeSourceCategory('TIMELINE', 'WARP_DRIVE')).toBe('explicit')
-    // Inherited known parent modes (including the missed non-CAPACITY_PLAN
-    // regression).
+    // Inherited known parent modes (including the non-CAPACITY_PLAN case).
     expect(companionModeSourceCategory(null, 'TIMELINE')).toBe('inherited')
     expect(companionModeSourceCategory(null, 'CAPACITY_PLAN')).toBe('inherited')
     expect(companionModeSourceCategory(null, 'EFFORT')).toBe('inherited')
@@ -1558,18 +1378,12 @@ describe('Class A companion evidence (issue #440)', () => {
     expect(companionModeSourceCategory(undefined, undefined)).toBe('unavailable')
   })
 
-  it('reports explicit and inherited mode sources through the builder, including non-CAPACITY_PLAN inheritance', () => {
-    // One selected Class-A-quarantined snapshot whose companions cover the
-    // reachable mode-source categories. No classifier or predicate is
-    // weakened: every entry is valid under the current policy and the
-    // snapshot stays quarantined via the non-100 windowless RT.
+  it('reports no companion shape rows and zero inherited flags (no selection under the retired policy)', () => {
     const state = makeState([{
       id: 'snap-modes',
       projectId: PROJECT_ID,
       payload: makeV2Snapshot(
         [
-          // Quarantine Class A shape (non-exact: 80%) keeps the snapshot
-          // selected; this RT companion itself reports modeSource unavailable.
           makeRt({ id: 'rt-q', allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null, allocationPercent: 80 }),
           makeRt({ id: 'rt-t', name: 'Timeline Role', allocationMode: 'TIMELINE', allocationStartWeek: null, allocationEndWeek: null }),
           makeRt({ id: 'rt-e', name: 'Effort Role', allocationMode: 'EFFORT', allocationStartWeek: null, allocationEndWeek: null }),
@@ -1577,60 +1391,39 @@ describe('Class A companion evidence (issue #440)', () => {
           makeRt({ id: 'rt-null', name: 'Null Mode Role', allocationMode: null, allocationStartWeek: null, allocationEndWeek: null }),
         ],
         [
-          // Inherited known modes with raw allocationMode absent.
           makeNr({ id: 'nr-inh-tl', resourceTypeId: 'rt-t', allocationMode: null }),
           makeNr({ id: 'nr-inh-eff', resourceTypeId: 'rt-e', allocationMode: null }),
           makeNr({ id: 'nr-inh-fp', resourceTypeId: 'rt-f', allocationMode: null }),
           makeNr({ id: 'nr-inh-cp', resourceTypeId: 'rt-q', allocationMode: null }),
-          // Explicit known raw mode.
           makeNr({ id: 'nr-exp-tl', resourceTypeId: 'rt-t', allocationMode: 'TIMELINE' }),
-          // Absent raw and absent parent mode → unavailable.
           makeNr({ id: 'nr-none', resourceTypeId: 'rt-null', allocationMode: null }),
         ],
       ),
     }])
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 2,
-      quarantinedSnapshots: 1,
-      defectSnapshots: 0,
-      windowlessDecisions: 0,
+      quarantinedEntries: 0,
+      quarantinedSnapshots: 0,
+      defectSnapshots: 1,
+      windowlessDecisions: 1,
       singleMinusOneDecisions: 0,
-      snapshotDecisions: 0,
+      snapshotDecisions: 1,
       liveDecisions: 0,
       unsupported: 0,
       rewriteOperations: 0,
-      topology11Snapshots: 0,
+      topology11Snapshots: 1,
       topology7Snapshots: 0,
-      topology11WindowlessDecisions: 0,
+      topology11WindowlessDecisions: 1,
       topology7WindowlessDecisions: 0,
       topology7SingleMinusOneDecisions: 0,
     }
     const report = buildReport(state, counts)
     expect(report.integrityResult.reconciliationPassed).toBe(true)
-    const rows = report.classACompanionEvidence.shapeRows
-    const inheritedRow = (parentMode: 'TIMELINE' | 'EFFORT' | 'FULL_PROJECT' | 'CAPACITY_PLAN' | null, effectiveMode: string | null) =>
-      rows.find(row => row.entryKind === 'namedResource' && row.modeSource === 'inherited' && row.parentMode === parentMode && row.effectiveMode === effectiveMode)
-    // Inherited known modes from non-CAPACITY_PLAN parents (the missed
-    // regression) and from CAPACITY_PLAN.
-    expect(inheritedRow('TIMELINE', 'TIMELINE')).toMatchObject({ modeSource: 'inherited', rawMode: null })
-    expect(inheritedRow('EFFORT', 'EFFORT')).toMatchObject({ modeSource: 'inherited', rawMode: null })
-    expect(inheritedRow('FULL_PROJECT', 'FULL_PROJECT')).toMatchObject({ modeSource: 'inherited', rawMode: null })
-    expect(inheritedRow('CAPACITY_PLAN', 'CAPACITY_PLAN')).toMatchObject({ modeSource: 'inherited', rawMode: null })
-    // Explicit known raw mode.
-    const explicitTimeline = rows.find(row => row.entryKind === 'namedResource' && row.rawMode === 'TIMELINE' && row.modeSource === 'explicit')!
-    expect(explicitTimeline).toMatchObject({ effectiveMode: 'TIMELINE', parentMode: 'TIMELINE' })
-    // Absent raw + absent parent → unavailable (fixture-reachable state).
-    const unavailable = rows.find(row => row.entryKind === 'namedResource' && row.modeSource === 'unavailable')!
-    expect(unavailable).toMatchObject({ rawMode: null, parentMode: null, effectiveMode: null })
-    // ResourceType companions keep modeSource unavailable.
-    const rtCompanion = rows.find(row => row.entryKind === 'resourceType')!
-    expect(rtCompanion.modeSource).toBe('unavailable')
-    // Snapshot-level flag: inheritance from non-CAPACITY_PLAN parents counts.
-    expect(report.classACompanionEvidence.snapshotFlags.anyCompanionInheritedMode).toBe(1)
+    expect(report.classACompanionEvidence.shapeRows).toEqual([])
+    expect(report.classACompanionEvidence.snapshotFlags.anyCompanionInheritedMode).toBe(0)
     expect(report.classACompanionEvidence.snapshotFlags.noCompanionInheritedMode).toBe(0)
   })
 
-  it('reports the complementary no-inherited flag for a snapshot without inherited companions', () => {
+  it('reports zero inherited flags for a snapshot without companions', () => {
     const state = makeState([{
       id: 'snap-no-inherited',
       projectId: PROJECT_ID,
@@ -1640,37 +1433,35 @@ describe('Class A companion evidence (issue #440)', () => {
           makeRt({ id: 'rt-t', allocationMode: 'TIMELINE', allocationStartWeek: null, allocationEndWeek: null }),
         ],
         [
-          // Explicit known mode only — no inherited companion in this snapshot.
+          // Explicit known mode only.
           makeNr({ id: 'nr-exp', resourceTypeId: 'rt-t', allocationMode: 'TIMELINE' }),
         ],
       ),
     }])
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 1,
-      quarantinedSnapshots: 1,
-      defectSnapshots: 0,
-      windowlessDecisions: 0,
+      quarantinedEntries: 0,
+      quarantinedSnapshots: 0,
+      defectSnapshots: 1,
+      windowlessDecisions: 1,
       singleMinusOneDecisions: 0,
-      snapshotDecisions: 0,
+      snapshotDecisions: 1,
       liveDecisions: 0,
       unsupported: 0,
       rewriteOperations: 0,
-      topology11Snapshots: 0,
+      topology11Snapshots: 1,
       topology7Snapshots: 0,
-      topology11WindowlessDecisions: 0,
+      topology11WindowlessDecisions: 1,
       topology7WindowlessDecisions: 0,
       topology7SingleMinusOneDecisions: 0,
     }
     const report = buildReport(state, counts)
     expect(report.integrityResult.reconciliationPassed).toBe(true)
     expect(report.classACompanionEvidence.snapshotFlags.anyCompanionInheritedMode).toBe(0)
-    expect(report.classACompanionEvidence.snapshotFlags.noCompanionInheritedMode).toBe(1)
-    const explicit = report.classACompanionEvidence.shapeRows.find(
-      row => row.entryKind === 'namedResource' && row.rawMode === 'TIMELINE',
-    )!
-    expect(explicit.modeSource).toBe('explicit')
+    expect(report.classACompanionEvidence.snapshotFlags.noCompanionInheritedMode).toBe(0)
+    expect(report.classACompanionEvidence.shapeRows).toEqual([])
   })
 })
+
 
 describe('mode redaction', () => {
   it('never emits arbitrary historical mode strings in JSON or Markdown', () => {
@@ -2046,9 +1837,9 @@ describe('plan-decision-anchored S-record correlation', () => {
   it('keeps inherited-mode single-negative entries out of the S set (plan classifies by raw mode)', () => {
     // Plan-faithful boundary: the plan derives decisions from the raw own
     // mode, so an inherited CAPACITY_PLAN NamedResource (own mode null) is
-    // never a single-negative decision or S record. The entry instead matches
-    // the shared Class B quarantine shape, so the run also refuses on the
-    // reviewed Class A invariant (fail closed) exactly as on production.
+    // never a single-negative decision or S record. Under issue #444 the
+    // containing V2 snapshot is retired (one defect M record, no decisions)
+    // and the run reconciles with zero quarantine counts.
     const state = makeState([{
       id: 'snap-inherited',
       projectId: PROJECT_ID,
@@ -2058,18 +1849,16 @@ describe('plan-decision-anchored S-record correlation', () => {
       ),
     }])
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 1, quarantinedSnapshots: 1, defectSnapshots: 0,
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
       windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
       liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
-      topology11Snapshots: 0, topology7Snapshots: 0,
+      topology11Snapshots: 1, topology7Snapshots: 0,
       topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
       topology7SingleMinusOneDecisions: 0,
     }
     const report = buildReport(state, counts)
     expect(report.singleNegativeEntries).toHaveLength(0)
-    expect(report.integrityResult.reconciliationPassed).toBe(false)
-    const mismatches = report.reconciliation.details.filter(detail => detail.includes('MISMATCH'))
-    expect(mismatches.map(m => m.split(':')[0])).toEqual(['class A entries reconcile', 'class A snapshots reconcile'])
+    expect(report.integrityResult.reconciliationPassed).toBe(true)
   })
 
   it('emits exactly seven S records for seven synthetic defect snapshots', () => {
@@ -2414,30 +2203,30 @@ describe('effective-edge window reconciliation (shadowed minus-one)', () => {
     topology7SingleMinusOneDecisions: 1,
   }
 
-  // Issue #438: the exact S shape is deterministic zero, so the containing
-  // windowed-parent snapshot is restorable — no defect, no decision, no S
-  // record.
+  // Issue #444: the exact S shape is a deterministic finding, but the
+  // containing V2 snapshot is deliberately retired — one non-restorable M
+  // record, no decisions, no S record.
   const DETERMINISTIC_COUNTS: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-    quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 0,
+    quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
     windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
     liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
-    topology11Snapshots: 0, topology7Snapshots: 0,
+    topology11Snapshots: 1, topology7Snapshots: 0,
     topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
     topology7SingleMinusOneDecisions: 0,
   }
 
-  it('classifies the exact production S shape as deterministic zero, never an S record (issue #438)', () => {
+  it('classifies the exact production S shape as deterministic, retired, never an S record (issue #444)', () => {
     // Production shape: allocationStartWeek null, startWeek -1 (raw alias
     // start), allocationEndWeek 5 (populated primary end), endWeek -1 (raw
     // alias end). The raw (-1,-1) alias pair is the scheduler-consumed
-    // never-active sentinel: deterministic zero capacity. The containing
-    // snapshot (windowed CAPACITY_PLAN parent + S entry) is restorable; no
-    // single-negative decision exists and no S record is emitted.
+    // never-active sentinel: the S entry stays a deterministic finding and no
+    // single-negative decision or S record exists. The containing V2 snapshot
+    // is retired under issue #444, so it is non-restorable.
     const state = shadowState({ allocationStartWeek: null, startWeek: -1, allocationEndWeek: 5, endWeek: -1 })
     const report = buildReport(state, DETERMINISTIC_COUNTS)
     expect(report.integrityResult.reconciliationPassed).toBe(true)
     expect(report.singleNegativeEntries).toHaveLength(0)
-    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 1, restorable: 1, quarantined: 0, defect: 0 })
+    expect(report.observedBoundary.snapshotPopulation).toEqual({ totalSnapshots: 1, restorable: 0, quarantined: 0, defect: 1 })
     expect(report.observedBoundary.summary.findings.deterministic).toBe(1)
     expect(report.topology.singleMinusOneDecisions).toBe(0)
   })
@@ -2520,10 +2309,10 @@ describe('effective-edge window reconciliation (shadowed minus-one)', () => {
   it('does not select a both-effective-edges-negative entry (never-active class, no plan decision)', () => {
     const state = shadowState({ allocationStartWeek: null, startWeek: -1, allocationEndWeek: null, endWeek: -1 })
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 0,
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
       windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
       liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
-      topology11Snapshots: 0, topology7Snapshots: 0,
+      topology11Snapshots: 1, topology7Snapshots: 0,
       topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
       topology7SingleMinusOneDecisions: 0,
     }
@@ -2558,12 +2347,11 @@ describe('effective-edge window reconciliation (shadowed minus-one)', () => {
     }
   })
 
-  it('emits no S records for seven exact S entries; the windowless companions keep the snapshots quarantined', () => {
-    // Each snapshot: one windowless CAPACITY_PLAN RT (outside the exact
-    // snapshot-wide Class A condition — the S entry is not windowless) and
-    // one exact S entry. Issue #438: the S entry is a deterministic finding
-    // (no single-negative decision, no S record) while the windowless RT
-    // keeps the snapshot quarantined Class A.
+  it('emits no S records for seven exact S entries; the retired snapshots produce windowless decisions', () => {
+    // Each snapshot: one windowless CAPACITY_PLAN RT and one exact S entry.
+    // The S entry stays a deterministic finding (no single-negative decision,
+    // no S record); the windowless RT becomes a windowless decision and the
+    // whole V2 snapshot is retired (non-restorable).
     const snapshots = Array.from({ length: 7 }, (_, i) => ({
       id: `snap-${i}`,
       projectId: PROJECT_ID,
@@ -2574,20 +2362,20 @@ describe('effective-edge window reconciliation (shadowed minus-one)', () => {
     }))
     const state = makeState(snapshots)
     const counts: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-      quarantinedEntries: 7, quarantinedSnapshots: 7, defectSnapshots: 0,
-      windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
+      quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 7,
+      windowlessDecisions: 7, singleMinusOneDecisions: 0, snapshotDecisions: 7,
       liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
-      topology11Snapshots: 0, topology7Snapshots: 0,
-      topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
+      topology11Snapshots: 7, topology7Snapshots: 0,
+      topology11WindowlessDecisions: 7, topology7WindowlessDecisions: 0,
       topology7SingleMinusOneDecisions: 0,
     }
     const report = buildReport(state, counts)
     expect(report.integrityResult.reconciliationPassed).toBe(true)
     expect(report.singleNegativeEntries).toHaveLength(0)
     expect(report.observedBoundary.summary.findings.deterministic).toBe(7)
-    expect(report.observedBoundary.summary.quarantined).toBe(7)
-    expect(report.observedBoundary.snapshotPopulation.quarantined).toBe(7)
-    expect(report.classAAggregates.totalEntries).toBe(7)
+    expect(report.observedBoundary.summary.quarantined).toBe(0)
+    expect(report.observedBoundary.snapshotPopulation.quarantined).toBe(0)
+    expect(report.classAAggregates.totalEntries).toBe(0)
   })
 })
 
@@ -2601,14 +2389,14 @@ describe('effective-source reconciliation (minusOneField must supply the effecti
     topology7SingleMinusOneDecisions: 1,
   }
 
-  // Issue #438: the exact S shape is deterministic zero — the containing
-  // windowed-parent snapshot is restorable, no single-negative decision
-  // exists and no S record is emitted.
+  // Issue #444: the exact S shape is a deterministic finding, but the
+  // containing V2 snapshot is deliberately retired — one non-restorable M
+  // record, no decisions, no S record.
   const DETERMINISTIC_COUNTS: Omit<SnapshotEvidenceExpected, 'fingerprint' | 'baselineStateHash'> = {
-    quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 0,
+    quarantinedEntries: 0, quarantinedSnapshots: 0, defectSnapshots: 1,
     windowlessDecisions: 0, singleMinusOneDecisions: 0, snapshotDecisions: 0,
     liveDecisions: 0, unsupported: 0, rewriteOperations: 0,
-    topology11Snapshots: 0, topology7Snapshots: 0,
+    topology11Snapshots: 1, topology7Snapshots: 0,
     topology11WindowlessDecisions: 0, topology7WindowlessDecisions: 0,
     topology7SingleMinusOneDecisions: 0,
   }
@@ -2692,7 +2480,7 @@ describe('effective-source reconciliation (minusOneField must supply the effecti
     expect(report.singleNegativeEntries[0]!.minusOneField).toBe('startWeek')
   })
 
-  it('classifies the exact production S shape as deterministic (no S record)', () => {
+  it('classifies the exact production S shape as deterministic, retired (no S record)', () => {
     const state = makeState([{
       id: 'snap-shadow-valid',
       projectId: PROJECT_ID,
@@ -2705,6 +2493,7 @@ describe('effective-source reconciliation (minusOneField must supply the effecti
     expect(report.integrityResult.reconciliationPassed).toBe(true)
     expect(report.singleNegativeEntries).toHaveLength(0)
     expect(report.observedBoundary.summary.findings.deterministic).toBe(1)
-    expect(report.observedBoundary.snapshotPopulation.restorable).toBe(1)
+    expect(report.observedBoundary.snapshotPopulation.restorable).toBe(0)
+    expect(report.observedBoundary.snapshotPopulation.defect).toBe(1)
   })
 })

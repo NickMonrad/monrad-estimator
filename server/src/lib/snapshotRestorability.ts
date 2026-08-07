@@ -1,61 +1,46 @@
 /**
- * snapshotRestorability.ts — Derived restorability classifier for stored
- * snapshots (Issue #428, policy #426).
+ * snapshotRestorability.ts — Shared restorability classifier for stored
+ * project snapshots (issue #428, policy #426, superseded by issue #444).
  *
- * One small pure classifier decides whether a stored snapshot is restorable,
- * derived-quarantined, or a blocking defect. The verdict is a pure function of
- * the raw snapshot content: deterministic, read-only, independent of current
- * live project state, and reusable by listing, rollback, readiness,
- * remediation and retention pruning.
+ * One small pure classifier decides whether a stored snapshot is restorable
+ * or non-restorable. The verdict is a pure function of the raw snapshot
+ * content: deterministic, read-only, independent of current live project
+ * state, and reusable by listing, rollback, readiness, remediation and
+ * retention pruning.
  *
- * Policy boundary (never a translation error-string match):
- *   - Class A — v2 CAPACITY_PLAN entries with no captured window;
- *   - Class B — v2 CAPACITY_PLAN entries with a single `-1` window edge.
- *
- * Entry-level translation rules (mode mapping, alias fallback, never-active
- * windows, orphan rejection, percentage and window-value checks) come from the
- * shared helpers in `projectSnapshotCapacity.ts` — the same code the
- * authoritative translator runs — so there is exactly one source of truth.
- *
- * A snapshot is quarantined only when at least one entry matches Class A or
- * Class B and every other entry either translates successfully or matches an
- * approved shape; any independent defect anywhere makes the snapshot a
- * blocking defect. Quarantine never rewrites or annotates the stored record.
+ * Issue #444 policy (V4 minimum): the product accepts the deliberate loss of
+ * pre-V4 rollback history. V1/V2/V3 snapshots are no longer restorable for
+ * ANY payload — even a previously-approved historical shape — and carry one
+ * stable retirement reason. Only structurally valid V4 snapshots are
+ * restorable; invalid V4 payloads and malformed/unsupported payloads are
+ * blocking defects. No historical translation or Class A/B quarantine
+ * analysis runs here any more; the raw-value quarantine predicates
+ * (`classifyV2QuarantineShape`, Class A/B reasons) remain exported only for
+ * the retained historical evidence/remediation tooling.
  */
 
 import {
-  parseSnapshotData,
-  isLegacyV1Snapshot,
-  isSnapshotV2,
-  isSnapshotV3,
-  isSnapshotV4,
-  type SnapshotData,
-  type SnapshotResourceType,
-  type SnapshotNamedResource,
-} from './projectSnapshotTypes.js'
-import { validateSnapshotV3 } from './projectSnapshotValidation.js'
-import {
-  translateV2SnapshotProfiles,
-  isKnownV2Mode,
-  v2PercentIsValid,
-  v2EffectiveNamedMode,
-  v2ResourceTypeEntryErrors,
-  v2NamedResourceEntryErrors,
-  v2ProfilesToStructureInput,
   isNonNegativeInteger,
-  isDeterministicZeroSnapshotEntry,
-  isClassAResourceTypeEntry,
-  isClassANamedResourceEntry,
-  isClassASnapshot,
-  type TranslatedV2Profile,
 } from './projectSnapshotCapacity.js'
-import { validatePersistedCapacityProfiles } from './persistedCapacityProfileValidation.js'
+import type { SnapshotNamedResource } from './projectSnapshotTypes.js'
+import { classifySnapshotVersion } from './snapshotVersionClassification.js'
 
-// ─── Stable quarantine reasons ───────────────────────────────────────────────
+// ─── Stable retirement reason ────────────────────────────────────────────────
 
 /**
- * Stable, tested Class A quarantine reason (user-visible). No production
- * identifiers are embedded — the class is a property of the raw record.
+ * Stable, tested retirement reason for deliberately-retired legacy snapshots
+ * (issue #444). User-visible through the existing `restoreStatus` /
+ * `restoreReason` contract; no production identifiers are embedded.
+ */
+export const RETIREMENT_REASON =
+  'historical snapshot is no longer restorable: V4 is the minimum supported snapshot version'
+
+// ─── Stable quarantine reasons (retained for historical tooling) ────────────
+
+/**
+ * Stable, tested Class A quarantine reason (user-visible in the retained
+ * evidence/remediation tooling). No production identifiers are embedded —
+ * the class is a property of the raw record.
  */
 export const QUARANTINE_CLASS_A_REASON =
   'historical snapshot is non-restorable (quarantined): its CAPACITY_PLAN entries have no captured ' +
@@ -77,6 +62,11 @@ export type SnapshotRestorability =
       kind: 'restorable'
       restoreStatus: 'restorable'
       restoreReason: null
+    }
+  | {
+      kind: 'retired'
+      restoreStatus: 'non-restorable'
+      restoreReason: string
     }
   | {
       kind: 'quarantined'
@@ -166,39 +156,6 @@ export function classifyV2QuarantineShape(
   return 'B'
 }
 
-// ─── Per-entry evaluation ────────────────────────────────────────────────────
-
-type EntryVerdict =
-  | { kind: 'restorable' }
-  | { kind: 'quarantined'; entryClass: V2QuarantineClass }
-  | { kind: 'defect' }
-
-function evaluateResourceTypeEntry(rt: SnapshotResourceType, index: number, classASnapshot: boolean): EntryVerdict {
-  const prefix = `v2 snapshot resourceTypes[${index}] (${rt.name})`
-  if (rt.allocationMode != null && !isKnownV2Mode(rt.allocationMode)) {
-    return { kind: 'defect' }
-  }
-  if (rt.allocationMode === 'CAPACITY_PLAN') {
-    // Issue #438: the exact Class A ResourceType shape inside an approved
-    // all-windowless-100% snapshot is deterministic full capacity —
-    // restorable, never quarantine.
-    if (classASnapshot && isClassAResourceTypeEntry(rt)) {
-      return { kind: 'restorable' }
-    }
-    const entryClass = classifyV2QuarantineShape({
-      primaryStart: rt.allocationStartWeek ?? null,
-      aliasStart: null,
-      primaryEnd: rt.allocationEndWeek ?? null,
-      aliasEnd: null,
-    })
-    if (entryClass != null && v2PercentIsValid(rt.allocationPercent)) {
-      return { kind: 'quarantined', entryClass }
-    }
-  }
-  const errors = v2ResourceTypeEntryErrors(rt, prefix, classASnapshot && isClassAResourceTypeEntry(rt))
-  return errors.length > 0 ? { kind: 'defect' } : { kind: 'restorable' }
-}
-
 export type V2AliasEdge = 'start' | 'end'
 
 /**
@@ -222,8 +179,8 @@ export function v2NamedResourceEdgeAliasConflict(
  * Conflicting populated aliases (the two captured fields of one edge
  * disagree) cannot be reconciled under the v2 rules and are a blocking
  * defect for window-using modes (policy #426, Section 3). Shared by the
- * classifier and the Issue #432 evidence command (verdict-neutral export).
- * Derived from the per-edge predicate so both share one definition.
+ * retained historical evidence tooling. Derived from the per-edge predicate
+ * so both share one definition.
  */
 export function v2NamedResourceAliasConflict(
   nr: Pick<SnapshotNamedResource, 'allocationStartWeek' | 'allocationEndWeek' | 'startWeek' | 'endWeek'>,
@@ -232,202 +189,50 @@ export function v2NamedResourceAliasConflict(
   return v2NamedResourceEdgeAliasConflict(nr, mode, 'start') || v2NamedResourceEdgeAliasConflict(nr, mode, 'end')
 }
 
-function evaluateNamedResourceEntry(
-  nr: SnapshotNamedResource,
-  parentRt: SnapshotResourceType | undefined,
-  index: number,
-  classASnapshot: boolean,
-): EntryVerdict {
-  const prefix = `v2 snapshot namedResources[${index}] (${nr.name})`
-  // Orphan ownership is a blocking defect and can never quarantine.
-  if (!nr.resourceTypeId || !parentRt) {
-    return { kind: 'defect' }
-  }
-  const mode = v2EffectiveNamedMode(nr, parentRt)
-  if (mode != null && !isKnownV2Mode(mode)) {
-    return { kind: 'defect' }
-  }
-  // Issue #438 S predicate: evaluated on the raw scheduler-consumed alias
-  // pair BEFORE the effective-edge and alias-conflict checks — the end-edge
-  // alias conflict is part of the accepted shape (scheduler-irrelevant,
-  // reported in evidence but not a defect).
-  if (isDeterministicZeroSnapshotEntry(nr, parentRt)) {
-    return { kind: 'restorable' }
-  }
-  if (mode === 'CAPACITY_PLAN') {
-    // Issue #438: the exact Class A NamedResource shape inside an approved
-    // all-windowless-100% snapshot is deterministic unbounded 100% —
-    // restorable, never quarantine.
-    if (classASnapshot && isClassANamedResourceEntry(nr, parentRt)) {
-      return { kind: 'restorable' }
-    }
-    const entryClass = classifyV2QuarantineShape({
-      primaryStart: nr.allocationStartWeek ?? null,
-      aliasStart: nr.startWeek ?? null,
-      primaryEnd: nr.allocationEndWeek ?? null,
-      aliasEnd: nr.endWeek ?? null,
-    })
-    if (
-      entryClass != null &&
-      v2PercentIsValid(nr.allocationPercent) &&
-      v2PercentIsValid(nr.allocationPct)
-    ) {
-      return { kind: 'quarantined', entryClass }
-    }
-  }
-  // Conflicting populated aliases are a blocking defect for window-using
-  // modes (shared helper; identical predicate to the previous inline check).
-  if (v2NamedResourceAliasConflict(nr, mode)) {
-    return { kind: 'defect' }
-  }
-  const errors = v2NamedResourceEntryErrors(
-    nr,
-    parentRt,
-    prefix,
-    classASnapshot && isClassANamedResourceEntry(nr, parentRt),
-  )
-  return errors.length > 0 ? { kind: 'defect' } : { kind: 'restorable' }
-}
-
-// ─── Snapshot-level classification ───────────────────────────────────────────
-
-function quarantineReasonFor(classes: V2QuarantineClass[]): string {
-  const parts: string[] = []
-  if (classes.includes('A')) parts.push(QUARANTINE_CLASS_A_REASON)
-  if (classes.includes('B')) parts.push(QUARANTINE_CLASS_B_REASON)
-  return parts.join(' ')
-}
+// ─── Classification ──────────────────────────────────────────────────────────
 
 /**
- * Classify a stored snapshot's restorability from its raw content only.
+ * Classify a stored snapshot's restorability from its raw content only
+ * (issue #444 policy).
  *
  * Outcomes:
- *   - `restorable` — V1; V3/V4 passing `validateSnapshotV3`; or V2 whose
- *     complete translation (including structural validation) succeeds;
- *   - `quarantined` — V2 with at least one Class A/B entry, every other entry
- *     translating successfully or matching an approved shape, and no
- *     independent defect anywhere;
- *   - `defect` — parse failure, unknown version, V3/V4 validation failure,
- *     any V2 entry error outside the approved shapes, or any structural
- *     validation error (mixed quarantine-and-defect snapshots are defects).
+ *   - `restorable` — a structurally valid V4 payload;
+ *   - `retired` — any V1/V2/V3 payload (deliberate legacy retirement: V4 is
+ *     the minimum supported snapshot version; the payload is NOT analysed);
+ *   - `defect` — malformed/unsupported data, or a V4 payload failing
+ *     structural validation.
  *
  * Never throws; never rewrites the stored record.
  */
 export function classifySnapshotRestorability(
   raw: unknown,
-  projectId: string,
+  _projectId: string,
 ): SnapshotRestorability {
-  let parsed: SnapshotData
-  try {
-    parsed = parseSnapshotData(raw)
-  } catch (error) {
-    return {
-      kind: 'defect',
-      restoreStatus: 'non-restorable',
-      restoreReason: `unsupported or malformed snapshot data — ${error instanceof Error ? error.message : String(error)}`,
-    }
-  }
+  const version = classifySnapshotVersion(raw)
 
-  if (isLegacyV1Snapshot(parsed)) {
-    return { kind: 'restorable', restoreStatus: 'restorable', restoreReason: null }
-  }
-
-  if (isSnapshotV3(parsed) || isSnapshotV4(parsed)) {
-    try {
-      validateSnapshotV3(parsed as Parameters<typeof validateSnapshotV3>[0])
-    } catch (error) {
+  switch (version.kind) {
+    case 'v1':
+    case 'v2':
+    case 'v3':
+      return {
+        kind: 'retired',
+        restoreStatus: 'non-restorable',
+        restoreReason: RETIREMENT_REASON,
+      }
+    case 'v4':
+      if (version.valid) {
+        return { kind: 'restorable', restoreStatus: 'restorable', restoreReason: null }
+      }
       return {
         kind: 'defect',
         restoreStatus: 'non-restorable',
-        restoreReason: `invalid payload — ${error instanceof Error ? error.message : String(error)}`,
+        restoreReason: `invalid payload — ${version.reason}`,
       }
-    }
-    return { kind: 'restorable', restoreStatus: 'restorable', restoreReason: null }
-  }
-
-  if (isSnapshotV2(parsed)) {
-    const translation = translateV2SnapshotProfiles(parsed, projectId)
-    const rtById = new Map(parsed.resourceTypes.map(rt => [rt.id, rt]))
-    // Issue #438: the approved snapshot-wide all-windowless-100% condition.
-    // Only an exact Class A snapshot (every captured entry matching the
-    // per-entry predicate) becomes restorable; every other shape keeps its
-    // current quarantine/defect classification (fail closed on mixed or
-    // unresolved snapshots).
-    const classASnapshot = isClassASnapshot(parsed)
-    const quarantineClasses: V2QuarantineClass[] = []
-    // Owner keys of entries matching an approved quarantine shape. Their
-    // translated profile windows (e.g. the -1 edge) are the quarantine shape
-    // itself, so structural validation of the snapshot must not treat those
-    // derived window errors as independent defects.
-    const quarantineOwnerKeys = new Set<string>()
-    const markQuarantine = (entryClass: V2QuarantineClass, ownerKey: string): void => {
-      quarantineClasses.push(entryClass)
-      quarantineOwnerKeys.add(ownerKey)
-    }
-
-    for (let i = 0; i < parsed.resourceTypes.length; i++) {
-      const rt = parsed.resourceTypes[i]!
-      const verdict = evaluateResourceTypeEntry(rt, i, classASnapshot)
-      if (verdict.kind === 'defect') {
-        return defectVerdict(translation.errors)
-      }
-      if (verdict.kind === 'quarantined') markQuarantine(verdict.entryClass, `rt::${rt.id}`)
-    }
-    for (let i = 0; i < parsed.namedResources.length; i++) {
-      const nr = parsed.namedResources[i]!
-      const verdict = evaluateNamedResourceEntry(nr, rtById.get(nr.resourceTypeId ?? ''), i, classASnapshot)
-      if (verdict.kind === 'defect') {
-        return defectVerdict(translation.errors)
-      }
-      if (verdict.kind === 'quarantined') markQuarantine(verdict.entryClass, `nr::${nr.id}`)
-    }
-
-    // Snapshot-level structural errors (duplicate owners, percent ranges,
-    // enum failures) are independent defects: a quarantine candidate with any
-    // structural defect is a defect, never quarantine. Quarantine-shaped
-    // entries are validated with their window edges removed so the -1/null
-    // shape itself is not double-counted as a defect.
-    const sanitizedProfiles: TranslatedV2Profile[] = translation.profiles.map(p => {
-      const ownerKey = p.resourceTypeId ? `rt::${p.resourceTypeId}` : p.namedResourceId ? `nr::${p.namedResourceId}` : ''
-      return quarantineOwnerKeys.has(ownerKey) ? { ...p, startWeek: null, endWeek: null } : p
-    })
-    const structureErrors = validatePersistedCapacityProfiles(
-      v2ProfilesToStructureInput(sanitizedProfiles),
-      {
-        projectId,
-        resourceTypeIds: new Set(parsed.resourceTypes.map(rt => rt.id)),
-        namedResourceIds: new Set(parsed.namedResources.map(nr => nr.id)),
-      },
-    ).errors
-    if (structureErrors.length > 0) {
-      return defectVerdict(translation.errors)
-    }
-
-    if (quarantineClasses.length > 0) {
+    case 'malformed':
       return {
-        kind: 'quarantined',
+        kind: 'defect',
         restoreStatus: 'non-restorable',
-        restoreReason: quarantineReasonFor(quarantineClasses),
-        quarantineClasses,
+        restoreReason: `unsupported or malformed snapshot data — ${version.reason}`,
       }
-    }
-    return { kind: 'restorable', restoreStatus: 'restorable', restoreReason: null }
-  }
-
-  return {
-    kind: 'defect',
-    restoreStatus: 'non-restorable',
-    restoreReason: 'unsupported snapshot data',
-  }
-}
-
-function defectVerdict(translationErrors: string[]): SnapshotRestorability {
-  return {
-    kind: 'defect',
-    restoreStatus: 'non-restorable',
-    restoreReason:
-      translationErrors.length > 0
-        ? `V2 snapshot capacity translation failed: ${translationErrors.join('; ')}`
-        : 'V2 snapshot capacity translation failed',
   }
 }

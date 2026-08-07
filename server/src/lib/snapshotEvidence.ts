@@ -1505,7 +1505,12 @@ export function buildSnapshotEvidenceReport(inputs: SnapshotEvidenceInputs): Sna
   for (let snapshotIndex = 0; snapshotIndex < state.snapshots.length; snapshotIndex++) {
     const snapshot = state.snapshots[snapshotIndex]!
     const item = classified[snapshotIndex]!
-    if (item.evidence.restorability.kind !== 'defect') continue
+    // Issue #444: V1/V2/V3 snapshots are deliberately retired (non-restorable
+    // with the stable retirement reason). They are counted with the other
+    // non-restorable rows and MUST still appear as M records, otherwise the
+    // report's subgroup reconciliation invariants would fail closed on any
+    // database holding legacy snapshots.
+    if (item.evidence.restorability.kind !== 'defect' && item.evidence.restorability.kind !== 'retired') continue
     const decisions = decisionsBySnapshot.get(snapshot.id)
     const windowlessCount = decisions?.windowless ?? 0
     const singleNegativeCount = decisions?.singleNegative ?? 0
