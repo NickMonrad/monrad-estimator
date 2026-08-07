@@ -1867,11 +1867,12 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// Snapshot History — derived quarantine (issue #428) and the issue #438
-// exact-Class-A restorability amendment
+// Snapshot History — V4-minimum policy (issue #444): every pre-V4 snapshot is
+// deliberately retired (non-restorable with one stable reason) and rollback
+// is refused server-side; V4 snapshots remain restorable.
 // ════════════════════════════════════════════════════════════════════════════
 
-test.describe('Snapshot History — derived quarantine display', () => {
+test.describe('Snapshot History — retired pre-V4 display', () => {
   async function insertV2Snapshot(projectId: string, label: string, resourceTypeAllocationPercent: number) {
     const db = new Client({ connectionString: DATABASE_URL })
     await db.connect()
@@ -1921,9 +1922,9 @@ test.describe('Snapshot History — derived quarantine display', () => {
     }, { id: projectId, label })
   }
 
-  test('quarantined historical snapshot shows non-restorable status and reason; rollback is refused server-side', async ({ page }) => {
+  test('a retired pre-V4 snapshot shows non-restorable status and reason; rollback is refused server-side (issue #444)', async ({ page }) => {
     test.setTimeout(90_000)
-    const projectName = `E2E Quarantine ${Date.now()}`
+    const projectName = `E2E Retired Snapshot ${Date.now()}`
 
     await login(page)
     await createProject(page, projectName)
@@ -1932,12 +1933,10 @@ test.describe('Snapshot History — derived quarantine display', () => {
     const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]
     if (!projectId) throw new Error('Could not determine project ID')
 
-    // Insert a windowless CAPACITY_PLAN v2 snapshot row directly — the
-    // reviewed Class A shape the UI would never produce (v4 snapshots are
-    // always restorable). Issue #438: the EXACT all-windowless-100% shape is
-    // now restorable, so this fixture uses a non-100 percentage — outside
-    // the approved predicate, still Class A quarantined (fail closed).
-    await insertV2Snapshot(projectId, 'quarantined historical', 80)
+    // Insert a V2 snapshot row directly — whatever its historical shape, it
+    // is deliberately retired under issue #444 (V4 is the minimum supported
+    // snapshot version).
+    await insertV2Snapshot(projectId, 'retired historical', 80)
 
     // Open the History panel on Timeline.
     await page.goto(`/projects/${projectId}/timeline`)
@@ -1945,9 +1944,9 @@ test.describe('Snapshot History — derived quarantine display', () => {
     await page.getByRole('button', { name: /history/i }).click()
     await expect(page.getByText('Snapshot History')).toBeVisible({ timeout: 8_000 })
 
-    // The row renders the derived status and the stable reason.
+    // The row renders the derived status and the stable retirement reason.
     await expect(page.getByText('Non-restorable', { exact: true })).toBeVisible({ timeout: 8_000 })
-    await expect(page.getByText(/original capacity window is not recoverable/)).toBeVisible()
+    await expect(page.getByText(/V4 is the minimum supported snapshot version/)).toBeVisible()
     // The rollback control is not rendered for a non-restorable row.
     await expect(page.getByRole('button', { name: /^rollback$/i })).toHaveCount(0)
     // Diff/inspection remains available.
@@ -1965,10 +1964,10 @@ test.describe('Snapshot History — derived quarantine display', () => {
       return { status: res.status, body: await res.json() }
     }, { id: projectId })
     expect(listing.status).toBe(200)
-    const quarantinedRow = (listing.body as Array<{ label: string | null; restoreStatus: string; restoreReason: string | null }>)
-      .find(s => s.label === 'quarantined historical')
-    expect(quarantinedRow?.restoreStatus).toBe('non-restorable')
-    expect(quarantinedRow?.restoreReason).toContain('Class A')
+    const retiredRow = (listing.body as Array<{ label: string | null; restoreStatus: string; restoreReason: string | null }>)
+      .find(s => s.label === 'retired historical')
+    expect(retiredRow?.restoreStatus).toBe('non-restorable')
+    expect(retiredRow?.restoreReason).toContain('V4 is the minimum supported snapshot version')
 
     // A rollback attempt is refused by the server (400, stable reason) — the
     // API remains the enforcement boundary even if the client is bypassed.
@@ -1982,14 +1981,14 @@ test.describe('Snapshot History — derived quarantine display', () => {
       const target = list.find(s => s.label === label)!
       const res = await fetch(`/api/projects/${id}/snapshots/${target.id}/rollback`, { method: 'POST', headers })
       return { status: res.status, body: await res.json() }
-    }, { id: projectId, label: 'quarantined historical' })
+    }, { id: projectId, label: 'retired historical' })
     expect(rollbackAttempt.status).toBe(400)
-    expect((rollbackAttempt.body as { error: string }).error).toContain('quarantined')
+    expect((rollbackAttempt.body as { error: string }).error).toContain('V4 is the minimum supported snapshot version')
   })
 
-  test('the exact all-windowless-100% Class A snapshot is restorable and rolls back (issue #438)', async ({ page }) => {
+  test('the exact all-windowless-100% Class A V2 snapshot is retired too — non-restorable, rollback refused (issue #444)', async ({ page }) => {
     test.setTimeout(90_000)
-    const projectName = `E2E Class A Restorable ${Date.now()}`
+    const projectName = `E2E Retired Class A ${Date.now()}`
 
     await login(page)
     await createProject(page, projectName)
@@ -1998,7 +1997,9 @@ test.describe('Snapshot History — derived quarantine display', () => {
     const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]
     if (!projectId) throw new Error('Could not determine project ID')
 
-    // The EXACT approved Class A shape: windowless CAPACITY_PLAN at 100%.
+    // The EXACT all-windowless-100% CAPACITY_PLAN shape that issue #438 made
+    // restorable is deliberately retired by issue #444 — V2 payloads are
+    // never analysed and never restorable.
     await insertV2Snapshot(projectId, 'exact class a historical', 100)
 
     // Open the History panel on Timeline.
@@ -2007,14 +2008,12 @@ test.describe('Snapshot History — derived quarantine display', () => {
     await page.getByRole('button', { name: /history/i }).click()
     await expect(page.getByText('Snapshot History')).toBeVisible({ timeout: 8_000 })
 
-    // The row renders no quarantine status/reason (restorable rows carry
-    // only the Rollback control — no status text).
-    await expect(page.getByText('Non-restorable', { exact: true })).toHaveCount(0)
-    await expect(page.getByText(/original capacity window is not recoverable/)).toHaveCount(0)
-    // The rollback control is rendered for a restorable row.
-    await expect(page.getByRole('button', { name: /^rollback$/i })).toHaveCount(1)
+    // The row renders the retirement status/reason; no rollback control.
+    await expect(page.getByText('Non-restorable', { exact: true })).toBeVisible({ timeout: 8_000 })
+    await expect(page.getByText(/V4 is the minimum supported snapshot version/)).toBeVisible()
+    await expect(page.getByRole('button', { name: /^rollback$/i })).toHaveCount(0)
 
-    // The listing API exposes the derived restorable fields.
+    // The listing API exposes the derived non-restorable fields.
     const listing = await page.evaluate(async ({ id }) => {
       const token = localStorage.getItem('token')
       const headers: Record<string, string> = {
@@ -2025,13 +2024,12 @@ test.describe('Snapshot History — derived quarantine display', () => {
       return { status: res.status, body: await res.json() }
     }, { id: projectId })
     expect(listing.status).toBe(200)
-    const restorableRow = (listing.body as Array<{ label: string | null; restoreStatus: string; restoreReason: string | null }>)
+    const retiredRow = (listing.body as Array<{ label: string | null; restoreStatus: string; restoreReason: string | null }>)
       .find(s => s.label === 'exact class a historical')
-    expect(restorableRow?.restoreStatus).toBe('restorable')
-    expect(restorableRow?.restoreReason).toBeNull()
+    expect(retiredRow?.restoreStatus).toBe('non-restorable')
+    expect(retiredRow?.restoreReason).toContain('V4 is the minimum supported snapshot version')
 
-    // Rollback is accepted server-side and materialises the lossless
-    // translation (count 1, no named resources → ROLE at 100%).
+    // Rollback is refused server-side with the stable retirement reason.
     const target = await listingRow(page, projectId, 'exact class a historical')
     const rollbackResponse = await page.evaluate(async ({ id, snapshotId }) => {
       const token = localStorage.getItem('token')
@@ -2042,6 +2040,7 @@ test.describe('Snapshot History — derived quarantine display', () => {
       const res = await fetch(`/api/projects/${id}/snapshots/${snapshotId}/rollback`, { method: 'POST', headers })
       return { status: res.status, body: await res.json() }
     }, { id: projectId, snapshotId: target.id })
-    expect(rollbackResponse.status).toBe(200)
-  })
+    expect(rollbackResponse.status).toBe(400)
+    expect((rollbackResponse.body as { error: string }).error).toContain('V4 is the minimum supported snapshot version')
+})
 })

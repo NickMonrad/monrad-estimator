@@ -18,12 +18,12 @@
  *     its named resources are explicit NAMED_PERSON profiles; profile and
  *     segment shapes follow the authoritative validation rules (reuses
  *     validatePersistedCapacityProfiles + checkPersistedCompleteness).
- *  3. Historical snapshot restorability — every stored BacklogSnapshot and
- *     TemplateSnapshot is classified by the shared restorability classifier
- *     (issue #428): v2 legacy capacity values must be structurally
- *     translatable or match an approved derived-quarantine shape (Class A/B,
- *     policy-accepted and never blocking); v3/v4 payloads validate against
- *     the authoritative snapshot rules; every other failure class blocks.
+ *  3. Snapshot version policy (issue #444) — every stored BacklogSnapshot is
+ *     classified by schema version only. Any V1/V2/V3 snapshot is a blocker
+ *     (it must be deliberately purged before the destructive migration); any
+ *     malformed/unsupported payload blocks; any structurally invalid V4
+ *     payload blocks. Valid V4 snapshots pass. No historical translation,
+ *     quarantine or decision analysis runs here.
  *
  * Exit contract: the CLI exits 0 only when every section passes. Any blocker
  * yields a non-zero exit with an actionable human-readable report.
@@ -37,7 +37,7 @@ import {
   validatePersistedCapacityProfiles,
   checkPersistedCompleteness,
 } from './persistedCapacityProfileValidation.js'
-import { classifySnapshotRestorability } from './snapshotRestorability.js'
+import { classifySnapshotVersion } from './snapshotVersionClassification.js'
 
 // ─── Report types ────────────────────────────────────────────────────────────
 
@@ -139,30 +139,46 @@ async function checkSnapshots(prisma: PrismaClient): Promise<ReadinessSection> {
   // state, not project snapshots) and are deliberately NOT inspected — a
   // normal template snapshot must never block the migration readiness check.
   const backlogSnapshots = await prisma.backlogSnapshot.findMany({
-    select: { id: true, projectId: true, snapshot: true },
+    select: { snapshot: true },
   })
 
-  const blockers: string[] = []
-  const notes: string[] = []
+  // Issue #444: classify stored payloads by schema version only (V4 is the
+  // minimum supported snapshot format). Aggregate counts, never identifiers.
+  // Any pre-V4 row is a blocker because it must be purged before the
+  // destructive migration; malformed/unsupported payloads and invalid V4
+  // payloads also block. No historical translation semantics are evaluated.
+  let preV4Count = 0
+  let malformedCount = 0
+  let invalidV4Count = 0
+  let validV4Count = 0
   for (const snapshot of backlogSnapshots) {
-    const label = `backlog snapshot ${snapshot.id} (project ${snapshot.projectId})`
-    // Issue #428: the shared classifier derives the verdict from the stored
-    // content — approved historical quarantine is policy-accepted and never
-    // blocks; every defect class (malformed, unsupported, any other
-    // validation failure) stays a blocker.
-    const restorability = classifySnapshotRestorability(snapshot.snapshot, snapshot.projectId)
-    if (restorability.kind === 'quarantined') {
-      notes.push(`${label}: quarantined (policy-accepted, non-restorable) — ${restorability.restoreReason}`)
-    } else if (restorability.kind === 'defect') {
-      blockers.push(`${label}: ${restorability.restoreReason}`)
+    const version = classifySnapshotVersion(snapshot.snapshot)
+    switch (version.kind) {
+      case 'v1':
+      case 'v2':
+      case 'v3':
+        preV4Count++
+        break
+      case 'v4':
+        if (version.valid) validV4Count++
+        else invalidV4Count++
+        break
+      case 'malformed':
+        malformedCount++
+        break
     }
   }
 
+  const blockers: string[] = []
+  if (preV4Count > 0) blockers.push(`pre-V4 BacklogSnapshots remain: ${preV4Count}`)
+  if (malformedCount > 0) blockers.push(`malformed/unsupported BacklogSnapshots: ${malformedCount}`)
+  if (invalidV4Count > 0) blockers.push(`invalid V4 BacklogSnapshots: ${invalidV4Count}`)
+
   return {
-    name: 'historical snapshot parseability and translatability',
+    name: 'snapshot version policy (V4 minimum)',
     passed: blockers.length === 0,
     blockers,
-    notes,
+    notes: validV4Count > 0 ? [`valid V4 BacklogSnapshots: ${validV4Count}`] : undefined,
   }
 }
 

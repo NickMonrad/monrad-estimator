@@ -628,9 +628,9 @@ describe('classifySnapshotEntry', () => {
   })
 })
 
-// ─── Derived quarantine in plans (issue #428) ───────────────────────────────
+// ─── Retired snapshot policy in plans (issue #444) ─────────────────────────
 
-describe('remediation plan — derived quarantine', () => {
+describe('remediation plan — retired snapshot policy', () => {
   function makeSnapshot(overrides: Partial<RemediationDatabaseState['snapshots'][number]> = {}) {
     return {
       id: 'snap-1',
@@ -678,27 +678,26 @@ describe('remediation plan — derived quarantine', () => {
   const buildWithSnapshot = (snapshot: RemediationDatabaseState['snapshots'][number]) =>
     buildRemediationPlan({ projects: [makeProject()], snapshots: [snapshot] }, 'commit-1')
 
-  it('Class A entries are quarantined: no decision ID, no operation, summary count', () => {
+  it('V2 windowless CAPACITY_PLAN entries become decisionRequired (quarantine gate removed)', () => {
+    // Issue #444: the shared classifier retires V2 snapshots, so the
+    // snapshot-level quarantine gate never opens. The plan classifies every
+    // entry individually — a windowless CAPACITY_PLAN entry is a
+    // decisionRequired finding, never a quarantined one.
     const plan = buildWithSnapshot(makeSnapshot())
     const quarantined = plan.findings.filter(f => f.classification === 'quarantined')
-    expect(quarantined).toHaveLength(1)
-    expect(quarantined[0]!.snapshotId).toBe('snap-1')
-    expect(quarantined[0]!.entryId).toBe('rt-q')
-    expect(quarantined[0]!.message).toContain('Class A')
-    expect(quarantined[0]!.decisionId).toBeNull()
-    expect(quarantined[0]!.operationId).toBeNull()
-    expect(quarantined[0]!.evidenceHash).toMatch(/^[0-9a-f]{64}$/)
-    // Removed from decisionRequired: no plan decision and no apply operation
-    // reference the snapshot entry.
-    expect(plan.decisions).toHaveLength(0)
-    expect(plan.operations).toHaveLength(0)
-    expect(plan.summary.quarantined).toBe(1)
-    expect(plan.summary.decisionsRequired).toBe(0)
-    // Quarantine-only plan is eligible for exit 0.
-    expect(classifyPlanExit(plan)).toBe(0)
+    expect(quarantined).toHaveLength(0)
+    const rtFinding = plan.findings.find(f => f.entryId === 'rt-q')
+    expect(rtFinding?.classification).toBe('decisionRequired')
+    expect(rtFinding?.message).toContain('without captured window')
+    expect(plan.decisions.some(d => d.snapshotId === 'snap-1' && d.entryId === 'rt-q')).toBe(true)
+    const validFinding = plan.findings.find(f => f.entryId === 'rt-ok')
+    expect(validFinding?.classification).toBe('alreadyValid')
+    expect(plan.summary.quarantined).toBe(0)
+    expect(plan.summary.decisionsRequired).toBe(1)
+    expect(classifyPlanExit(plan)).toBe(2)
   })
 
-  it('Class B entries are quarantined with the Class B reason', () => {
+  it('V2 single -1 CAPACITY_PLAN entries become single-negative decisions', () => {
     const snapshot = makeSnapshot()
     ;(snapshot.snapshot as Record<string, unknown>).resourceTypes = [{
       id: 'rt-q',
@@ -727,22 +726,26 @@ describe('remediation plan — derived quarantine', () => {
     }]
     const plan = buildWithSnapshot(snapshot)
     const quarantined = plan.findings.filter(f => f.classification === 'quarantined')
-    expect(quarantined).toHaveLength(1)
-    expect(quarantined[0]!.message).toContain('Class B')
-    expect(plan.summary.quarantined).toBe(1)
-    expect(plan.decisions).toHaveLength(0)
-    expect(plan.operations).toHaveLength(0)
+    expect(quarantined).toHaveLength(0)
+    const rtFinding = plan.findings.find(f => f.entryId === 'rt-q')
+    expect(rtFinding?.classification).toBe('decisionRequired')
+    expect(rtFinding?.message).toContain('single -1')
+    expect(plan.summary.quarantined).toBe(0)
+    expect(plan.decisions.some(d => d.entryId === 'rt-q')).toBe(true)
+    expect(plan.operations.some(op => op.kind === 'rewrite-snapshot-entry')).toBe(false)
+    expect(classifyPlanExit(plan)).toBe(2)
   })
 
-  it('windowless CAPACITY_PLAN entries no longer produce snapshot-window decisions', () => {
+  it('no V2 snapshot entry is ever classified quarantined (issue #444)', () => {
     const plan = buildWithSnapshot(makeSnapshot())
-    expect(plan.decisions.some(d => d.snapshotId === 'snap-1')).toBe(false)
-    expect(plan.summary.findings.decisionRequired).toBe(0)
+    expect(plan.findings.filter(f => f.classification === 'quarantined')).toHaveLength(0)
+    expect(plan.summary.findings.quarantined).toBe(0)
   })
 
-  // ── Issue #438 deterministic translations in the plan ────────────────────
-
-  it('an exact all-windowless-100% Class A snapshot produces deterministic findings, never quarantine', () => {
+  it('an exact all-windowless-100% Class A snapshot receives per-entry decisions, never deterministic/quarantine findings', () => {
+    // The issue #438 snapshot-wide deterministic gate was bound to the
+    // classifier verdict; with V2 retired the windowless entries are plain
+    // decisions.
     const snapshot = makeSnapshot()
     ;(snapshot.snapshot as Record<string, unknown>).resourceTypes = [{
       id: 'rt-a1',
@@ -772,18 +775,14 @@ describe('remediation plan — derived quarantine', () => {
     }]
     const plan = buildWithSnapshot(snapshot)
     expect(plan.summary.quarantined).toBe(0)
-    expect(plan.summary.findings.quarantined).toBe(0)
-    expect(plan.summary.findings.deterministic).toBe(2)
-    expect(plan.decisions).toHaveLength(0)
-    expect(plan.operations).toHaveLength(0)
+    expect(plan.summary.findings.deterministic).toBe(0)
+    expect(plan.summary.findings.decisionRequired).toBe(2)
     for (const entryId of ['rt-a1', 'nr-a1']) {
       const finding = plan.findings.find(f => f.entryId === entryId)
-      expect(finding?.classification).toBe('deterministic')
-      expect(finding?.message).toContain('full capacity')
-      expect(finding?.decisionId).toBeNull()
-      expect(finding?.operationId).toBeNull()
+      expect(finding?.classification).toBe('decisionRequired')
     }
-    expect(classifyPlanExit(plan)).toBe(0)
+    expect(plan.decisions).toHaveLength(2)
+    expect(classifyPlanExit(plan)).toBe(2)
   })
 
   it('an exact S entry inside a defect snapshot is deterministic while the snapshot stays defect', () => {
@@ -844,7 +843,7 @@ describe('remediation plan — derived quarantine', () => {
     expect(classifyPlanExit(plan)).toBe(2)
   })
 
-  it('a mixed quarantine-and-defect snapshot keeps per-entry classifications (never quarantined)', () => {
+  it('a mixed snapshot keeps per-entry classifications (never quarantined)', () => {
     const snapshot = makeSnapshot()
     ;(snapshot.snapshot as Record<string, unknown>).namedResources = [{
       id: 'nr-orphan',
@@ -871,19 +870,19 @@ describe('remediation plan — derived quarantine', () => {
     expect(classifyPlanExit(plan)).toBe(1)
   })
 
-  it('quarantine plus unresolved live-state decisions still exits 2', () => {
+  it('retired snapshots plus unresolved live-state decisions still exits 2', () => {
     const plan = buildRemediationPlan({
       projects: [makeProject({
         resourceTypes: [makeRt({ id: 'rt-live', allocationMode: 'CAPACITY_PLAN' })],
       })],
       snapshots: [makeSnapshot()],
     }, 'commit-1')
-    expect(plan.summary.quarantined).toBe(1)
+    expect(plan.summary.quarantined).toBe(0)
     expect(plan.summary.decisionsRequired).toBeGreaterThan(0)
     expect(classifyPlanExit(plan)).toBe(2)
   })
 
-  it('quarantine plus unsupported state exits 1', () => {
+  it('retired snapshots plus unsupported state exits 1', () => {
     const plan = buildRemediationPlan({
       projects: [],
       snapshots: [makeSnapshot(), {
@@ -892,21 +891,18 @@ describe('remediation plan — derived quarantine', () => {
         snapshot: { schemaVersion: 99, epics: [] },
       }],
     }, 'commit-1')
-    expect(plan.summary.quarantined).toBe(1)
+    expect(plan.summary.quarantined).toBe(0)
     expect(classifyPlanExit(plan)).toBe(1)
   })
 
-  it('plan fingerprint is deterministic across reruns with quarantined findings', () => {
+  it('plan fingerprint is deterministic across reruns with retired snapshots', () => {
     const plan1 = buildWithSnapshot(makeSnapshot())
     const plan2 = buildWithSnapshot(makeSnapshot())
     expect(plan2.fingerprint).toBe(plan1.fingerprint)
     expect(plan2.summary).toEqual(plan1.summary)
   })
 
-  // ── Effective-mode-aware quarantine (review remediation) ──────────────────
-  // A globally quarantined snapshot may contain valid non-CAPACITY_PLAN
-  // entries whose raw window shape resembles Class A. Only the genuine
-  // effective-CAPACITY_PLAN entries may become quarantined findings.
+  // ── Per-entry classification of retired snapshots (no snapshot gate) ─────
 
   function v2Role(id: string, name: string, overrides: Record<string, unknown> = {}) {
     return {
@@ -925,7 +921,7 @@ describe('remediation plan — derived quarantine', () => {
     }
   }
 
-  function makeQuarantineWithValidCompanions() {
+  function makeRetiredSnapshotWithValidCompanions() {
     return {
       id: 'snap-mixed-valid',
       projectId: 'proj-1',
@@ -962,78 +958,47 @@ describe('remediation plan — derived quarantine', () => {
     }
   }
 
-  it('valid non-CAPACITY_PLAN companions are never quarantined (Class A snapshot)', () => {
+  it('valid non-CAPACITY_PLAN entries keep alreadyValid treatment; windowless entries become decisions', () => {
     const plan = buildRemediationPlan(
-      { projects: [makeProject()], snapshots: [makeQuarantineWithValidCompanions()] },
+      { projects: [makeProject()], snapshots: [makeRetiredSnapshotWithValidCompanions()] },
       'commit-1',
     )
-    const quarantined = plan.findings.filter(f => f.classification === 'quarantined')
-    // Only the genuine effective-CAPACITY_PLAN entry is quarantined.
-    expect(quarantined).toHaveLength(1)
-    expect(quarantined[0]!.entryId).toBe('rt-q')
-    expect(quarantined[0]!.message).toContain('Class A')
+    // No entry is ever quarantined under the retired-snapshot policy.
+    expect(plan.findings.filter(f => f.classification === 'quarantined')).toHaveLength(0)
+    // The windowless CAPACITY_PLAN entry is a decision.
+    const rtQ = plan.findings.find(f => f.entryId === 'rt-q')
+    expect(rtQ?.classification).toBe('decisionRequired')
+    expect(plan.decisions.some(d => d.entryId === 'rt-q')).toBe(true)
     // Valid companions keep the normal valid/no-action treatment.
     for (const entryId of ['rt-timeline-null', 'rt-effort-stale', 'rt-full-null', 'rt-null-mode', 'nr-override']) {
       const finding = plan.findings.find(f => f.entryId === entryId)
       expect(finding?.classification).toBe('alreadyValid')
     }
-    // Companions create no decision, no operation, no unsupported finding.
-    expect(plan.decisions).toHaveLength(0)
+    // Companions create no operation, no unsupported finding.
     expect(plan.operations).toHaveLength(0)
     expect(plan.summary.findings.unsupported).toBe(0)
-    // summary.quarantined equals the actual quarantine-entry count.
-    expect(plan.summary.quarantined).toBe(1)
-    expect(plan.summary.findings.quarantined).toBe(1)
-    expect(classifyPlanExit(plan)).toBe(0)
+    expect(plan.summary.quarantined).toBe(0)
+    expect(plan.summary.findings.quarantined).toBe(0)
+    expect(classifyPlanExit(plan)).toBe(2)
   })
 
-  it('valid non-CAPACITY_PLAN companions are never quarantined (Class B snapshot)', () => {
-    const snapshot = makeQuarantineWithValidCompanions()
+  it('a single -1 entry with valid companions becomes a single-negative decision', () => {
+    const snapshot = makeRetiredSnapshotWithValidCompanions()
     ;(snapshot.snapshot as Record<string, unknown>).resourceTypes = [
       v2Role('rt-q', 'Quarantine Role', { allocationMode: 'CAPACITY_PLAN', allocationStartWeek: -1, allocationEndWeek: 5 }),
       v2Role('rt-timeline-null', 'Timeline Null', { allocationMode: 'TIMELINE' }),
       v2Role('rt-effort-stale', 'Effort Stale', { allocationMode: 'EFFORT', allocationStartWeek: 2, allocationEndWeek: 9 }),
     ]
     const plan = buildRemediationPlan({ projects: [makeProject()], snapshots: [snapshot] }, 'commit-1')
-    const quarantined = plan.findings.filter(f => f.classification === 'quarantined')
-    expect(quarantined).toHaveLength(1)
-    expect(quarantined[0]!.entryId).toBe('rt-q')
-    expect(quarantined[0]!.message).toContain('Class B')
-    expect(plan.summary.quarantined).toBe(1)
-    expect(plan.decisions).toHaveLength(0)
-    expect(plan.operations).toHaveLength(0)
-  })
-
-  it('quarantine findings with valid companions are deterministic and manifest-stable', () => {
-    const plan1 = buildRemediationPlan(
-      { projects: [makeProject()], snapshots: [makeQuarantineWithValidCompanions()] },
-      'commit-1',
-    )
-    const plan2 = buildRemediationPlan(
-      { projects: [makeProject()], snapshots: [makeQuarantineWithValidCompanions()] },
-      'commit-1',
-    )
-    expect(plan2.fingerprint).toBe(plan1.fingerprint)
-    expect(plan2.summary).toEqual(plan1.summary)
-
-    // Resolving an (empty) manifest must not alter quarantined findings: no
-    // decision exists for them, so they are untouched by resolution.
-    const resolved = resolvePlanWithManifest(plan1, {
-      formatVersion: 1,
-      applicationCommit: 'commit-1',
-      planFingerprint: plan1.fingerprint,
-      decisions: [],
-    })
-    expect(resolved.errors).toEqual([])
-    expect(resolved.plan.summary.quarantined).toBe(1)
-    const resolvedQuarantined = resolved.plan.findings.filter(f => f.classification === 'quarantined')
-    expect(resolvedQuarantined).toHaveLength(1)
-    expect(resolvedQuarantined[0]!.entryId).toBe('rt-q')
-    expect(resolvedQuarantined[0]!.decisionId).toBeNull()
-    // No rewrite-snapshot-entry operation exists for the quarantined entry.
-    expect(resolved.plan.operations.some(op => op.kind === 'rewrite-snapshot-entry')).toBe(false)
+    expect(plan.findings.filter(f => f.classification === 'quarantined')).toHaveLength(0)
+    const rtQ = plan.findings.find(f => f.entryId === 'rt-q')
+    expect(rtQ?.classification).toBe('decisionRequired')
+    expect(rtQ?.message).toContain('single -1')
+    expect(plan.decisions.some(d => d.entryId === 'rt-q')).toBe(true)
+    expect(plan.summary.quarantined).toBe(0)
   })
 })
+
 
 // ─── Canonical JSON + fingerprints ──────────────────────────────────────────
 

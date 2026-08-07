@@ -5,10 +5,12 @@
  *
  * Proves against a disposable database (Docker-first lifecycle):
  *   - the corrected 11-plus-7 snapshot topology and the reviewed counts
- *     reconcile end to end through the real CLI entry point;
+ *     reconcile end to end through the real CLI entry point under the
+ *     issue #444 retired policy (all seeded V2 snapshots non-restorable,
+ *     zero quarantine classification);
  *   - entry-level and structural defect categorisation (alias conflict,
  *     duplicate owners, single -1 edges);
- *   - current classifier reuse (quarantined/defect/restorable verdicts);
+ *   - current classifier reuse (restorable/retired/defect verdicts);
  *   - fingerprint, baseline and summary-count mismatch refusal;
  *   - output-file safety (never overwrite);
  *   - unsupported schema-version refusal;
@@ -154,12 +156,11 @@ async function createSnapshot(id: string, payload: unknown, createdAtIso: string
  * - S7: seven-subgroup with 19 windowless decisions + 1 deterministic S
  *   entry + a residual alias-conflict NR (production M1–M6/M8 shape: the
  *   snapshot stays defect, the S entry leaves the decision set);
- * - Q1: quarantined snapshot with 2 RT + 1 inherited-NR Class A entries;
- * - R1: restorable TIMELINE snapshot.
- * Expected: quarantined 3 entries / 1 snapshot; defect 3; windowless
- * 37+19=56; single 0; snapshot decisions 56; live 0; unsupported 0;
- * rewrite 0; topology 11 = 56 (all defect snapshots are windowless-only now:
- * the S decisions are gone). */
+ * - Q1: previously-quarantined snapshot with 2 RT + 1 inherited-NR entries;
+ * - R1: previously-restorable TIMELINE snapshot.
+ * Expected under issue #444 (all five V2 snapshots retired): quarantined
+ * 0/0; defect 5; windowless 21+16+19+2=58; single 0; snapshot decisions
+ * 58; live 0; unsupported 0; rewrite 0; topology 11 = 5 (58 windowless). */
 async function seedTopologyFixture(): Promise<void> {
   const conflictNr = (id: string, parentId: string) => makeNr({
     id, resourceTypeId: parentId, allocationMode: null,
@@ -249,18 +250,21 @@ async function expectedBoundary(): Promise<SnapshotEvidenceExpected> {
   return {
     fingerprint: computePlanFingerprint(plan),
     baselineStateHash: computeStateHash(state),
-    quarantinedEntries: 3,
-    quarantinedSnapshots: 1,
-    defectSnapshots: 3,
-    windowlessDecisions: 56,
+    // Issue #444: all five seeded V2 snapshots are deliberately retired
+    // (non-restorable); quarantine classification no longer exists and every
+    // windowless entry becomes a plain decision.
+    quarantinedEntries: 0,
+    quarantinedSnapshots: 0,
+    defectSnapshots: 5,
+    windowlessDecisions: 58,
     singleMinusOneDecisions: 0,
-    snapshotDecisions: 56,
+    snapshotDecisions: 58,
     liveDecisions: 0,
     unsupported: 0,
     rewriteOperations: 0,
-    topology11Snapshots: 3,
+    topology11Snapshots: 5,
     topology7Snapshots: 0,
-    topology11WindowlessDecisions: 56,
+    topology11WindowlessDecisions: 58,
     topology7WindowlessDecisions: 0,
     topology7SingleMinusOneDecisions: 0,
   }
@@ -295,13 +299,13 @@ describeIf('snapshot evidence command (integration)', () => {
     })
     expect(report.policyDecision).toBe('not-assessed')
     expect(report.topology).toMatchObject({
-      quarantinedSnapshots: 1,
-      defectSnapshots: 3,
-      windowlessDecisions: 56,
+      quarantinedSnapshots: 0,
+      defectSnapshots: 5,
+      windowlessDecisions: 58,
       singleMinusOneDecisions: 0,
-      snapshotDecisions: 56,
+      snapshotDecisions: 58,
       liveDecisions: 0,
-      elevenSnapshotSubgroup: { snapshots: 3, windowlessDecisions: 56 },
+      elevenSnapshotSubgroup: { snapshots: 5, windowlessDecisions: 58 },
       sevenSnapshotSubgroup: { snapshots: 0, windowlessDecisions: 0, singleMinusOneDecisions: 0, totalDecisions: 0 },
     })
 
@@ -311,80 +315,52 @@ describeIf('snapshot evidence command (integration)', () => {
       expect(statSync(mdPath).mode & 0o777).toBe(0o600)
     }
     expect(readdirSync(dir).filter(name => name.includes('.tmp'))).toEqual([])
-    expect(report.classAAggregates.totalEntries).toBe(3)
-    expect(report.classAAggregates.byOwnerKind).toEqual({ resourceType: 2, namedResource: 1, unavailable: 0 })
-    // Issue #440: sanitized Class A companion evidence for the quarantined
-    // snapshot (exact RTs stay exact; every other entry is a companion).
+    // Issue #444: quarantine classification is retired — every Class A
+    // aggregate and the companion population are zero.
+    expect(report.classAAggregates.totalEntries).toBe(0)
+    expect(report.classAAggregates.byOwnerKind).toEqual({ resourceType: 0, namedResource: 0, unavailable: 0 })
     expect(report.classACompanionEvidence.population).toEqual({
-      classAQuarantinedSnapshots: 1,
-      snapshotsWithCompanions: 1,
-      exactClassAResourceTypeEntries: 2,
+      classAQuarantinedSnapshots: 0,
+      snapshotsWithCompanions: 0,
+      exactClassAResourceTypeEntries: 0,
       exactClassANamedResourceEntries: 0,
-      companionResourceTypeEntries: 1,
-      companionNamedResourceEntries: 2,
-      totalCompanionEntries: 3,
+      companionResourceTypeEntries: 0,
+      companionNamedResourceEntries: 0,
+      totalCompanionEntries: 0,
       excludedMixedClassABSnapshots: 0,
     })
     expect(report.classACompanionEvidence.planClassifications).toEqual({
       deterministic: 0,
       decisionRequired: 0,
       unsupported: 0,
-      alreadyValid: 2,
-      quarantined: 1,
+      alreadyValid: 0,
+      quarantined: 0,
     })
     expect(report.classACompanionEvidence.snapshotFlags).toEqual({
       allEntriesWindowless: 0,
-      notAllEntriesWindowless: 1,
-      allEntriesApproved100: 1,
+      notAllEntriesWindowless: 0,
+      allEntriesApproved100: 0,
       notAllEntriesApproved100: 0,
       allCompanionsWindowless: 0,
-      notAllCompanionsWindowless: 1,
-      allCompanionsApproved100: 1,
+      notAllCompanionsWindowless: 0,
+      allCompanionsApproved100: 0,
       notAllCompanionsApproved100: 0,
-      anyCompanionInheritedMode: 1,
+      anyCompanionInheritedMode: 0,
       noCompanionInheritedMode: 0,
     })
     const companionRows = report.classACompanionEvidence.shapeRows
     const rowSum = companionRows.reduce((sum: number, row: { count: number }) => sum + row.count, 0)
-    expect(rowSum).toBe(3)
-    // Inherited-mode windowless companion row (current plan: quarantined).
-    const inheritedRow = companionRows.find((row: { modeSource: string }) => row.modeSource === 'inherited')!
-    expect(inheritedRow).toMatchObject({
-      entryKind: 'namedResource',
-      rawMode: null,
-      parentMode: 'CAPACITY_PLAN',
-      effectiveMode: 'CAPACITY_PLAN',
-      allocationStartWeekState: 'absent-null',
-      allocationEndWeekState: 'absent-null',
-      startWeekState: 'absent-null',
-      endWeekState: 'absent-null',
-      allocationPercentCategory: 'hundred',
-      allocationPctCategory: 'hundred',
-      currentPlanClassification: 'quarantined',
-      count: 1,
-    })
-    // Windowed TIMELINE companion row (current plan: alreadyValid).
-    const timelineRow = companionRows.find((row: { rawMode: string | null }) => row.rawMode === 'TIMELINE')!
-    expect(timelineRow).toMatchObject({
-      entryKind: 'namedResource',
-      effectiveMode: 'TIMELINE',
-      modeSource: 'explicit',
-      allocationStartWeekState: 'populated-nonnegative-integer',
-      allocationEndWeekState: 'populated-nonnegative-integer',
-      startWeekState: 'populated-nonnegative-integer',
-      endWeekState: 'populated-nonnegative-integer',
-      currentPlanClassification: 'alreadyValid',
-    })
-    // The current quarantine boundary is unchanged by the tooling.
-    expect(report.observedBoundary.summary.quarantined).toBe(3)
-    // Issue #438: the seeded S entry is deterministic zero — no single-
-    // negative decision exists, so no S record is emitted.
+    expect(rowSum).toBe(0)
+    // The retired policy emits no quarantine findings.
+    expect(report.observedBoundary.summary.quarantined).toBe(0)
+    // The seeded S entry stays a deterministic finding — no single-negative
+    // decision exists, so no S record is emitted.
     expect(report.singleNegativeEntries).toHaveLength(0)
-    expect(report.defectSnapshots).toHaveLength(3)
-    const seven = report.defectSnapshots.find((m: { windowlessDecisionCount: number }) => m.windowlessDecisionCount === 19)!
-    expect(seven.windowlessDecisionCount).toBe(19)
-    expect(seven.singleMinusOneDecisionCount).toBe(0)
-    expect(seven.entryErrorCategories['alias-conflict']).toBeGreaterThanOrEqual(2)
+    expect(report.defectSnapshots).toHaveLength(5)
+    const snapS7 = report.defectSnapshots.find((m: { windowlessDecisionCount: number }) => m.windowlessDecisionCount === 19)!
+    expect(snapS7.windowlessDecisionCount).toBe(19)
+    expect(snapS7.singleMinusOneDecisionCount).toBe(0)
+    expect(snapS7.entryErrorCategories['alias-conflict']).toBeGreaterThanOrEqual(1)
 
     // Zero writes: canonical covered-state hash unchanged.
     const stateHashAfter = await currentStateHash()
@@ -402,12 +378,13 @@ describeIf('snapshot evidence command (integration)', () => {
       expect(readFileSync(jsonPath, 'utf-8')).not.toContain(secret)
       expect(markdown).not.toContain(secret)
     }
-    expect(markdown).toContain('windowlessDecisions: 56')
+    expect(markdown).toContain('windowlessDecisions: 58')
     expect(markdown).toContain('policyDecision: not-assessed')
-    // Issue #440 companion section is mirrored in Markdown.
+    // Issue #440 companion section is mirrored in Markdown (empty under the
+    // retired policy).
     expect(markdown).toContain('## Class A companion evidence')
-    expect(markdown).toContain('- totalCompanionEntries: 3')
-    expect(markdown).toContain('- anyCompanionInheritedMode: 1')
+    expect(markdown).toContain('- totalCompanionEntries: 0')
+    expect(markdown).toContain('- anyCompanionInheritedMode: 0')
 
     rmSync(dir, { recursive: true, force: true })
   })

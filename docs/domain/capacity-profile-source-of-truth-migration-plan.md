@@ -128,6 +128,13 @@ This means:
 
 ### Phase 2b — Snapshot v3 capacity-profile preservation ✅ (PR #367 merged)
 
+> **Superseded for restore policy by Issue #444.** The text below is
+> historical design documentation. V4 is now the minimum
+> supported/restorable snapshot format: v1/v2/v3 snapshots are deliberately
+> retired (non-restorable) and are purged before the destructive migration;
+> see
+> [`legacy-capacity-column-runtime-cutover.md`](legacy-capacity-column-runtime-cutover.md).
+
 PR #367 (merged, branch `feature/snapshot-v3-capacity-profiles`) extended the
 BacklogSnapshot schema to version 3 so that rollback preserves capacity profile data.
 Snapshot v3 is the first-class representation for capacity profiles; v2 and v1 snapshots
