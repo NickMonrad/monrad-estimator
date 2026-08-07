@@ -10,12 +10,14 @@
  *   - manifest decisions resolve ambiguous owners exactly and block apply
  *     when unresolved, malformed or fingerprint-mismatched;
  *   - the apply transaction rolls back on any failure (no partial success);
- *   - historical v2 snapshot policy (never-active normalisation, derived
- *     quarantine of windowless CAPACITY_PLAN and single -1 entries, minimal
- *     rewrites for remaining decisions) is shared by readiness and rollback;
- *   - end-to-end: readiness fails → dry-run → approved plan applies → audit
- *     passes → readiness passes → runtime resolver loads → representative
- *     snapshot restoration succeeds → candidate columns remain.
+ *   - retired v2 snapshot policy (issue #444): pre-V4 snapshots block
+ *     readiness, windowless/single-`-1` entries become plain plan decisions,
+ *     nothing is ever classified quarantined, and the raw rows are only
+ *     removed by the deliberate #404 purge (never by remediation);
+ *   - end-to-end: readiness fails → dry-run → #404 purge → approved
+ *     live-state plan applies → audit passes → readiness passes → runtime
+ *     resolver loads → representative V4 snapshot restoration succeeds →
+ *     candidate columns remain.
  *
  * Requires INTEGRATION_TEST=true and a disposable PostgreSQL 15 Docker
  * container (see scripts/run-integration-local.mjs).
@@ -46,6 +48,7 @@ import {
 import { runOwnershipAudit } from '../lib/capacityProfileOwnershipAudit.js'
 import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
 import { rollbackProjectSnapshot } from '../lib/projectSnapshotService.js'
+import { buildSnapshot } from '../routes/snapshots.js'
 import { translateV2SnapshotProfiles } from '../lib/projectSnapshotCapacity.js'
 import { parseSnapshotData, isSnapshotV2 } from '../lib/projectSnapshotTypes.js'
 
@@ -868,8 +871,8 @@ describeIf('remediation transaction safety', () => {
 // 5. Historical snapshots
 // ════════════════════════════════════════════════════════════════════════════
 
-describeIf('remediation historical v2 snapshot policy', () => {
-  it('translates v2 EFFORT / FULL_PROJECT / TIMELINE / windowed CAPACITY_PLAN entries', async () => {
+describeIf('remediation retired v2 snapshot policy (issue #444)', () => {
+  it('v2 entries are no longer readiness-blocking by translation semantics; the snapshot itself blocks', async () => {
     const projectId = await createProject()
     const snapshotId = await createBacklogSnapshot(projectId, v2Snapshot({
       resourceTypes: [
@@ -884,9 +887,14 @@ describeIf('remediation historical v2 snapshot policy', () => {
       ],
     }))
 
+    // Issue #444: any pre-V4 snapshot blocks readiness with an aggregate
+    // count — no historical translation semantics are evaluated.
     const readiness = await runProductionMigrationReadiness(prisma)
-    expect(readiness.passed).toBe(true)
+    expect(readiness.passed).toBe(false)
+    expect(formatReadinessReport(readiness)).toContain('pre-V4 BacklogSnapshots remain: 1')
 
+    // The plan tool still classifies every entry individually: all entries
+    // are valid (alreadyValid), so the plan itself is empty.
     const { plan } = await runDryRun()
     expect(plan.summary.findings.deterministic).toBe(0)
     expect(plan.summary.findings.decisionRequired).toBe(0)
@@ -894,7 +902,7 @@ describeIf('remediation historical v2 snapshot policy', () => {
     void snapshotId
   })
 
-  it('applies the never-active policy to (-1,-1) pairs and inverted windows', async () => {
+  it('the never-active (-1,-1)/inverted policy still classifies entries deterministically; the snapshot blocks readiness', async () => {
     const projectId = await createProject()
     await createBacklogSnapshot(projectId, v2Snapshot({
       resourceTypes: [v2Role({ id: 'rt-snap-1', allocationMode: 'EFFORT' })],
@@ -905,15 +913,16 @@ describeIf('remediation historical v2 snapshot policy', () => {
     }))
 
     const readiness = await runProductionMigrationReadiness(prisma)
-    expect(readiness.passed).toBe(true)
+    expect(readiness.passed).toBe(false)
+    expect(formatReadinessReport(readiness)).toContain('pre-V4 BacklogSnapshots remain: 1')
 
     const { plan } = await runDryRun()
     expect(plan.summary.findings.deterministic).toBe(2)
     expect(plan.summary.findings.decisionRequired).toBe(0)
     expect(classifyPlanExit(plan)).toBe(0)
 
-    // Rollback agrees with readiness: the same translation produces
-    // zero-capacity profiles with null windows.
+    // The retained translator still derives zero-capacity profiles with null
+    // windows for the never-active shapes.
     const row = await prisma.backlogSnapshot.findFirstOrThrow()
     const parsed = parseSnapshotData(row.snapshot)
     expect(isSnapshotV2(parsed)).toBe(true)
@@ -927,7 +936,7 @@ describeIf('remediation historical v2 snapshot policy', () => {
     }
   })
 
-  it('quarantines windowless CAPACITY_PLAN entries: no decision ID, no rewrite, raw preserved', async () => {
+  it('windowless CAPACITY_PLAN entries become decisions under the retired policy (raw preserved)', async () => {
     const projectId = await createProject()
     const snapshotId = await createBacklogSnapshot(projectId, v2Snapshot({
       resourceTypes: [v2Role({ id: 'rt-snap-1', allocationMode: 'EFFORT' })],
@@ -945,30 +954,27 @@ describeIf('remediation historical v2 snapshot policy', () => {
       sentinel: { marker: 'preserve-me', nested: { a: [1, 2, 3], b: 'x' } },
     }))
 
-    // Issue #428: the reviewed windowless CAPACITY_PLAN shape is derived
-    // quarantine — readiness accepts it, the plan carries no decision ID and
-    // generates no apply operation, and the raw record stays byte-for-byte.
+    // Issue #444: the windowless shape is deliberately retired with the
+    // other pre-V4 snapshots — readiness blocks on its presence.
     const readiness = await runProductionMigrationReadiness(prisma)
-    expect(readiness.passed).toBe(true)
-    expect(formatReadinessReport(readiness)).toContain('quarantined (policy-accepted, non-restorable)')
+    expect(readiness.passed).toBe(false)
+    expect(formatReadinessReport(readiness)).toContain('pre-V4 BacklogSnapshots remain: 1')
+    expect(formatReadinessReport(readiness)).not.toContain('quarantined')
 
+    // The plan classifies the windowless entry individually as a decision.
     const { plan } = await runDryRun()
-    expect(classifyPlanExit(plan)).toBe(0)
-    expect(plan.summary.quarantined).toBe(1)
-    expect(plan.summary.findings.decisionRequired).toBe(0)
-    const quarantined = plan.findings.find(f => f.entryId === 'nr-windowless')
-    expect(quarantined?.classification).toBe('quarantined')
-    expect(quarantined?.decisionId).toBeNull()
-    expect(plan.decisions).toHaveLength(0)
+    expect(plan.summary.quarantined).toBe(0)
+    expect(plan.summary.findings.decisionRequired).toBe(1)
+    const finding = plan.findings.find(f => f.entryId === 'nr-windowless')
+    expect(finding?.classification).toBe('decisionRequired')
+    expect(plan.decisions.some(d => d.entryId === 'nr-windowless')).toBe(true)
     expect(plan.operations.some(op => op.kind === 'rewrite-snapshot-entry')).toBe(false)
+    expect(classifyPlanExit(plan)).toBe(2)
 
+    // Apply refuses without resolving the decision; nothing is written.
     const outcome = await applyRemediationPlan(prisma, { plan })
-    expect(outcome.exitCode).toBe(0)
+    expect(outcome.exitCode).toBe(2)
     expect(outcome.applied).toBe(0)
-    // Zero-operation plans skip the post-apply verification block by design.
-    expect(outcome.postApply).toBeNull()
-    // Readiness (with the quarantined snapshot present) still passes.
-    expect((await runProductionMigrationReadiness(prisma)).passed).toBe(true)
 
     // Raw record unchanged — including the windowless entry and the sentinel.
     const row = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: snapshotId } })
@@ -983,7 +989,7 @@ describeIf('remediation historical v2 snapshot policy', () => {
     expect(entry.endWeek).toBeNull()
   })
 
-  it('quarantines a single -1 edge CAPACITY_PLAN entry (no decision, no rewrite)', async () => {
+  it('a single -1 edge CAPACITY_PLAN entry becomes a single-negative decision', async () => {
     const projectId = await createProject()
     const snapshotId = await createBacklogSnapshot(projectId, v2Snapshot({
       resourceTypes: [v2Role({ id: 'rt-snap-1', allocationMode: 'EFFORT' })],
@@ -993,23 +999,26 @@ describeIf('remediation historical v2 snapshot policy', () => {
     }))
 
     const readiness = await runProductionMigrationReadiness(prisma)
-    expect(readiness.passed).toBe(true)
-    expect(formatReadinessReport(readiness)).toContain('Class B')
+    expect(readiness.passed).toBe(false)
+    expect(formatReadinessReport(readiness)).toContain('pre-V4 BacklogSnapshots remain: 1')
+    expect(formatReadinessReport(readiness)).not.toContain('Class B')
 
     const { plan } = await runDryRun()
-    expect(plan.summary.quarantined).toBe(1)
-    expect(plan.summary.findings.decisionRequired).toBe(0)
-    expect(plan.decisions).toHaveLength(0)
-    expect(classifyPlanExit(plan)).toBe(0)
+    expect(plan.summary.quarantined).toBe(0)
+    expect(plan.summary.findings.decisionRequired).toBe(1)
+    const finding = plan.findings.find(f => f.entryId === 'nr-single-neg')
+    expect(finding?.classification).toBe('decisionRequired')
+    expect(finding?.message).toContain('single -1')
+    expect(plan.decisions.some(d => d.entryId === 'nr-single-neg')).toBe(true)
+    expect(classifyPlanExit(plan)).toBe(2)
 
-    // The manifest resolver cannot address quarantined entries (no decision ID).
     const row = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: snapshotId } })
     const snap = row.snapshot as { namedResources?: Array<Record<string, unknown>> }
     const entry = snap.namedResources!.find(e => e.id === 'nr-single-neg')!
     expect(entry.endWeek).toBe(-1)
   })
 
-  it('apply with quarantined snapshots performs no snapshot rewrite alongside deterministic operations', async () => {
+  it('apply with retired snapshots performs no snapshot rewrite; unresolved decisions refuse', async () => {
     const projectId = await createProject()
     await createRole(projectId, { allocationMode: 'TIMELINE', allocationPercent: 75 })
     const snapshotId = await createBacklogSnapshot(projectId, v2Snapshot({
@@ -1029,14 +1038,15 @@ describeIf('remediation historical v2 snapshot policy', () => {
     const rawBefore = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: snapshotId } })
 
     const { plan } = await runDryRun()
-    expect(classifyPlanExit(plan)).toBe(0)
-    expect(plan.summary.quarantined).toBe(1)
+    // The live ROLE finding is deterministic, but the windowless snapshot
+    // entry is an unresolved decision — apply refuses before any write.
+    expect(classifyPlanExit(plan)).toBe(2)
+    expect(plan.summary.quarantined).toBe(0)
     expect(plan.operations.some(op => op.kind === 'rewrite-snapshot-entry')).toBe(false)
 
     const outcome = await applyRemediationPlan(prisma, { plan })
-    expect(outcome.exitCode).toBe(0)
-    // Only the deterministic ROLE profile op ran; no snapshot write occurred.
-    expect(outcome.applied).toBe(1)
+    expect(outcome.exitCode).toBe(2)
+    expect(outcome.applied).toBe(0)
     const rawAfter = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: snapshotId } })
     expect(rawAfter.snapshot).toEqual(rawBefore.snapshot)
   })
@@ -1696,7 +1706,7 @@ describeIf('remediation full-scope drift', () => {
 // ════════════════════════════════════════════════════════════════════════════
 
 describeIf('remediation end-to-end', () => {
-  it('fails readiness → dry-runs → applies approved plan → audit + readiness pass → runtime + rollback work', async () => {
+  it('fails readiness → dry-runs → #404 purge → applies live-state plan → audit + readiness pass → runtime works', async () => {
     const projectId = await createProject('Blocker Zoo')
 
     // A. Missing ROLE profiles (deterministic + decision).
@@ -1736,14 +1746,14 @@ describeIf('remediation end-to-end', () => {
       legacy: { allocationMode: 'CAPACITY_PLAN', allocationStartWeek: null, allocationEndWeek: null },
     })
 
-    // E. Historical v2 snapshots: valid + never-active + windowless + single -1.
-    const neverActiveSnapshotId = await createBacklogSnapshot(projectId, v2Snapshot({
+    // E. Historical v2 snapshots: never-active + windowless + single -1.
+    await createBacklogSnapshot(projectId, v2Snapshot({
       resourceTypes: [v2Role({ id: 'rt-e2e-snap', allocationMode: 'EFFORT' })],
       namedResources: [
         v2Person({ id: 'nr-e2e-neg', resourceTypeId: 'rt-e2e-snap', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, startWeek: -1, endWeek: -1 }),
       ],
     }))
-    const windowlessSnapshotId = await createBacklogSnapshot(projectId, v2Snapshot({
+    await createBacklogSnapshot(projectId, v2Snapshot({
       resourceTypes: [v2Role({ id: 'rt-e2e-snap2', allocationMode: 'EFFORT' })],
       namedResources: [
         v2Person({ id: 'nr-e2e-windowless', resourceTypeId: 'rt-e2e-snap2', allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, startWeek: null, endWeek: null }),
@@ -1756,29 +1766,39 @@ describeIf('remediation end-to-end', () => {
       ],
     }))
 
-    // 1. Readiness fails before remediation.
+    // 1. Readiness fails before remediation (live blockers + pre-V4 rows).
     const before = await runProductionMigrationReadiness(prisma)
     expect(before.passed).toBe(false)
+    expect(formatReadinessReport(before)).toContain('pre-V4 BacklogSnapshots remain: 3')
 
-    // 2. Dry-run reports the expected classes. The windowless and single -1
-    // snapshot entries are derived quarantine (issue #428): reported as
-    // quarantined, removed from decisionRequired, no plan decision IDs.
+    // 2. Dry-run reports the expected classes under issue #444: never-active
+    // entries stay deterministic, windowless/single-(-1) entries become plain
+    // decisions, and nothing is ever classified quarantined.
     const { plan } = await runDryRun()
     expect(plan.summary.findings.deterministic).toBeGreaterThanOrEqual(5)
-    expect(plan.summary.findings.decisionRequired).toBeGreaterThanOrEqual(3)
-    expect(plan.summary.quarantined).toBe(2)
-    expect(plan.decisions.some(d => d.snapshotId !== null)).toBe(false)
+    expect(plan.summary.findings.decisionRequired).toBeGreaterThanOrEqual(5)
+    expect(plan.summary.quarantined).toBe(0)
+    expect(plan.decisions.some(d => d.snapshotId !== null)).toBe(true)
     expect(classifyPlanExit(plan)).toBe(2)
 
-    // 3. Approved plan applies (all live-state decisions supplied; quarantined
-    // snapshot entries carry no decision and are never written).
-    const manifest = await buildManifest(plan, [
+    // 3. Simulate the #404 purge: the pre-V4 snapshots are deliberately
+    // removed (the reviewed purge command deletes only V1/V2/V3 rows), so the
+    // remaining work is live-state only.
+    await prisma.backlogSnapshot.deleteMany({ where: { projectId } })
+
+    // 4. Dry-run again: only live-state decisions remain.
+    const { plan: livePlan } = await runDryRun()
+    expect(livePlan.decisions.some(d => d.snapshotId !== null)).toBe(false)
+    expect(classifyPlanExit(livePlan)).toBe(2)
+
+    // 5. Approved live-state plan applies.
+    const manifest = await buildManifest(livePlan, [
       {
-        decisionId: plan.decisions.find(d => d.ownerId === capPlanRt)!.id,
+        decisionId: livePlan.decisions.find(d => d.ownerId === capPlanRt)!.id,
         resolution: { shape: 'scalar-profile' as const, planningBasis: 'DEMAND_FOLLOWING' as const, defaultPercent: 100 },
       },
       {
-        decisionId: plan.decisions.find(d => d.ownerId === capNr)!.id,
+        decisionId: livePlan.decisions.find(d => d.ownerId === capNr)!.id,
         resolution: {
           shape: 'owner-kind-decision' as const,
           ownerKind: 'NAMED_PERSON' as const,
@@ -1786,74 +1806,94 @@ describeIf('remediation end-to-end', () => {
         },
       },
       {
-        decisionId: plan.decisions.find(d => d.profileId !== null && d.ownerId === effortRt)!.id,
+        decisionId: livePlan.decisions.find(d => d.profileId !== null && d.ownerId === effortRt)!.id,
         resolution: { shape: 'segmented-capacity-profile' as const, defaultPercent: 100, segments: [{ startWeek: 0, endWeek: 20, capacityPercent: 100 }] },
       },
     ])
 
-    const outcome = await applyRemediationPlan(prisma, { plan, manifest })
+    const outcome = await applyRemediationPlan(prisma, { plan: livePlan, manifest })
     expect(outcome.errors).toEqual([])
     expect(outcome.exitCode).toBe(0)
     expect(outcome.postApply!.readinessPassed).toBe(true)
-    // Deterministic findings may remain only for policy-normalised snapshot
-    // entries (never-active windows) that require no write; the two
-    // quarantined entries remain quarantined after apply.
-    expect(outcome.postApply!.planFindings.deterministic).toBeGreaterThanOrEqual(1)
     expect(outcome.postApply!.planFindings.decisionRequired).toBe(0)
     expect(outcome.postApply!.planFindings.unsupported).toBe(0)
-    expect(outcome.postApply!.planFindings.quarantined).toBe(2)
+    expect(outcome.postApply!.planFindings.quarantined).toBe(0)
 
-    // The quarantined raw snapshot rows were never rewritten by apply.
-    const windowlessRow = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: windowlessSnapshotId } })
-    const windowlessSnap = windowlessRow.snapshot as { namedResources?: Array<Record<string, unknown>> }
-    const windowlessEntry = windowlessSnap.namedResources!.find(e => e.id === 'nr-e2e-windowless')!
-    expect(windowlessEntry.startWeek).toBeNull()
-    expect(windowlessEntry.endWeek).toBeNull()
-
-    // 4. Permanent audit passes.
+    // 6. Permanent audit passes.
     const audit = await runOwnershipAudit(prisma)
     expect(audit.isClean).toBe(true)
 
-    // 5. Readiness passes.
+    // 7. Readiness passes after purge + live remediation.
     const after = await runProductionMigrationReadiness(prisma)
     expect(after.passed).toBe(true)
 
-    // 6. Resource Profile / Timeline / scheduler load successfully (profile-first).
+    // 8. Resource Profile / Timeline / scheduler load successfully (profile-first).
     const resolved = await resolveSchedulerCapacity(prisma, projectId)
     expect(resolved.resourceTypes.length).toBeGreaterThanOrEqual(4)
     expect(resolved.meta.legacyCount).toBe(0)
     const timelineProfile = await prisma.capacityProfile.findFirstOrThrow({ where: { resourceTypeId: timelineRt } })
     expect(timelineProfile.planningBasis).toBe('AVAILABILITY_WINDOW')
 
-    // 7. Representative snapshot restoration succeeds (v2 rollback) — proven
-    // in a dedicated self-contained project below.
-    void neverActiveSnapshotId
+    // 9. Representative V4 restoration is proven in a dedicated project below.
     void fullRt
 
-    // 8. No legacy candidate column removed.
+    // 10. No legacy candidate column removed.
     expect(await candidateColumnsPresent()).toBe(true)
   })
 
-  it('restores a representative v2 snapshot after remediation (readiness/rollback agreement)', async () => {
+  it('restores a representative V4 snapshot after remediation (readiness/rollback agreement)', async () => {
     const projectId = await createProject('Rollback Project')
     const rt = await createRole(projectId, { allocationMode: 'TIMELINE', allocationStartWeek: 0, allocationEndWeek: 10 })
     const nr = await createNamedPerson(projectId, rt, { allocationMode: 'CAPACITY_PLAN', startWeek: 0, endWeek: 10 })
-    const snapshotId = await createBacklogSnapshot(projectId, v2Snapshot({
-      resourceTypes: [v2Role({ id: rt, allocationMode: 'TIMELINE', allocationStartWeek: 0, allocationEndWeek: 10 })],
-      namedResources: [
-        v2Person({ id: nr, resourceTypeId: rt, allocationMode: 'CAPACITY_PLAN', allocationStartWeek: 0, allocationEndWeek: 10 }),
-      ],
-    }))
+    // Authoritative profiles exist so the captured V4 snapshot carries the
+    // exact profile state the rollback must restore.
+    await createProfile(projectId, {
+      resourceTypeId: rt,
+      ownerKind: 'ROLE',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 100,
+      startWeek: 0,
+      endWeek: 10,
+    })
+    await createProfile(projectId, {
+      namedResourceId: nr,
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'LEGACY',
+      defaultPercent: 100,
+      startWeek: 0,
+      endWeek: 10,
+    })
+    // Issue #444: representative restoration uses a fresh V4 snapshot (the
+    // minimum supported/restorable format).
+    const data = await buildSnapshot(projectId, prisma)
+    const snapshotId = (
+      await prisma.backlogSnapshot.create({
+        data: {
+          projectId,
+          label: 'representative v4',
+          trigger: 'manual',
+          snapshot: data as unknown as object,
+          createdById: ownerId,
+        },
+      })
+    ).id
 
     const { plan } = await runDryRun()
     const outcome = await applyRemediationPlan(prisma, { plan })
     expect(outcome.exitCode).toBe(0)
 
+    // Mutate the live profiles, then restore from the V4 snapshot.
+    await prisma.capacityProfile.updateMany({
+      where: { projectId },
+      data: { defaultPercent: 50, startWeek: null, endWeek: null },
+    })
     await rollbackProjectSnapshot({ projectId, snapshotId, userId: ownerId, db: prisma })
     const profiles = await prisma.capacityProfile.findMany({ where: { projectId } })
     expect(profiles).toHaveLength(2)
     const roleProfile = profiles.find(p => p.ownerKind === 'ROLE')
-    expect(roleProfile).toMatchObject({ planningBasis: 'AVAILABILITY_WINDOW', startWeek: 0, endWeek: 10 })
+    expect(roleProfile).toMatchObject({ planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW', startWeek: 0, endWeek: 10 })
     const namedProfile = profiles.find(p => p.ownerKind === 'NAMED_PERSON')
     expect(namedProfile).toMatchObject({ planningBasis: 'AVAILABILITY_WINDOW', source: 'LEGACY', startWeek: 0, endWeek: 10 })
 

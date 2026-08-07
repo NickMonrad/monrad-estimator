@@ -13,14 +13,18 @@
  *   v2 — Full project state with schemaVersion: 2
  *   v3 — V2 + capacityProfiles (schemaVersion: 3)
  *
+ * Issue #444: V4 is the minimum supported/restorable snapshot format.
+ * Rollback of V1/V2/V3 snapshots is deliberately refused pre-write with the
+ * stable retirement reason; the legacy scenarios below assert that refusal
+ * and prove no state change on real PostgreSQL.
+ *
  * Scenarios:
- *   A — Exact v3 round trip (2 RTs, 2 NRs, 3 ownerKinds, all legacy types,
+ *   A — Exact V4 round trip (2 RTs, 2 NRs, 3 ownerKinds, all legacy types,
  *       segments, backlog, timeline, overhead, pricing models)
  *   B — Rollback-to-rollback chaining (A→B→rollback A→pre_rollback B→rollback→B)
  *   C — Transactional FK failure after pre_rollback creation
  *   D — Pre-transaction validation failure (malformed, duplicate IDs, bad enums)
- *   E — Real v2 rollback replaces stale profiles, persistence source verified
- *   F — Real v1 rollback restores backlog only, profiles untouched, raw SQL
+ *   E/F/G/H/I — V1/V2 rollback refusal with the retirement reason (issue #444)
  *
  * @module test/snapshotRollback.integration
  */
@@ -35,11 +39,11 @@ import {
 import { buildSnapshot } from '../routes/snapshots.js'
 import { SnapshotSchemaError } from '../lib/projectSnapshotTypes.js'
 import { SnapshotValidationError } from '../lib/projectSnapshotValidation.js'
+import { RETIREMENT_REASON } from '../lib/snapshotRestorability.js'
 import { RollbackPreflightError } from '../lib/projectSnapshotService.js'
 import type {
   SnapshotV1,
   SnapshotV2,
-  SnapshotV3,
   SnapshotV4,
 } from '../lib/projectSnapshotTypes.js'
 import request from 'supertest'
@@ -2027,15 +2031,13 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
   })
 
   it('rejects duplicate profile IDs without modifying state', async () => {
-    const badV3: SnapshotV3 = {
-      schemaVersion: 3,
+    const badV4 = {
+      schemaVersion: 4,
       epics: [],
       project: null,
       resourceTypes: [{
         id: 'rt-d-dup', name: 'Dup', category: 'ENGINEERING',
         count: 1, hoursPerDay: null, dayRate: null, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: null, allocationEndWeek: null,
       }],
       namedResources: [],
       timelineEntries: [],
@@ -2075,7 +2077,7 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
     const badSnap = await prisma.backlogSnapshot.create({
       data: {
         projectId, label: 'dup profiles', trigger: 'manual',
-        snapshot: badV3 as unknown as object, createdById: userId,
+        snapshot: badV4 as unknown as object, createdById: userId,
       },
     })
     await expect(
@@ -2089,15 +2091,13 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
   })
 
   it('rejects duplicate segment IDs', async () => {
-    const badV3: SnapshotV3 = {
-      schemaVersion: 3,
+    const badV4 = {
+      schemaVersion: 4,
       epics: [],
       project: null,
       resourceTypes: [{
         id: 'rt-d-segdup', name: 'SegDup', category: 'ENGINEERING',
         count: 1, hoursPerDay: null, dayRate: null, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: null, allocationEndWeek: null,
       }],
       namedResources: [],
       timelineEntries: [],
@@ -2125,7 +2125,7 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
     const badSnap = await prisma.backlogSnapshot.create({
       data: {
         projectId, label: 'dup segments', trigger: 'manual',
-        snapshot: badV3 as unknown as object, createdById: userId,
+        snapshot: badV4 as unknown as object, createdById: userId,
       },
     })
     await expect(
@@ -2139,8 +2139,8 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
   })
 
   it('rejects ROLE with missing resourceTypeId (not in snapshot resourceTypes)', async () => {
-    const badV3: SnapshotV3 = {
-      schemaVersion: 3,
+    const badV4 = {
+      schemaVersion: 4,
       epics: [],
       project: null,
       resourceTypes: [],
@@ -2167,7 +2167,7 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
     const badSnap = await prisma.backlogSnapshot.create({
       data: {
         projectId, label: 'missing owner', trigger: 'manual',
-        snapshot: badV3 as unknown as object, createdById: userId,
+        snapshot: badV4 as unknown as object, createdById: userId,
       },
     })
     await expect(
@@ -2181,15 +2181,13 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
   })
 
   it('rejects segment with startWeek > endWeek (invalid range)', async () => {
-    const badV3: SnapshotV3 = {
-      schemaVersion: 3,
+    const badV4 = {
+      schemaVersion: 4,
       epics: [],
       project: null,
       resourceTypes: [{
         id: 'rt-d-range', name: 'Range', category: 'ENGINEERING',
         count: 1, hoursPerDay: null, dayRate: null, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: null, allocationEndWeek: null,
       }],
       namedResources: [],
       timelineEntries: [],
@@ -2220,7 +2218,7 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
     const badSnap = await prisma.backlogSnapshot.create({
       data: {
         projectId, label: 'bad range', trigger: 'manual',
-        snapshot: badV3 as unknown as object, createdById: userId,
+        snapshot: badV4 as unknown as object, createdById: userId,
       },
     })
     await expect(
@@ -2235,9 +2233,7 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
 
   it('rejects unsupported ownerKind, planningBasis, and source enums with no state change', async () => {
     const validRT = { id: 'rt-d-valid', name: 'Valid', category: 'ENGINEERING' as const,
-      count: 1, hoursPerDay: null, dayRate: null, globalTypeId: null,
-      allocationMode: 'TIMELINE' as const, allocationPercent: 100,
-      allocationStartWeek: null, allocationEndWeek: null }
+      count: 1, hoursPerDay: null, dayRate: null, globalTypeId: null }
 
     // Three snapshots each with a different invalid enum
     const badConfigs: Array<{
@@ -2254,8 +2250,8 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
     ]
 
     for (const { label, overrides } of badConfigs) {
-      const badV3: SnapshotV3 = {
-        schemaVersion: 3,
+      const badV4 = {
+        schemaVersion: 4,
         epics: [],
         project: null,
         resourceTypes: [validRT],
@@ -2277,12 +2273,12 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
           endWeek: null,
           legacy: { kind: 'DB_NULL' as const },
           segments: [],
-        }] as unknown as SnapshotV3['capacityProfiles'],
+        }] as unknown as SnapshotV4['capacityProfiles'],
       }
       const badSnap = await prisma.backlogSnapshot.create({
         data: {
           projectId, label, trigger: 'manual',
-          snapshot: badV3 as unknown as object, createdById: userId,
+          snapshot: badV4 as unknown as object, createdById: userId,
         },
       })
       await expect(
@@ -2433,100 +2429,29 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
     ).id
   })
 
-  it('v2 rollback replaces stale profiles with v2-derived ones', async () => {
-    // Validate stale profiles exist before call
-    const staleBefore = await prisma.capacityProfile.findMany({
+  it('v2 rollback is refused pre-write with the retirement reason (issue #444)', async () => {
+    const profilesBefore = await prisma.capacityProfile.findMany({
       where: { projectId },
+      include: { segments: { orderBy: { startWeek: 'asc' as const } } },
+      orderBy: [{ ownerKind: 'asc' as const }, { id: 'asc' as const }],
     })
-    expect(staleBefore).toHaveLength(3)
 
-    // Rollback to v2 snapshot
-    await rollbackProjectSnapshot({
-      projectId, snapshotId: v2SnapshotId, userId, db: prisma,
-    })
-    // After v2 rollback: 3 profiles (role + named + temp-planned-named), planned is removed
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: v2SnapshotId, userId, db: prisma }),
+    ).rejects.toThrow(SnapshotValidationError)
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: v2SnapshotId, userId, db: prisma }),
+    ).rejects.toThrow(RETIREMENT_REASON)
+
+    // Nothing changed: profiles/segments untouched, no pre_rollback row, the
+    // raw target row is unchanged.
     const profilesAfter = await prisma.capacityProfile.findMany({
       where: { projectId },
-      orderBy: { createdAt: 'asc' as const },
+      include: { segments: { orderBy: { startWeek: 'asc' as const } } },
+      orderBy: [{ ownerKind: 'asc' as const }, { id: 'asc' as const }],
     })
-    expect(profilesAfter).toHaveLength(3)
-
-    const roleProfile = profilesAfter.find(p => p.ownerKind === 'ROLE')
-    const namedProfile = profilesAfter.find(p => p.ownerKind === 'NAMED_PERSON')
-    expect(roleProfile).toBeDefined()
-    expect(namedProfile).toBeDefined()
-
-    // Role profile derived from RT fields: 60%, AVAILABILITY_WINDOW planning & source
-    expect(roleProfile!.defaultPercent).toBe(60)
-    expect(roleProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
-    expect(roleProfile!.source).toBe('AVAILABILITY_WINDOW')
-
-    // Named profile derived from NR fields: same TIMELINE→AVAILABILITY_WINDOW mapping
-    expect(namedProfile!.defaultPercent).toBe(60)
-    expect(namedProfile!.namedResourceId).toBe(nrId)
-    expect(namedProfile!.planningBasis).toBe('AVAILABILITY_WINDOW')
-    expect(namedProfile!.source).toBe('AVAILABILITY_WINDOW')
-
-
-    // No PLANNED_RESOURCE survives v2
-    const plannedCount = await prisma.capacityProfile.count({
-      where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
-    })
-    expect(plannedCount).toBe(0)
-
-    // No CAPACITY_PLAN segments
-    const planSegments = await prisma.capacitySegment.count({
-      where: {
-        capacityProfile: { projectId },
-        source: 'LEGACY',
-      },
-    })
-    expect(planSegments).toBe(0)
-
-    // Persisted resolution source: legacy contains the v2-derived values
-    const rawRole = await prisma.capacityProfile.findFirst({
-      where: { id: roleProfile!.id },
-    })
-    const roleLegacy = rawRole!.legacy as Record<string, unknown>
-    expect(roleLegacy).not.toBeNull()
-    // Legacy contains the exact RT fields that were captured in the v2 snapshot
-    expect(roleLegacy.allocationMode).toBe('TIMELINE')
-    expect(roleLegacy.allocationPercent).toBe(60)
-    expect(roleLegacy.allocationStartWeek).toBe(0)
-    expect(roleLegacy.allocationEndWeek).toBe(10)
-
-    // Verify the application-facing Resource Profile DTO resolves the
-    // reconstructed compatibility profile, not the stale persisted profile.
-    const resourceProfileResponse = await request(app)
-      .get(`/api/projects/${projectId}/resource-profile`)
-      .set('Authorization', authHeader)
-      .expect(200)
-    const resourceTypeRow = resourceProfileResponse.body.resourceRows.find(
-      (row: Record<string, unknown>) => row.resourceTypeId === rtId,
-    )
-    expect(resourceTypeRow).toBeDefined()
-    expect(resourceTypeRow.capacityProfile).toMatchObject({
-      resolutionSource: 'PROFILE',
-      planningBasis: 'availabilityWindow',
-      source: 'availabilityWindow',
-      defaultPercent: 60,
-      startWeek: 0,
-      endWeek: 10,
-      segments: [],
-    })
-    const namedResourceRow = resourceTypeRow.namedResources.find(
-      (row: Record<string, unknown>) => row.id === nrId,
-    )
-    expect(namedResourceRow).toBeDefined()
-    expect(namedResourceRow.capacityProfile).toMatchObject({
-      resolutionSource: 'PROFILE',
-      planningBasis: 'availabilityWindow',
-      source: 'availabilityWindow',
-      defaultPercent: 60,
-      startWeek: 2,
-      endWeek: 6,
-      segments: [],
-    })
+    expect(profilesAfter).toEqual(profilesBefore)
+    expect(await prisma.backlogSnapshot.count({ where: { projectId, trigger: 'pre_rollback' } })).toBe(0)
   })
 })
 
@@ -2621,109 +2546,32 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     ).id
   })
 
-  it('rollback translates CAPACITY_PLAN to valid AVAILABILITY_WINDOW profiles', async () => {
-    // Capture candidate-column state before rollback (must stay frozen)
-    const rtBefore = await prisma.resourceType.findUniqueOrThrow({ where: { id: rtId } })
-    const nrBefore = await prisma.namedResource.findUniqueOrThrow({ where: { id: nrId } })
-
-    await rollbackProjectSnapshot({
-      projectId, snapshotId: v2SnapshotId, userId, db: prisma,
-    })
-
-    const profiles = await prisma.capacityProfile.findMany({
+  it('v2 rollback is refused pre-write with the retirement reason (issue #444)', async () => {
+    const profilesBefore = await prisma.capacityProfile.findMany({
       where: { projectId },
       include: { segments: true },
+      orderBy: [{ ownerKind: 'asc' as const }, { id: 'asc' as const }],
     })
-    expect(profiles).toHaveLength(2)
 
-    // ROLE: AVAILABILITY_WINDOW / LEGACY with the captured window — never a
-    // segmentless CAPACITY_PROFILE (invalid authority).
-    const role = profiles.find(p => p.ownerKind === 'ROLE')!
-    expect(role.planningBasis).toBe('AVAILABILITY_WINDOW')
-    expect(role.source).toBe('LEGACY')
-    expect(role.defaultPercent).toBe(100)
-    expect(role.startWeek).toBe(0)
-    expect(role.endWeek).toBe(10)
-    expect(role.segments).toHaveLength(0)
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: v2SnapshotId, userId, db: prisma }),
+    ).rejects.toThrow(SnapshotValidationError)
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: v2SnapshotId, userId, db: prisma }),
+    ).rejects.toThrow(RETIREMENT_REASON)
 
-    // NAMED_PERSON: same translation with the NR's captured window
-    const named = profiles.find(p => p.ownerKind === 'NAMED_PERSON')!
-    expect(named.namedResourceId).toBe(nrId)
-    expect(named.planningBasis).toBe('AVAILABILITY_WINDOW')
-    expect(named.source).toBe('LEGACY')
-    expect(named.defaultPercent).toBe(100)
-    expect(named.startWeek).toBe(2)
-    expect(named.endWeek).toBe(8)
-    expect(named.segments).toHaveLength(0)
-
-    // The translated set passes the authoritative structural validator.
-    const { validatePersistedCapacityProfiles } = await import('../lib/persistedCapacityProfileValidation.js')
-    const validation = validatePersistedCapacityProfiles(
-      profiles.map(p => ({
-        id: p.id,
-        projectId: p.projectId,
-        resourceTypeId: p.resourceTypeId,
-        namedResourceId: p.namedResourceId,
-        ownerKind: p.ownerKind,
-        planningBasis: p.planningBasis,
-        source: p.source,
-        defaultPercent: p.defaultPercent,
-        startWeek: p.startWeek,
-        endWeek: p.endWeek,
-        segments: p.segments,
-      })),
-      {
-        projectId,
-        resourceTypeIds: new Set([rtId]),
-        namedResourceIds: new Set([nrId]),
-      },
-    )
-    expect(validation.errors).toEqual([])
-
-    // Immediate HTTP + scheduler reads succeed (no post-rollback repair).
-    const rp = await request(app)
-      .get(`/api/projects/${projectId}/resource-profile`)
-      .set('Authorization', authHeader)
-      .expect(200)
-    const devRow = (rp.body.resourceRows as Array<Record<string, unknown>>).find(r => r.resourceTypeId === rtId)
-    expect(devRow).toBeDefined()
-    expect((devRow!.capacityProfile as Record<string, unknown>).resolutionSource).toBe('PROFILE')
-    expect((devRow!.capacityProfile as Record<string, unknown>).planningBasis).toBe('availabilityWindow')
-    expect((devRow!.capacityProfile as Record<string, unknown>).source).toBe('legacy')
-
-    await request(app)
-      .get(`/api/projects/${projectId}/timeline`)
-      .set('Authorization', authHeader)
-      .expect(200)
-    const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
-    const resolved = await resolveSchedulerCapacity(prisma as any, projectId)
-    const resolvedRt = resolved.resourceTypes.find(rt => rt.id === rtId)
-    expect(resolvedRt).toBeDefined()
-    // Window profiles derive deterministic single-window segments.
-    expect(resolvedRt!.roleSegments).toEqual([
-      { startWeek: 0, endWeek: 10, allocationPercent: 100 },
-    ])
-    expect(resolvedRt!.namedResources[0].capacitySegments).toEqual([
-      { startWeek: 2, endWeek: 8, allocationPercent: 100 },
-    ])
-
-    // No candidate ResourceType/NamedResource column was written.
-    const rtAfter = await prisma.resourceType.findUniqueOrThrow({ where: { id: rtId } })
-    const nrAfter = await prisma.namedResource.findUniqueOrThrow({ where: { id: nrId } })
-    expect(rtAfter.allocationMode).toBe(rtBefore.allocationMode)
-    expect(rtAfter.allocationPercent).toBe(rtBefore.allocationPercent)
-    expect(rtAfter.allocationStartWeek).toBe(rtBefore.allocationStartWeek)
-    expect(rtAfter.allocationEndWeek).toBe(rtBefore.allocationEndWeek)
-    expect(nrAfter.allocationMode).toBe(nrBefore.allocationMode)
-    expect(nrAfter.allocationPercent).toBe(nrBefore.allocationPercent)
-    expect(nrAfter.allocationPct).toBe(nrBefore.allocationPct)
-    expect(nrAfter.allocationStartWeek).toBe(nrBefore.allocationStartWeek)
-    expect(nrAfter.allocationEndWeek).toBe(nrBefore.allocationEndWeek)
-    expect(nrAfter.startWeek).toBe(nrBefore.startWeek)
-    expect(nrAfter.endWeek).toBe(nrBefore.endWeek)
+    // No state changed: stale profiles/segments untouched, no pre_rollback
+    // row, and the candidate columns are untouched.
+    const profilesAfter = await prisma.capacityProfile.findMany({
+      where: { projectId },
+      include: { segments: true },
+      orderBy: [{ ownerKind: 'asc' as const }, { id: 'asc' as const }],
+    })
+    expect(profilesAfter).toEqual(profilesBefore)
+    expect(await prisma.backlogSnapshot.count({ where: { projectId, trigger: 'pre_rollback' } })).toBe(0)
   })
 
-  it('rolls back the exact all-windowless-100% Class A snapshot, materialising lossless profiles (issue #438)', async () => {
+  it('the exact all-windowless-100% Class A snapshot is refused pre-write with the retirement reason (issue #444)', async () => {
     const projectId2 = await createProject()
     const rtId2 = await createResourceType(projectId2, 'rt-g-bad', 'Bad Plan', {
       allocationMode: 'CAPACITY_PLAN',
@@ -2782,55 +2630,22 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
         },
       })
     ).id
-    // Persisted value as PostgreSQL actually stored it (jsonb may normalise
-    // object-key ordering, so the in-memory object is not a valid string
-    // comparison baseline). This is the byte-preservation baseline.
     const persistedBefore = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: snap } })
+    const profileCountBefore = await prisma.capacityProfile.count({ where: { projectId: projectId2 } })
 
-    // Issue #438: this reviewed windowless-100% all-explicit shape is the
-    // exact Class A predicate — deterministic full capacity, so rollback is
-    // accepted and materialises the lossless translated profiles.
-    await rollbackProjectSnapshot({ projectId: projectId2, snapshotId: snap, userId, db: prisma })
+    // Issue #444: even the previously-approved exact Class A shape is
+    // deliberately retired — refused pre-write with the stable reason.
+    await expect(
+      rollbackProjectSnapshot({ projectId: projectId2, snapshotId: snap, userId, db: prisma }),
+    ).rejects.toThrow(SnapshotValidationError)
+    await expect(
+      rollbackProjectSnapshot({ projectId: projectId2, snapshotId: snap, userId, db: prisma }),
+    ).rejects.toThrow(RETIREMENT_REASON)
 
-    const profiles = await prisma.capacityProfile.findMany({
-      where: { projectId: projectId2 },
-      include: { segments: true },
-    })
-    expect(profiles).toHaveLength(2)
-    // ROLE: null-window aggregate percent max(0, count − namedResources) × 100
-    // with count 2 and one named resource → 100 (not a plain 100% ROLE for
-    // the n=0 case — the aggregate is derived from the captured count).
-    const role = profiles.find(p => p.ownerKind === 'ROLE')!
-    expect(role.planningBasis).toBe('AVAILABILITY_WINDOW')
-    expect(role.source).toBe('LEGACY')
-    expect(role.defaultPercent).toBe(100)
-    expect(role.startWeek).toBeNull()
-    expect(role.endWeek).toBeNull()
-    expect(role.segments).toHaveLength(0)
-    // NAMED_PERSON: null-window 100%.
-    const named = profiles.find(p => p.ownerKind === 'NAMED_PERSON')!
-    expect(named.namedResourceId).toBe('nr-g-bad')
-    expect(named.planningBasis).toBe('AVAILABILITY_WINDOW')
-    expect(named.source).toBe('LEGACY')
-    expect(named.defaultPercent).toBe(100)
-    expect(named.startWeek).toBeNull()
-    expect(named.endWeek).toBeNull()
-    expect(named.segments).toHaveLength(0)
-
-    // Scheduler equivalence (count 2, one named resource):
-    // max(count, namedResources) × hoursPerDay × 5 per week.
-    const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
-    const { getWeeklyCapacity } = await import('../lib/scheduler.js')
-    const resolved = await resolveSchedulerCapacity(prisma as any, projectId2)
-    const resolvedRt = resolved.resourceTypes.find(rt => rt.id === rtId2)!
-    const hoursPerDay = resolvedRt.hoursPerDay ?? 8
-    expect(getWeeklyCapacity(resolvedRt, 0, 8)).toBe(2 * hoursPerDay * 5)
-    expect(getWeeklyCapacity(resolvedRt, 10, 8)).toBe(2 * hoursPerDay * 5)
-    expect(resolvedRt.roleSegments).toEqual([{ startWeek: 0, endWeek: Infinity, allocationPercent: 100 }])
-
-    // The persisted target row is unchanged (raw historical records are never
-    // rewritten by rollback) — compared against the value read from
-    // PostgreSQL before the rollback.
+    // No state changed: profiles untouched, no pre_rollback row, and the
+    // persisted target row is unchanged.
+    expect(await prisma.capacityProfile.count({ where: { projectId: projectId2 } })).toBe(profileCountBefore)
+    expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2, trigger: 'pre_rollback' } })).toBe(0)
     const persistedAfter = await prisma.backlogSnapshot.findUniqueOrThrow({ where: { id: snap } })
     expect(persistedAfter.snapshot).toEqual(persistedBefore.snapshot)
   })
@@ -2897,8 +2712,9 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     }
     expect(caught).toBeInstanceOf(SnapshotValidationError)
     const message = caught instanceof Error ? caught.message : String(caught)
-    expect(message).toContain('quarantined')
-    expect(message).toContain('Class A')
+    // Issue #444: every V2 snapshot is deliberately retired — the stable
+    // retirement reason, never quarantine reasoning.
+    expect(message).toBe(RETIREMENT_REASON)
 
     // No state changed: profiles untouched, no pre_rollback snapshot, and the
     // persisted target row is unchanged.
@@ -2966,8 +2782,7 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     }
     expect(caught).toBeInstanceOf(SnapshotValidationError)
     const message = caught instanceof Error ? caught.message : String(caught)
-    expect(message).toContain('quarantined')
-    expect(message).toContain('Class B')
+    expect(message).toBe(RETIREMENT_REASON)
 
     expect(await prisma.capacityProfile.count({ where: { projectId: projectId2 } })).toBe(profileCountBefore)
     expect(await prisma.backlogSnapshot.count({ where: { projectId: projectId2 } })).toBe(snapshotCountBefore)
@@ -3076,95 +2891,28 @@ describeIf('Scenario H — v2 EFFORT/FULL_PROJECT discard stale windows', () => 
     ).id
   })
 
-  it('rollback translates EFFORT/FULL_PROJECT with null windows and reads load immediately', async () => {
-    // Candidate-column state before rollback (must stay frozen)
-    const effortRtBefore = await prisma.resourceType.findUniqueOrThrow({ where: { id: effortRtId } })
-    const fullNrBefore = await prisma.namedResource.findUniqueOrThrow({ where: { id: fullNrId } })
-
-    await rollbackProjectSnapshot({
-      projectId, snapshotId: v2SnapshotId, userId, db: prisma,
-    })
-
-    const profiles = await prisma.capacityProfile.findMany({
+  it('v2 rollback is refused pre-write with the retirement reason (issue #444)', async () => {
+    const profilesBefore = await prisma.capacityProfile.findMany({
       where: { projectId },
       include: { segments: true },
+      orderBy: [{ ownerKind: 'asc' as const }, { id: 'asc' as const }],
     })
-    expect(profiles).toHaveLength(4)
 
-    // EFFORT → DEMAND_FOLLOWING / FIXED, stale windows DISCARDED
-    const effortRole = profiles.find(p => p.resourceTypeId === effortRtId)!
-    expect(effortRole.planningBasis).toBe('DEMAND_FOLLOWING')
-    expect(effortRole.source).toBe('FIXED')
-    expect(effortRole.startWeek).toBeNull()
-    expect(effortRole.endWeek).toBeNull()
-    expect(effortRole.segments).toHaveLength(0)
-    const effortNr = profiles.find(p => p.namedResourceId === effortNrId)!
-    expect(effortNr.planningBasis).toBe('DEMAND_FOLLOWING')
-    expect(effortNr.startWeek).toBeNull()
-    expect(effortNr.endWeek).toBeNull()
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: v2SnapshotId, userId, db: prisma }),
+    ).rejects.toThrow(SnapshotValidationError)
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: v2SnapshotId, userId, db: prisma }),
+    ).rejects.toThrow(RETIREMENT_REASON)
 
-    // FULL_PROJECT → WHOLE_PROJECT_ALLOCATION / FIXED, stale windows DISCARDED
-    const fullRole = profiles.find(p => p.resourceTypeId === fullRtId)!
-    expect(fullRole.planningBasis).toBe('WHOLE_PROJECT_ALLOCATION')
-    expect(fullRole.source).toBe('FIXED')
-    expect(fullRole.defaultPercent).toBe(80)
-    expect(fullRole.startWeek).toBeNull()
-    expect(fullRole.endWeek).toBeNull()
-    const fullNr = profiles.find(p => p.namedResourceId === fullNrId)!
-    expect(fullNr.planningBasis).toBe('WHOLE_PROJECT_ALLOCATION')
-    expect(fullNr.defaultPercent).toBe(80)
-    expect(fullNr.startWeek).toBeNull()
-    expect(fullNr.endWeek).toBeNull()
-
-    // The translated set passes the single authoritative structural validator.
-    const { validatePersistedCapacityProfiles } = await import('../lib/persistedCapacityProfileValidation.js')
-    const validation = validatePersistedCapacityProfiles(
-      profiles.map(p => ({
-        id: p.id,
-        projectId: p.projectId,
-        resourceTypeId: p.resourceTypeId,
-        namedResourceId: p.namedResourceId,
-        ownerKind: p.ownerKind,
-        planningBasis: p.planningBasis,
-        source: p.source,
-        defaultPercent: p.defaultPercent,
-        startWeek: p.startWeek,
-        endWeek: p.endWeek,
-        segments: p.segments,
-      })),
-      {
-        projectId,
-        resourceTypeIds: new Set([effortRtId, fullRtId]),
-        namedResourceIds: new Set([effortNrId, fullNrId]),
-      },
-    )
-    expect(validation.errors).toEqual([])
-
-    // Resource Profile, Timeline and scheduler load immediately.
-    await request(app)
-      .get(`/api/projects/${projectId}/resource-profile`)
-      .set('Authorization', authHeader)
-      .expect(200)
-    await request(app)
-      .get(`/api/projects/${projectId}/timeline`)
-      .set('Authorization', authHeader)
-      .expect(200)
-    const { resolveSchedulerCapacity } = await import('../lib/schedulerCapacityResolver.js')
-    const resolved = await resolveSchedulerCapacity(prisma as any, projectId)
-    expect(resolved.resourceTypes).toHaveLength(2)
-
-    // Candidate database columns remain unchanged (frozen).
-    const effortRtAfter = await prisma.resourceType.findUniqueOrThrow({ where: { id: effortRtId } })
-    const fullNrAfter = await prisma.namedResource.findUniqueOrThrow({ where: { id: fullNrId } })
-    expect(effortRtAfter.allocationMode).toBe(effortRtBefore.allocationMode)
-    expect(effortRtAfter.allocationPercent).toBe(effortRtBefore.allocationPercent)
-    expect(effortRtAfter.allocationStartWeek).toBe(effortRtBefore.allocationStartWeek)
-    expect(effortRtAfter.allocationEndWeek).toBe(effortRtBefore.allocationEndWeek)
-    expect(fullNrAfter.allocationMode).toBe(fullNrBefore.allocationMode)
-    expect(fullNrAfter.allocationPercent).toBe(fullNrBefore.allocationPercent)
-    expect(fullNrAfter.allocationPct).toBe(fullNrBefore.allocationPct)
-    expect(fullNrAfter.startWeek).toBe(fullNrBefore.startWeek)
-    expect(fullNrAfter.endWeek).toBe(fullNrBefore.endWeek)
+    // No state changed: profiles/segments untouched and no pre_rollback row.
+    const profilesAfter = await prisma.capacityProfile.findMany({
+      where: { projectId },
+      include: { segments: true },
+      orderBy: [{ ownerKind: 'asc' as const }, { id: 'asc' as const }],
+    })
+    expect(profilesAfter).toEqual(profilesBefore)
+    expect(await prisma.backlogSnapshot.count({ where: { projectId, trigger: 'pre_rollback' } })).toBe(0)
   })
 })
 
@@ -3245,17 +2993,19 @@ describeIf('Scenario I — orphan v2 owner rejection and fail-closed reads', () 
     const profileCountBefore = await prisma.capacityProfile.count({ where: { projectId } })
     const snapshotCountBefore = await prisma.backlogSnapshot.count({ where: { projectId } })
 
-    // Rollback fails BEFORE any write, identifying the orphan owner and the
-    // missing parent ResourceType.
+    // Issue #444: the whole V2 snapshot is deliberately retired, so the
+    // rollback is refused pre-write with the stable retirement reason before
+    // any orphan analysis runs.
     await expect(
       rollbackProjectSnapshot({ projectId, snapshotId: orphanSnap, userId, db: prisma }),
     ).rejects.toThrow(SnapshotValidationError)
     await expect(
       rollbackProjectSnapshot({ projectId, snapshotId: orphanSnap, userId, db: prisma }),
-    ).rejects.toThrow(/nr-i-orphan/)
+    ).rejects.toThrow(RETIREMENT_REASON)
+    // The retirement reason is identifier-free.
     await expect(
       rollbackProjectSnapshot({ projectId, snapshotId: orphanSnap, userId, db: prisma }),
-    ).rejects.toThrow(/rt-i-missing/)
+    ).rejects.not.toThrow(/nr-i-orphan/)
 
     // No state changed, no pre_rollback snapshot committed.
     expect(await prisma.capacityProfile.count({ where: { projectId } })).toBe(profileCountBefore)
@@ -3311,14 +3061,6 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
   let projectId: string
   let rtId: string
   let nrId: string
-  let profileRoleId: string
-  let profileNamedId: string
-  let profileJsonNullId: string
-  let profileObjWithNullId: string
-  let profileArrayWithNullId: string
-  let profileStringId: string
-  let profileNumberId: string
-  let profileBooleanId: string
   let v1SnapshotId: string
 
   beforeAll(async () => {
@@ -3328,7 +3070,7 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
     nrId = await createNamedResource(projectId, rtId, 'nr-frank-scenario-f', 'Frank')
 
     // ROLE profile — DB_NULL legacy
-    profileRoleId = await createProfile(
+    await createProfile(
       projectId, 'prof-f-role', 'ROLE', rtId, null,
       {
         planningBasis: 'DEMAND_FOLLOWING',
@@ -3339,11 +3081,11 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
       },
       Prisma.DbNull,
     )
-    await createSegment(profileRoleId, 'seg-f-1', 0, 4, 100)
-    await createSegment(profileRoleId, 'seg-f-2', 5, 10, 50)
+    await createSegment('prof-f-role', 'seg-f-1', 0, 4, 100)
+    await createSegment('prof-f-role', 'seg-f-2', 5, 10, 50)
 
     // NAMED_PERSON profile — VALUE(object) legacy
-    profileNamedId = await createProfile(
+    await createProfile(
       projectId, 'prof-f-named', 'NAMED_PERSON', null, nrId,
       {
         planningBasis: 'AVAILABILITY_WINDOW',
@@ -3374,32 +3116,32 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
     const nrBool = await createNamedResource(
       projectId, rtId, 'nr-f-bool', 'F Bool',
     )
-    profileJsonNullId = await createProfile(
+    await createProfile(
       projectId, 'prof-f-jsonnull', 'NAMED_PERSON', null, nrJsonNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       Prisma.JsonNull,
     )
-    profileObjWithNullId = await createProfile(
+    await createProfile(
       projectId, 'prof-f-obj-null', 'NAMED_PERSON', null, nrObjNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       { outer: 'value', inner: null, nested: { deep: null } },
     )
-    profileArrayWithNullId = await createProfile(
+    await createProfile(
       projectId, 'prof-f-arr-null', 'NAMED_PERSON', null, nrArrNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       ['a', null, 'c'],
     )
-    profileStringId = await createProfile(
+    await createProfile(
       projectId, 'prof-f-string', 'NAMED_PERSON', null, nrString,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       'hello-legacy',
     )
-    profileNumberId = await createProfile(
+    await createProfile(
       projectId, 'prof-f-number', 'NAMED_PERSON', null, nrNumber,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       12345,
     )
-    profileBooleanId = await createProfile(
+    await createProfile(
       projectId, 'prof-f-bool', 'NAMED_PERSON', null, nrBool,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
       true,
@@ -3481,174 +3223,43 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
     })
   })
 
-  it('v1 rollback restores backlog, preserves profiles/RT/NR, creates pre_rollback', async () => {
-    // Confirm backlog is mutated before rollback
+  it('v1 rollback is refused pre-write with the retirement reason (issue #444)', async () => {
     const epicsBefore = await prisma.epic.findMany({ where: { projectId } })
     expect(epicsBefore).toHaveLength(1)
     expect(epicsBefore[0].name).toBe('Mutated Epic After V1 Snap')
 
-    // Capture profile state before rollback (with segments for comparison)
     const profilesBefore = await prisma.capacityProfile.findMany({
       where: { projectId },
       include: { segments: { orderBy: { startWeek: 'asc' as const } } },
       orderBy: [{ ownerKind: 'asc' as const }, { id: 'asc' as const }],
     })
 
-    // Rollback (v1 path)
-    await rollbackProjectSnapshot({
-      projectId, snapshotId: v1SnapshotId, userId, db: prisma,
-    })
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: v1SnapshotId, userId, db: prisma }),
+    ).rejects.toThrow(SnapshotValidationError)
+    await expect(
+      rollbackProjectSnapshot({ projectId, snapshotId: v1SnapshotId, userId, db: prisma }),
+    ).rejects.toThrow(RETIREMENT_REASON)
 
-    // ── Backlog restored ──────────────────────────────────────────
+    // Nothing changed: backlog untouched, profiles/segments untouched, RT/NR
+    // untouched, no pre_rollback row.
     const epicsAfter = await prisma.epic.findMany({ where: { projectId } })
-    expect(epicsAfter).toHaveLength(1)
-    expect(epicsAfter[0].name).toBe('Epic Alpha')
-
-    const featAfter = await prisma.feature.findMany({
-      where: { epicId: epicsAfter[0].id },
-    })
-    expect(featAfter).toHaveLength(1)
-    expect(featAfter[0].name).toBe('Feature One')
-
-    const storyAfter = await prisma.userStory.findMany({
-      where: { featureId: featAfter[0].id },
-    })
-    expect(storyAfter).toHaveLength(1)
-    expect(storyAfter[0].name).toBe('Story A')
-
-    // ── RT/NR untouched ───────────────────────────────────────────
-    const rtsAfter = await prisma.resourceType.findMany({ where: { projectId } })
-    expect(rtsAfter).toHaveLength(1)
-    expect(rtsAfter[0].id).toBe(rtId)
-
-    const nrsAfter = await prisma.namedResource.findMany({
-      where: { resourceType: { projectId } },
-    })
-    // 1 original NR + 6 temp NRs for JSON null state profiles
-    expect(nrsAfter).toHaveLength(7)
-    expect(nrsAfter.find(n => n.id === nrId)).toBeDefined()
-
-    // ── Profiles/segments unchanged ────────────────────────────────
+    expect(epicsAfter.map(e => e.name)).toEqual(epicsBefore.map(e => e.name))
     const profilesAfter = await prisma.capacityProfile.findMany({
       where: { projectId },
       include: { segments: { orderBy: { startWeek: 'asc' as const } } },
       orderBy: [{ ownerKind: 'asc' as const }, { id: 'asc' as const }],
     })
-    expect(profilesAfter).toHaveLength(profilesBefore.length)
-
-    for (let i = 0; i < profilesBefore.length; i++) {
-      expect(profilesAfter[i].id).toBe(profilesBefore[i].id)
-      expect(profilesAfter[i].ownerKind).toBe(profilesBefore[i].ownerKind)
-      expect(profilesAfter[i].planningBasis).toBe(profilesBefore[i].planningBasis)
-      expect(profilesAfter[i].segments).toHaveLength(profilesBefore[i].segments.length)
-    }
-
-
-    // ── Pre_rollback snapshot created with trigger 'pre_rollback' ──
-    const preSnaps = await prisma.backlogSnapshot.findMany({
-      where: { projectId, trigger: 'pre_rollback' },
-    })
-    expect(preSnaps.length).toBeGreaterThanOrEqual(1)
-    const newest = preSnaps[preSnaps.length - 1]
-    expect(newest.trigger).toBe('pre_rollback')
-    const preData = newest.snapshot as unknown as { schemaVersion: number }
-    expect(preData.schemaVersion).toBe(4)
-    // ── Timeline entries — cascade-deleted when epics recreated ────
-    const tles = await prisma.timelineEntry.findMany({ where: { projectId } })
-    const stles = await prisma.storyTimelineEntry.findMany({ where: { projectId } })
-    // V1 rollback deletes all epics (cascade deletes features/stories/timeline entries),
-    // then recreates backlog without timeline entries, so count is zero.
-    expect(tles).toHaveLength(0)
-    expect(stles).toHaveLength(0)
-
-    // ── Raw SQL: comprehensive legacy null-type coverage ───────────
-    const rawRows = await prisma.$queryRaw<
-      Array<{ id: string; legacy_is_null: boolean; jsonb_typeof: string | null }>
-    >(Prisma.sql`
-      SELECT
-        cp.id,
-        cp.legacy IS NULL AS legacy_is_null,
-        jsonb_typeof(cp.legacy) AS jsonb_typeof
-      FROM "CapacityProfile" cp
-      WHERE cp."projectId" = ${projectId}
-      ORDER BY cp.id
-    `)
-
-    // All 8 profiles verified by raw SQL
-    // 1. ROLE — Prisma.DbNull → SQL NULL, jsonb_typeof NULL
-    const roleRow = rawRows.find(r => r.id === profileRoleId)
-    expect(roleRow).toBeDefined()
-    expect(roleRow!.legacy_is_null).toBe(true)
-    expect(roleRow!.jsonb_typeof).toBeNull()
-
-    // 2. NAMED_PERSON — JSON object, jsonb_typeof 'object'
-    const namedRow = rawRows.find(r => r.id === profileNamedId)
-    expect(namedRow).toBeDefined()
-    expect(namedRow!.legacy_is_null).toBe(false)
-    expect(namedRow!.jsonb_typeof).toBe('object')
-
-    // 3. Prisma.JsonNull → legacy IS NULL = false, jsonb_typeof = 'null'
-    const jnRow = rawRows.find(r => r.id === profileJsonNullId)
-    expect(jnRow).toBeDefined()
-    expect(jnRow!.legacy_is_null).toBe(false)
-    expect(jnRow!.jsonb_typeof).toBe('null')
-
-    // 4. Object with nested null → jsonb_typeof = 'object'
-    const objRow = rawRows.find(r => r.id === profileObjWithNullId)
-    expect(objRow).toBeDefined()
-    expect(objRow!.legacy_is_null).toBe(false)
-    expect(objRow!.jsonb_typeof).toBe('object')
-    // Also verify the nested null is preserved via Prisma read
-    const objProfile = await prisma.capacityProfile.findUnique({ where: { id: profileObjWithNullId } })
-    const objLegacy = objProfile!.legacy as Record<string, unknown> | null
-    expect(objLegacy).not.toBeNull()
-    expect(objLegacy!.outer).toBe('value')
-    expect(objLegacy!.inner).toBeNull()
-    expect((objLegacy!.nested as Record<string, unknown>).deep).toBeNull()
-
-    // 5. Array with null → jsonb_typeof = 'array', element preserved
-    const arrRow = rawRows.find(r => r.id === profileArrayWithNullId)
-    expect(arrRow).toBeDefined()
-    expect(arrRow!.legacy_is_null).toBe(false)
-    expect(arrRow!.jsonb_typeof).toBe('array')
-    const arrProfile = await prisma.capacityProfile.findUnique({ where: { id: profileArrayWithNullId } })
-    const arrLegacy = arrProfile!.legacy as unknown[] | null
-    expect(arrLegacy).not.toBeNull()
-    expect(arrLegacy![0]).toBe('a')
-    expect(arrLegacy![1]).toBeNull()
-    expect(arrLegacy![2]).toBe('c')
-
-    // 6. String → jsonb_typeof = 'string', content preserved
-    const strRow = rawRows.find(r => r.id === profileStringId)
-    expect(strRow).toBeDefined()
-    expect(strRow!.legacy_is_null).toBe(false)
-    expect(strRow!.jsonb_typeof).toBe('string')
-    const strProfile = await prisma.capacityProfile.findUnique({ where: { id: profileStringId } })
-    expect(strProfile!.legacy).toBe('hello-legacy')
-
-    // 7. Finite number → jsonb_typeof = 'number', value preserved
-    const numRow = rawRows.find(r => r.id === profileNumberId)
-    expect(numRow).toBeDefined()
-    expect(numRow!.legacy_is_null).toBe(false)
-    expect(numRow!.jsonb_typeof).toBe('number')
-    const numProfile = await prisma.capacityProfile.findUnique({ where: { id: profileNumberId } })
-    expect(numProfile!.legacy).toBe(12345)
-
-    // 8. Boolean → jsonb_typeof = 'boolean', value preserved
-    const boolRow = rawRows.find(r => r.id === profileBooleanId)
-    expect(boolRow).toBeDefined()
-    expect(boolRow!.legacy_is_null).toBe(false)
-    expect(boolRow!.jsonb_typeof).toBe('boolean')
-    const boolProfile = await prisma.capacityProfile.findUnique({ where: { id: profileBooleanId } })
-    expect(boolProfile!.legacy).toBe(true)
+    expect(profilesAfter).toEqual(profilesBefore)
+    expect(await prisma.backlogSnapshot.count({ where: { projectId, trigger: 'pre_rollback' } })).toBe(0)
   })
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Scenario G — v3 restores scope and scheduling fields
+// Scenario K — V4 restores scope and scheduling fields
 // ═════════════════════════════════════════════════════════════════════════════
 
-describeIf('Scenario G — v3 restores scope and scheduling fields', () => {
+describeIf('Scenario K — V4 restores scope and scheduling fields', () => {
   let projectId: string
   let snapshotId: string
   let epicId: string

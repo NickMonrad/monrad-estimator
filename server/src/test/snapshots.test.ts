@@ -1,24 +1,24 @@
 /**
  * snapshots.test.ts — Server tests for snapshot creation and rollback.
  *
- * Tests v3 buildSnapshot, pure v3 helpers, and the rollback route's
- * v1/v2/v3 paths including pre-flight validation, cross-project checks,
- * and atomic transaction rollback.
+ * Tests v4 buildSnapshot, pure v4 helpers, and the rollback route's
+ * v4 paths including pre-flight validation, cross-project checks,
+ * and atomic transaction rollback. V1/V2/V3 rollback is deliberately
+ * refused pre-write with the issue #444 retirement reason.
  *
  * Covers:
  *  - Pure parser tests (parseSnapshotData, type guards)
  *  - Pure validation tests (validateSnapshotV3, sort helpers)
- *  - buildSnapshot v3 creation with mock db parameter (returns schemaVersion 3)
- *  - rollbackProjectSnapshot service with v1/v2/v3/failure semantics
- *  - V1/V2/V3 route rollback
- *  - Pre-flight validation: invalid v3, unknown schema, cross-project IDs
+ *  - buildSnapshot v4 creation with mock db parameter (returns schemaVersion 4)
+ *  - rollbackProjectSnapshot service with v4/failure semantics
+ *  - V1/V2/V3 route rollback refusal (issue #444)
+ *  - Pre-flight validation: invalid v4, unknown schema, cross-project IDs
  *  - Transaction atomicity (failure rejects with 500)
  *  - Route persistence on buildSnapshot failure
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
-import { Prisma } from '@prisma/client'
 import jwt from 'jsonwebtoken'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
@@ -38,7 +38,7 @@ import {
   sortSnapshotSegments,
 } from '../lib/projectSnapshotValidation.js'
 import { buildSnapshot, rollbackProjectSnapshot, SnapshotNotFoundError, RollbackPreflightError } from '../lib/projectSnapshotService.js'
-import { QUARANTINE_CLASS_A_REASON, QUARANTINE_CLASS_B_REASON } from '../lib/snapshotRestorability.js'
+import { RETIREMENT_REASON } from '../lib/snapshotRestorability.js'
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'
@@ -830,7 +830,7 @@ function makeRouteTx(overrides: Record<string, unknown> = {}) {
 }
 
 describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
-  it('V1: bare epic array restores epics, no capacity operations', async () => {
+  it('V1: bare epic array is refused pre-write with the retirement reason (issue #444)', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-v1', projectId: projId, label: 'Legacy V1',
@@ -841,32 +841,18 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
       createdById: userId, createdAt: new Date(),
     } as never)
 
-    const cpDelete = vi.fn().mockResolvedValue({ count: 0 })
-    const cpCreate = vi.fn().mockResolvedValue({})
-    const epicDel = vi.fn().mockResolvedValue({ count: 0 })
-
-    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
-      const tx = makeRouteTx({
-        capacityProfile: { findMany: vi.fn().mockResolvedValue([]), deleteMany: cpDelete, create: cpCreate },
-        epic: { findMany: vi.fn().mockResolvedValue([]), deleteMany: epicDel, create: vi.fn().mockResolvedValue({ id: 'new-e1' }) },
-      })
-      return typeof fn === 'function'
-        ? (fn as (t: unknown) => Promise<unknown>)(tx)
-        : Promise.resolve(fn)
-    })
-
     const res = await request(app)
       .post(`/api/projects/${projId}/snapshots/snap-v1/rollback`)
       .set('Authorization', authHeader)
 
-    expect(res.status).toBe(200)
-    expect(vi.mocked(prisma.$transaction)).toHaveBeenCalledTimes(1)
-    expect(cpDelete.mock.calls.length).toBe(0)
-    expect(cpCreate.mock.calls.length).toBe(0)
-    expect(epicDel.mock.calls.length).toBeGreaterThanOrEqual(1)
+    // Issue #444: V1 is deliberately retired — refused before any write with
+    // the stable retirement reason.
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe(RETIREMENT_REASON)
+    expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
   })
 
-  it('V2: full-state restore via transaction, legacy-compatible profiles', async () => {
+  it('V2: full-state snapshot is refused pre-write with the retirement reason (issue #444)', async () => {
     const v2Data = {
       schemaVersion: 2, epics: [], project: null,
       resourceTypes: [{
@@ -887,42 +873,16 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
       createdById: userId, createdAt: new Date(),
     } as never)
 
-    const cpDelete = vi.fn().mockResolvedValue({ count: 999 })
-    const segDelete = vi.fn().mockResolvedValue({ count: 999 })
-    const cpCreate = vi.fn().mockResolvedValue({})
-
-    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
-      const tx = makeRouteTx({
-        capacityProfile: { findMany: vi.fn().mockResolvedValue([]), deleteMany: cpDelete, create: cpCreate },
-        capacitySegment: { deleteMany: segDelete, create: vi.fn().mockResolvedValue({}) },
-      })
-      return typeof fn === 'function'
-        ? (fn as (t: unknown) => Promise<unknown>)(tx)
-        : Promise.resolve(fn)
-    })
-
     const res = await request(app)
       .post(`/api/projects/${projId}/snapshots/snap-v2/rollback`)
       .set('Authorization', authHeader)
 
-    expect(res.status).toBe(200)
-    expect(vi.mocked(prisma.$transaction)).toHaveBeenCalledTimes(1)
-    expect(cpDelete.mock.calls.length).toBeGreaterThanOrEqual(1)
-    expect(segDelete.mock.calls.length).toBeGreaterThanOrEqual(1)
-    expect(cpCreate.mock.calls.length).toBe(1)
-
-    const created = cpCreate.mock.calls[0][0]?.data as Record<string, unknown>
-    expect(created.id).toBe('snapshot-v2-role-rt-1')
-    expect(created.project).toEqual({ connect: { id: projId } })
-    expect(created.ownerKind).toBe('ROLE')
-    expect(created.planningBasis).toBe('AVAILABILITY_WINDOW')
-    expect(created.source).toBe('AVAILABILITY_WINDOW')
-    expect(created.defaultPercent).toBe(60)
-    expect(created.startWeek).toBe(2)
-    expect(created.endWeek).toBe(6)
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe(RETIREMENT_REASON)
+    expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
   })
 
-  it('V3: exact profile/segment replacement in transaction', async () => {
+  it('V3: exact profile/segment snapshot is refused pre-write with the retirement reason (issue #444)', async () => {
     const v3Target: SnapshotV3 = {
       schemaVersion: 3, epics: [], project: null,
       resourceTypes: [
@@ -963,101 +923,16 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
       trigger: 'manual', snapshot: v3Target as unknown as never,
       createdById: userId, createdAt: new Date(),
     } as never)
-    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
-      { id: 'rt-dev', projectId: projId },
-    ] as never)
-    vi.mocked(prisma.namedResource.findMany).mockResolvedValue([
-      { id: 'nr-alice', resourceType: { projectId: projId } },
-    ] as never)
-
-    const cpDelete = vi.fn().mockResolvedValue({ count: 999 })
-    const segDelete = vi.fn().mockResolvedValue({ count: 999 })
-    const cpCreate = vi.fn().mockResolvedValue({})
-    const segCreate = vi.fn().mockResolvedValue({})
-    const bsCreate = vi.fn().mockResolvedValue({})
-    const resourceTypeDelete = vi.fn()
-    const namedResourceDelete = vi.fn()
-    const discountDelete = vi.fn()
-    const templateTaskUpdate = vi.fn()
-
-    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
-      const tx = makeRouteTx({
-        capacityProfile: { findMany: vi.fn().mockResolvedValue([]), deleteMany: cpDelete, create: cpCreate },
-        capacitySegment: { deleteMany: segDelete, create: segCreate },
-        backlogSnapshot: { create: bsCreate, findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
-        resourceType: {
-          findMany: vi.fn().mockResolvedValue([]),
-          upsert: vi.fn().mockResolvedValue({}),
-          deleteMany: resourceTypeDelete,
-        },
-        namedResource: {
-          findMany: vi.fn().mockResolvedValue([]),
-          upsert: vi.fn().mockResolvedValue({}),
-          deleteMany: namedResourceDelete,
-        },
-        projectDiscount: { findMany: vi.fn().mockResolvedValue([]), deleteMany: discountDelete },
-        templateTask: { updateMany: templateTaskUpdate },
-      })
-      return typeof fn === 'function'
-        ? (fn as (t: unknown) => Promise<unknown>)(tx)
-        : Promise.resolve(fn)
-    })
 
     const res = await request(app)
       .post(`/api/projects/${projId}/snapshots/snap-v3/rollback`)
       .set('Authorization', authHeader)
 
-    expect(res.status).toBe(200)
-    expect(vi.mocked(prisma.$transaction)).toHaveBeenCalledTimes(1)
-    // Pre-rollback snapshot created inside transaction (tx mock, not global prisma)
-    expect(bsCreate.mock.calls.length).toBeGreaterThanOrEqual(1)
-
-    // Existing profiles/segments deleted
-    expect(cpDelete.mock.calls.length).toBeGreaterThanOrEqual(1)
-    expect(segDelete.mock.calls.length).toBeGreaterThanOrEqual(1)
-    // V3 never prunes owners or mutates uncaptured commercial/template state.
-    expect(resourceTypeDelete).not.toHaveBeenCalled()
-    expect(namedResourceDelete).not.toHaveBeenCalled()
-    expect(discountDelete).not.toHaveBeenCalled()
-    expect(templateTaskUpdate).not.toHaveBeenCalled()
-
-    // Target profiles recreated with exact IDs and fields
-    expect(cpCreate.mock.calls.length).toBe(2)
-
-    const cp1 = cpCreate.mock.calls[0][0]?.data as Record<string, unknown>
-    expect(cp1.id).toBe('cp-1')
-    expect(cp1.project).toEqual({ connect: { id: projId } })
-    expect(cp1.ownerKind).toBe('ROLE')
-    expect(cp1.resourceType).toEqual({ connect: { id: 'rt-dev' } })
-    expect(cp1.legacy).toBe(Prisma.DbNull)
-    expect(cp1.planningBasis).toBe('DEMAND_FOLLOWING')
-    expect(cp1.source).toBe('FIXED')
-    expect(cp1.defaultPercent).toBeNull()
-    expect(cp1.startWeek).toBeNull()
-    expect(cp1.endWeek).toBeNull()
-
-    const cp2 = cpCreate.mock.calls[1][0]?.data as Record<string, unknown>
-    expect(cp2.id).toBe('cp-2')
-    expect(cp2.project).toEqual({ connect: { id: projId } })
-    expect(cp2.ownerKind).toBe('NAMED_PERSON')
-    expect(cp2.resourceType).toBeUndefined()
-    expect(cp2.namedResource).toEqual({ connect: { id: 'nr-alice' } })
-    expect(cp2.legacy).toEqual({ mode: 'EFFORT' })
-    expect(cp2.planningBasis).toBe('AVAILABILITY_WINDOW')
-    expect(cp2.source).toBe('SQUAD_PLANNER')
-    expect(cp2.defaultPercent).toBe(100)
-    expect(cp2.startWeek).toBe(0)
-    expect(cp2.endWeek).toBe(10)
-
-    // Segments recreated with exact IDs and values
-    expect(segCreate.mock.calls.length).toBe(1)
-    const seg1 = segCreate.mock.calls[0][0]?.data as Record<string, unknown>
-    expect(seg1.id).toBe('seg-a')
-    expect(seg1.capacityProfile).toEqual({ connect: { id: 'cp-2' } })
-    expect(seg1.startWeek).toBe(0)
-    expect(seg1.endWeek).toBe(4)
-    expect(seg1.capacityPercent).toBe(100)
-    expect(seg1.source).toBe('SQUAD_PLANNER')
+    // Issue #444: V3 is deliberately retired — refused before any write with
+    // the stable retirement reason.
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe(RETIREMENT_REASON)
+    expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
   })
 
 
@@ -1124,12 +999,10 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
   })
 
   it('cross-project ID collision returns 400 before transaction', async () => {
-    const v3Target: SnapshotV3 = {
-      schemaVersion: 3, epics: [], project: null,
+    const v4Target = {
+      schemaVersion: 4, epics: [], project: null,
       resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
-        hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: 0, allocationEndWeek: 10 }],
+        hoursPerDay: 8, dayRate: 500, globalTypeId: null }],
       namedResources: [],
       timelineEntries: [], storyTimelineEntries: [],
       epicDependencies: [], featureDependencies: [], overheadItems: [],
@@ -1143,7 +1016,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-cross', projectId: projId, label: 'cross',
-      trigger: 'manual', snapshot: v3Target as unknown as never,
+      trigger: 'manual', snapshot: v4Target as unknown as never,
       createdById: userId, createdAt: new Date(),
     } as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
@@ -1161,13 +1034,11 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
   })
 
 
-  it('V3: foreign resourceType from snapshot.resourceTypes rejected before transaction', async () => {
-    const v3Target: SnapshotV3 = {
-      schemaVersion: 3, epics: [], project: null,
+  it('V4: foreign resourceType from snapshot.resourceTypes rejected before transaction', async () => {
+    const v4Target = {
+      schemaVersion: 4, epics: [], project: null,
       resourceTypes: [{ id: 'rt-foreign', name: 'OtherTeam', category: 'ENGINEERING', count: 1,
-        hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: 0, allocationEndWeek: 10 }],
+        hoursPerDay: 8, dayRate: 500, globalTypeId: null }],
       namedResources: [],
       timelineEntries: [], storyTimelineEntries: [],
       epicDependencies: [], featureDependencies: [], overheadItems: [],
@@ -1177,7 +1048,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-rt-foreign', projectId: projId, label: 'foreign-rt',
-      trigger: 'manual', snapshot: v3Target as unknown as never,
+      trigger: 'manual', snapshot: v4Target as unknown as never,
       createdById: userId, createdAt: new Date(),
     } as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
@@ -1194,17 +1065,12 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     expect(txSpy).not.toHaveBeenCalled()
   })
 
-  it('V3: foreign namedResource from snapshot.namedResources rejected before transaction', async () => {
-    const v3Target: SnapshotV3 = {
-      schemaVersion: 3, epics: [], project: null,
+  it('V4: foreign namedResource from snapshot.namedResources rejected before transaction', async () => {
+    const v4Target = {
+      schemaVersion: 4, epics: [], project: null,
       resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
-        hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: 0, allocationEndWeek: 10 }],
-      namedResources: [{ id: 'nr-foreign', resourceTypeId: 'rt-dev', name: 'Bob',
-        startWeek: null, endWeek: null, allocationPct: 100,
-        allocationMode: 'EFFORT', allocationPercent: 100,
-        allocationStartWeek: null, allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS' }],
+        hoursPerDay: 8, dayRate: 500, globalTypeId: null }],
+      namedResources: [{ id: 'nr-foreign', resourceTypeId: 'rt-dev', name: 'Bob', pricingModel: 'ACTUAL_DAYS' }],
       timelineEntries: [], storyTimelineEntries: [],
       epicDependencies: [], featureDependencies: [], overheadItems: [],
       capacityProfiles: [],
@@ -1213,7 +1079,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-nr-foreign', projectId: projId, label: 'foreign-nr',
-      trigger: 'manual', snapshot: v3Target as unknown as never,
+      trigger: 'manual', snapshot: v4Target as unknown as never,
       createdById: userId, createdAt: new Date(),
     } as never)
     // resourceType ID is new (doesn't exist in DB) — allowed
@@ -1232,18 +1098,14 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     expect(txSpy).not.toHaveBeenCalled()
   })
 
-  it('V3: foreign overhead resourceType rejected before transaction', async () => {
-    const v3Target: SnapshotV3 = {
-      schemaVersion: 3, epics: [], project: null,
+  it('V4: foreign overhead resourceType rejected before transaction', async () => {
+    const v4Target = {
+      schemaVersion: 4, epics: [], project: null,
       resourceTypes: [
         { id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
-          hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-          allocationMode: 'TIMELINE', allocationPercent: 100,
-          allocationStartWeek: 0, allocationEndWeek: 10 },
+          hoursPerDay: 8, dayRate: 500, globalTypeId: null },
         { id: 'rt-foreign', name: 'Other', category: 'ENGINEERING', count: 1,
-          hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-          allocationMode: 'TIMELINE', allocationPercent: 100,
-          allocationStartWeek: 0, allocationEndWeek: 10 },
+          hoursPerDay: 8, dayRate: 500, globalTypeId: null },
       ],
       namedResources: [],
       timelineEntries: [], storyTimelineEntries: [],
@@ -1255,7 +1117,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-oh-foreign', projectId: projId, label: 'foreign-oh',
-      trigger: 'manual', snapshot: v3Target as unknown as never,
+      trigger: 'manual', snapshot: v4Target as unknown as never,
       createdById: userId, createdAt: new Date(),
     } as never)
     // 'rt-dev' is a new ID (fine); 'rt-foreign' already exists in another project
@@ -1273,17 +1135,12 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     expect(txSpy).not.toHaveBeenCalled()
   })
 
-  it('V3: new IDs not in DB are allowed (valid rollback)', async () => {
-    const v3Target: SnapshotV3 = {
-      schemaVersion: 3, epics: [], project: null,
+  it('V4: new IDs not in DB are allowed (valid rollback)', async () => {
+    const v4Target = {
+      schemaVersion: 4, epics: [], project: null,
       resourceTypes: [{ id: 'rt-new', name: 'NewRole', category: 'ENGINEERING', count: 1,
-        hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: 0, allocationEndWeek: 10 }],
-      namedResources: [{ id: 'nr-new', resourceTypeId: 'rt-new', name: 'NewPerson',
-        startWeek: null, endWeek: null, allocationPct: 100,
-        allocationMode: 'EFFORT', allocationPercent: 100,
-        allocationStartWeek: null, allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS' }],
+        hoursPerDay: 8, dayRate: 500, globalTypeId: null }],
+      namedResources: [{ id: 'nr-new', resourceTypeId: 'rt-new', name: 'NewPerson', pricingModel: 'ACTUAL_DAYS' }],
       timelineEntries: [], storyTimelineEntries: [],
       epicDependencies: [], featureDependencies: [], overheadItems: [],
       capacityProfiles: [
@@ -1296,7 +1153,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-newids', projectId: projId, label: 'new-ids',
-      trigger: 'manual', snapshot: v3Target as unknown as never,
+      trigger: 'manual', snapshot: v4Target as unknown as never,
       createdById: userId, createdAt: new Date(),
     } as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([] as never)
@@ -1359,7 +1216,13 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-fail', projectId: projId, label: 'fail',
       trigger: 'manual',
-      snapshot: [{ id: 'e1', name: 'E', features: [] }],
+      snapshot: {
+        schemaVersion: 4, epics: [{ id: 'e1', name: 'E', features: [] }], project: null,
+        resourceTypes: [], namedResources: [],
+        timelineEntries: [], storyTimelineEntries: [],
+        epicDependencies: [], featureDependencies: [], overheadItems: [],
+        capacityProfiles: [],
+      },
       createdById: userId, createdAt: new Date(),
     } as never)
 
@@ -1375,13 +1238,11 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     expect(bsDeleteSpy).not.toHaveBeenCalled()
   })
 
-  it('V3 tx callback failure rejects with 500 (restore/write error)', async () => {
-    const v3Target: SnapshotV3 = {
-      schemaVersion: 3, epics: [], project: null,
+  it('V4 tx callback failure rejects with 500 (restore/write error)', async () => {
+    const v4Target = {
+      schemaVersion: 4, epics: [], project: null,
       resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
-        hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: 0, allocationEndWeek: 10 }],
+        hoursPerDay: 8, dayRate: 500, globalTypeId: null }],
       namedResources: [],
       timelineEntries: [], storyTimelineEntries: [],
       epicDependencies: [], featureDependencies: [], overheadItems: [],
@@ -1395,7 +1256,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-failwrite', projectId: projId, label: 'failwrite',
-      trigger: 'manual', snapshot: v3Target as unknown as never,
+      trigger: 'manual', snapshot: v4Target as unknown as never,
       createdById: userId, createdAt: new Date(),
     } as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
@@ -1470,13 +1331,11 @@ describe('route persistence on buildSnapshot failure', () => {
   })
 
   it('rollback transaction aborts before destructive restore on buildSnapshot failure', async () => {
-    const v3Target: SnapshotV3 = {
-      schemaVersion: 3, epics: [], project: null,
+    const v4Target = {
+      schemaVersion: 4, epics: [], project: null,
       resourceTypes: [
         { id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 1,
-          hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-          allocationMode: 'TIMELINE', allocationPercent: 100,
-          allocationStartWeek: 0, allocationEndWeek: 10 },
+          hoursPerDay: 8, dayRate: 500, globalTypeId: null },
       ],
       namedResources: [],
       timelineEntries: [], storyTimelineEntries: [],
@@ -1491,7 +1350,7 @@ describe('route persistence on buildSnapshot failure', () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-fail-build', projectId: projId, label: 'fail-build',
-      trigger: 'manual', snapshot: v3Target as unknown as never,
+      trigger: 'manual', snapshot: v4Target as unknown as never,
       createdById: userId, createdAt: new Date(),
     } as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([] as never)
@@ -1610,7 +1469,7 @@ describe('rollbackProjectSnapshot', () => {
     vi.clearAllMocks()
   })
 
-  it('V1: rolls back bare epic array via service', async () => {
+  it('V1: bare epic array is refused pre-write with the retirement reason (issue #444)', async () => {
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-v1-svc', projectId: projId, label: 'V1 svc',
       trigger: 'manual',
@@ -1620,27 +1479,18 @@ describe('rollbackProjectSnapshot', () => {
       createdById: userId, createdAt: new Date(),
     } as never)
 
-    const epicDel = vi.fn().mockResolvedValue({ count: 0 })
-    const bsCreate = vi.fn().mockResolvedValue({})
-
-    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
-      const tx = makeRouteTx({
-        capacityProfile: { findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }), create: vi.fn().mockResolvedValue({}) },
-        epic: { findMany: vi.fn().mockResolvedValue([]), deleteMany: epicDel, create: vi.fn().mockResolvedValue({ id: 'new-e1' }) },
-        backlogSnapshot: { create: bsCreate, findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
-      })
-      return typeof fn === 'function'
-        ? (fn as (t: unknown) => Promise<unknown>)(tx)
-        : Promise.resolve(fn)
-    })
-
-    await rollbackProjectSnapshot({ projectId: projId, snapshotId: 'snap-v1-svc', userId })
-    expect(vi.mocked(prisma.$transaction)).toHaveBeenCalledTimes(1)
-    expect(bsCreate).toHaveBeenCalled()
-    expect(epicDel).toHaveBeenCalled()
+    await expect(rollbackProjectSnapshot({
+      projectId: projId, snapshotId: 'snap-v1-svc', userId,
+    })).rejects.toThrow(SnapshotValidationError)
+    await expect(rollbackProjectSnapshot({
+      projectId: projId, snapshotId: 'snap-v1-svc', userId,
+    })).rejects.toThrow(RETIREMENT_REASON)
+    // Refusal happens before the transaction — no pre_rollback snapshot and
+    // no destructive restore.
+    expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
   })
 
-  it('V2: full-state restore via service', async () => {
+  it('V2: full-state snapshot is refused pre-write with the retirement reason (issue #444)', async () => {
     const v2Data = {
       schemaVersion: 2, epics: [], project: null,
       resourceTypes: [{
@@ -1660,38 +1510,21 @@ describe('rollbackProjectSnapshot', () => {
       createdById: userId, createdAt: new Date(),
     } as never)
 
-    const cpDelete = vi.fn().mockResolvedValue({ count: 999 })
-    const segDelete = vi.fn().mockResolvedValue({ count: 999 })
-    const cpCreate = vi.fn().mockResolvedValue({})
-
-    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
-      const tx = makeRouteTx({
-        capacityProfile: { findMany: vi.fn().mockResolvedValue([]), deleteMany: cpDelete, create: cpCreate },
-        capacitySegment: { deleteMany: segDelete, create: vi.fn().mockResolvedValue({}) },
-      })
-      return typeof fn === 'function'
-        ? (fn as (t: unknown) => Promise<unknown>)(tx)
-        : Promise.resolve(fn)
-    })
-
-    await rollbackProjectSnapshot({ projectId: projId, snapshotId: 'snap-v2-svc', userId })
-    expect(vi.mocked(prisma.$transaction)).toHaveBeenCalledTimes(1)
-    expect(cpDelete).toHaveBeenCalled()
-    expect(segDelete).toHaveBeenCalled()
-    expect(cpCreate).toHaveBeenCalled()
+    await expect(rollbackProjectSnapshot({
+      projectId: projId, snapshotId: 'snap-v2-svc', userId,
+    })).rejects.toThrow(SnapshotValidationError)
+    await expect(rollbackProjectSnapshot({
+      projectId: projId, snapshotId: 'snap-v2-svc', userId,
+    })).rejects.toThrow(RETIREMENT_REASON)
+    expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
   })
 
-  it('V3: exact profile/segment replacement via service', async () => {
-    const v3Target: SnapshotV3 = {
-      schemaVersion: 3, epics: [], project: null,
+  it('V4: exact profile/segment replacement via service', async () => {
+    const v4Target = {
+      schemaVersion: 4, epics: [], project: null,
       resourceTypes: [{ id: 'rt-dev', name: 'Dev', category: 'ENGINEERING', count: 2,
-        hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: 0, allocationEndWeek: 10 }],
-      namedResources: [{ id: 'nr-alice', resourceTypeId: 'rt-dev', name: 'Alice',
-        startWeek: null, endWeek: null, allocationPct: 100,
-        allocationMode: 'EFFORT', allocationPercent: 100,
-        allocationStartWeek: null, allocationEndWeek: null, pricingModel: 'ACTUAL_DAYS' }],
+        hoursPerDay: 8, dayRate: 500, globalTypeId: null }],
+      namedResources: [{ id: 'nr-alice', resourceTypeId: 'rt-dev', name: 'Alice', pricingModel: 'ACTUAL_DAYS' }],
       timelineEntries: [], storyTimelineEntries: [],
       epicDependencies: [], featureDependencies: [], overheadItems: [],
       capacityProfiles: [
@@ -1707,8 +1540,8 @@ describe('rollbackProjectSnapshot', () => {
     }
 
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
-      id: 'snap-v3-svc', projectId: projId, label: 'V3 svc',
-      trigger: 'manual', snapshot: v3Target as unknown as never,
+      id: 'snap-v4-svc', projectId: projId, label: 'V4 svc',
+      trigger: 'manual', snapshot: v4Target as unknown as never,
       createdById: userId, createdAt: new Date(),
     } as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
@@ -1734,7 +1567,7 @@ describe('rollbackProjectSnapshot', () => {
         : Promise.resolve(fn)
     })
 
-    await rollbackProjectSnapshot({ projectId: projId, snapshotId: 'snap-v3-svc', userId })
+    await rollbackProjectSnapshot({ projectId: projId, snapshotId: 'snap-v4-svc', userId })
     expect(vi.mocked(prisma.$transaction)).toHaveBeenCalledTimes(1)
     expect(bsCreate).toHaveBeenCalled()
     expect(cpDelete).toHaveBeenCalled()
@@ -1767,12 +1600,10 @@ describe('rollbackProjectSnapshot', () => {
   })
 
   it('throws RollbackPreflightError on cross-project ID collision', async () => {
-    const v3Target: SnapshotV3 = {
-      schemaVersion: 3, epics: [], project: null,
+    const v4Target = {
+      schemaVersion: 4, epics: [], project: null,
       resourceTypes: [{ id: 'rt-foreign', name: 'Foreign', category: 'ENGINEERING', count: 1,
-        hoursPerDay: 8, dayRate: 500, globalTypeId: null,
-        allocationMode: 'TIMELINE', allocationPercent: 100,
-        allocationStartWeek: 0, allocationEndWeek: 10 }],
+        hoursPerDay: 8, dayRate: 500, globalTypeId: null }],
       namedResources: [],
       timelineEntries: [], storyTimelineEntries: [],
       epicDependencies: [], featureDependencies: [], overheadItems: [],
@@ -1785,7 +1616,7 @@ describe('rollbackProjectSnapshot', () => {
 
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-cross-svc', projectId: projId, label: 'cross-svc',
-      trigger: 'manual', snapshot: v3Target as unknown as never,
+      trigger: 'manual', snapshot: v4Target as unknown as never,
       createdById: userId, createdAt: new Date(),
     } as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
@@ -1803,7 +1634,13 @@ describe('rollbackProjectSnapshot', () => {
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
       id: 'snap-tx-fail', projectId: projId, label: 'tx-fail',
       trigger: 'manual',
-      snapshot: [{ id: 'e1', name: 'E', features: [] }],
+      snapshot: {
+        schemaVersion: 4, epics: [{ id: 'e1', name: 'E', features: [] }], project: null,
+        resourceTypes: [], namedResources: [],
+        timelineEntries: [], storyTimelineEntries: [],
+        epicDependencies: [], featureDependencies: [], overheadItems: [],
+        capacityProfiles: [],
+      },
       createdById: userId, createdAt: new Date(),
     } as never)
 
@@ -1844,19 +1681,17 @@ describe('rollbackProjectSnapshot', () => {
   })
 })
 
+
 // ═══════════════════════════════════════════════════════════════════════════
-// Issue #428 — derived quarantine: listing fields and pre-write rollback refusal
+// Issue #444 — V4 minimum: listing fields and pre-write rollback refusal
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('GET /api/projects/:projectId/snapshots — derived restorability fields', () => {
-  // Issue #438: the EXACT all-windowless-100% CAPACITY_PLAN snapshot is now
-  // restorable, so this quarantined fixture uses a non-100 percentage —
-  // outside the approved predicate, still Class A quarantined (fail closed).
-  function windowlessV2(label: string) {
+describe('GET /api/projects/:projectId/snapshots — derived restorability fields (issue #444)', () => {
+  function v2Snapshot(label: string) {
     return {
       schemaVersion: 2, epics: [], project: null,
       resourceTypes: [{
-        id: 'rt-q', name: 'Quarantine Role', category: 'ENGINEERING', count: 1,
+        id: 'rt-q', name: 'Legacy Role', category: 'ENGINEERING', count: 1,
         hoursPerDay: null, dayRate: null, globalTypeId: null,
         allocationMode: 'CAPACITY_PLAN', allocationPercent: 80,
         allocationStartWeek: null, allocationEndWeek: null,
@@ -1868,57 +1703,37 @@ describe('GET /api/projects/:projectId/snapshots — derived restorability field
     }
   }
 
-  it('classifies stored content: quarantined and restorable rows with stable reasons', async () => {
-    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
-    vi.mocked(prisma.backlogSnapshot.findMany).mockResolvedValue([
-      {
-        id: 'snap-q', projectId: projId, label: 'quarantined', trigger: 'manual',
-        createdAt: new Date('2026-01-01'), createdById: userId,
-        snapshot: windowlessV2('quarantined'),
-      },
-      {
-        id: 'snap-v1', projectId: projId, label: 'restorable', trigger: 'manual',
-        createdAt: new Date('2026-01-02'), createdById: userId,
-        snapshot: [{ id: 'e1', name: 'Epic', features: [] }],
-      },
-    ] as never)
-
-    const res = await request(app)
-      .get(`/api/projects/${projId}/snapshots`)
-      .set('Authorization', authHeader)
-
-    expect(res.status).toBe(200)
-    expect(res.body).toHaveLength(2)
-    const quarantined = res.body.find((s: { id: string }) => s.id === 'snap-q')
-    const restorable = res.body.find((s: { id: string }) => s.id === 'snap-v1')
-    expect(quarantined.restoreStatus).toBe('non-restorable')
-    expect(quarantined.restoreReason).toBe(QUARANTINE_CLASS_A_REASON)
-    expect(restorable.restoreStatus).toBe('restorable')
-    expect(restorable.restoreReason).toBeNull()
-    // Existing list fields are preserved.
-    expect(quarantined.label).toBe('quarantined')
-    expect(quarantined.trigger).toBe('manual')
-  })
-
-  it('lists the exact all-windowless-100% Class A shape as restorable (issue #438)', async () => {
-    const exactClassA = {
-      schemaVersion: 2, epics: [], project: null,
+  function v4Snapshot() {
+    return {
+      schemaVersion: 4, epics: [], project: null,
       resourceTypes: [{
-        id: 'rt-a', name: 'Class A Role', category: 'ENGINEERING', count: 1,
+        id: 'rt-v4', name: 'V4 Role', category: 'ENGINEERING', count: 1,
         hoursPerDay: null, dayRate: null, globalTypeId: null,
-        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
-        allocationStartWeek: null, allocationEndWeek: null,
       }],
       namedResources: [],
       timelineEntries: [], storyTimelineEntries: [],
       epicDependencies: [], featureDependencies: [], overheadItems: [],
+      capacityProfiles: [],
     }
+  }
+
+  it('classifies stored content: retired and restorable rows with stable reasons', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findMany).mockResolvedValue([
       {
-        id: 'snap-class-a', projectId: projId, label: 'class a', trigger: 'manual',
+        id: 'snap-v2', projectId: projId, label: 'legacy v2', trigger: 'manual',
+        createdAt: new Date('2026-01-01'), createdById: userId,
+        snapshot: v2Snapshot('legacy v2'),
+      },
+      {
+        id: 'snap-v1', projectId: projId, label: 'legacy v1', trigger: 'manual',
+        createdAt: new Date('2026-01-02'), createdById: userId,
+        snapshot: [{ id: 'e1', name: 'Epic', features: [] }],
+      },
+      {
+        id: 'snap-v4', projectId: projId, label: 'current', trigger: 'manual',
         createdAt: new Date('2026-01-03'), createdById: userId,
-        snapshot: exactClassA,
+        snapshot: v4Snapshot(),
       },
     ] as never)
 
@@ -1927,21 +1742,48 @@ describe('GET /api/projects/:projectId/snapshots — derived restorability field
       .set('Authorization', authHeader)
 
     expect(res.status).toBe(200)
-    const listed = res.body.find((s: { id: string }) => s.id === 'snap-class-a')
+    expect(res.body).toHaveLength(3)
+    const retired = res.body.find((s: { id: string }) => s.id === 'snap-v2')
+    const v1 = res.body.find((s: { id: string }) => s.id === 'snap-v1')
+    const restorable = res.body.find((s: { id: string }) => s.id === 'snap-v4')
+    expect(retired.restoreStatus).toBe('non-restorable')
+    expect(retired.restoreReason).toBe(RETIREMENT_REASON)
+    expect(v1.restoreStatus).toBe('non-restorable')
+    expect(v1.restoreReason).toBe(RETIREMENT_REASON)
+    expect(restorable.restoreStatus).toBe('restorable')
+    expect(restorable.restoreReason).toBeNull()
+    // Existing list fields are preserved.
+    expect(retired.label).toBe('legacy v2')
+    expect(retired.trigger).toBe('manual')
+  })
+
+  it('lists a valid V4 snapshot as restorable with no reason', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
+    vi.mocked(prisma.backlogSnapshot.findMany).mockResolvedValue([
+      {
+        id: 'snap-v4-only', projectId: projId, label: 'v4', trigger: 'manual',
+        createdAt: new Date('2026-01-03'), createdById: userId,
+        snapshot: v4Snapshot(),
+      },
+    ] as never)
+
+    const res = await request(app)
+      .get(`/api/projects/${projId}/snapshots`)
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    const listed = res.body.find((s: { id: string }) => s.id === 'snap-v4-only')
     expect(listed.restoreStatus).toBe('restorable')
     expect(listed.restoreReason).toBeNull()
   })
 })
 
-describe('POST rollback — quarantined snapshot refused before any write', () => {
-  it('returns 400 with the stable reason, no transaction, no pre_rollback row', async () => {
-    // Issue #438: only the EXACT all-windowless-100% shape is restorable;
-    // this non-100 percentage variant stays Class A quarantined and is
-    // still refused pre-write.
+describe('POST rollback — pre-V4 snapshot refused before any write (issue #444)', () => {
+  it('returns 400 with the stable retirement reason, no transaction, no pre_rollback row', async () => {
     const windowlessV2 = {
       schemaVersion: 2, epics: [], project: null,
       resourceTypes: [{
-        id: 'rt-q', name: 'Quarantine Role', category: 'ENGINEERING', count: 1,
+        id: 'rt-q', name: 'Legacy Role', category: 'ENGINEERING', count: 1,
         hoursPerDay: null, dayRate: null, globalTypeId: null,
         allocationMode: 'CAPACITY_PLAN', allocationPercent: 80,
         allocationStartWeek: null, allocationEndWeek: null,
@@ -1952,7 +1794,7 @@ describe('POST rollback — quarantined snapshot refused before any write', () =
     }
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
-      id: 'snap-q', projectId: projId, label: 'quarantined',
+      id: 'snap-q', projectId: projId, label: 'legacy',
       trigger: 'manual', snapshot: windowlessV2,
       createdById: userId, createdAt: new Date(),
     } as never)
@@ -1962,21 +1804,21 @@ describe('POST rollback — quarantined snapshot refused before any write', () =
       .set('Authorization', authHeader)
 
     expect(res.status).toBe(400)
-    expect(res.body.error).toBe(QUARANTINE_CLASS_A_REASON)
+    expect(res.body.error).toBe(RETIREMENT_REASON)
     // Refusal happens before the transaction: no project-state write, no
     // pre_rollback snapshot creation.
     expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
     expect(vi.mocked(prisma.backlogSnapshot.create)).not.toHaveBeenCalled()
   })
 
-  it('rejects a Class B snapshot with its stable reason before any write', async () => {
-    const singleMinusOneV2 = {
+  it('rejects any V2 shape with the retirement reason before any write', async () => {
+    const v2 = {
       schemaVersion: 2, epics: [], project: null,
       resourceTypes: [{
-        id: 'rt-q', name: 'Quarantine Role', category: 'ENGINEERING', count: 1,
+        id: 'rt-q', name: 'Legacy Role', category: 'ENGINEERING', count: 1,
         hoursPerDay: null, dayRate: null, globalTypeId: null,
-        allocationMode: 'CAPACITY_PLAN', allocationPercent: 100,
-        allocationStartWeek: -1, allocationEndWeek: 5,
+        allocationMode: 'TIMELINE', allocationPercent: 100,
+        allocationStartWeek: 0, allocationEndWeek: 10,
       }],
       namedResources: [],
       timelineEntries: [], storyTimelineEntries: [],
@@ -1984,8 +1826,8 @@ describe('POST rollback — quarantined snapshot refused before any write', () =
     }
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     vi.mocked(prisma.backlogSnapshot.findFirst).mockResolvedValue({
-      id: 'snap-q-b', projectId: projId, label: 'quarantined b',
-      trigger: 'manual', snapshot: singleMinusOneV2,
+      id: 'snap-q-b', projectId: projId, label: 'legacy b',
+      trigger: 'manual', snapshot: v2,
       createdById: userId, createdAt: new Date(),
     } as never)
 
@@ -1994,7 +1836,7 @@ describe('POST rollback — quarantined snapshot refused before any write', () =
       .set('Authorization', authHeader)
 
     expect(res.status).toBe(400)
-    expect(res.body.error).toBe(QUARANTINE_CLASS_B_REASON)
+    expect(res.body.error).toBe(RETIREMENT_REASON)
     expect(vi.mocked(prisma.$transaction)).not.toHaveBeenCalled()
   })
 })

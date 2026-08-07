@@ -176,7 +176,15 @@ complete resolved plan:
 - deterministic NamedResource mappings (where existing evidence proves a
   named person) are unchanged and never require an owner-kind decision.
 
-## Historical v2 snapshot policy
+## Historical v2 snapshot policy (superseded by Issue #444)
+
+**Issue #444 supersedes this section.** V1/V2/V3 snapshots are deliberately
+retired: the shared classifier makes them non-restorable with one stable
+reason, readiness blocks on their presence with aggregate counts, and the
+pre-V4 purge command removes the rows before PR 2. The translation,
+never-active normalisation and snapshot-rewrite flows below are retained only
+as historical machinery inside the plan/evidence tooling and are no longer a
+migration requirement. The remainder of this section is historical evidence.
 
 Readiness and rollback share the same translation helper
 (`translateV2SnapshotProfiles`), so the policy below applies to both, and the
@@ -643,7 +651,20 @@ The command output is evidence only. It does **not** authorize remediation
 apply, migration deployment, manifest creation or decision selection.
 #404 and #418 remain blocked until the evidence is reviewed under #430.
 
-## #404 Production handoff procedure
+## #404 Production handoff procedure (revised by Issue #444)
+
+Issue #444 supersedes the historical snapshot sections of this document:
+pre-V4 snapshots are deliberately **purged** (never remediated, rewritten or
+translated), and readiness no longer evaluates historical translation
+semantics. The remediation command below now covers **live-state blockers
+only**; snapshot-entry decisions are obsolete (the purge removes the rows).
+The exact revised sequence is in
+[`legacy-capacity-column-runtime-cutover.md`](legacy-capacity-column-runtime-cutover.md):
+install the reviewed release → purge dry-run and record counts → fresh V4
+safety snapshots for every useful project → fresh restore-tested backup →
+maintenance mode → purge apply → prove pre-V4 count zero and representative
+V4 restore → rerun readiness → remediate only remaining live-state blockers
+→ authorize PR 2.
 
 The production machine must execute exactly these steps; stop on any failure
 or drift. No step asks the production agent to invent data values.
@@ -703,6 +724,13 @@ or drift. No step asks the production agent to invent data values.
 13. **Authorize #418 PR 2 only after #404 records both successful gates**
     (readiness passing on the exact reviewed commit AND a restore-tested
     fresh backup).
+
+Issue #444 adds the pre-PR-2 gates that precede this remediation run: the
+purge apply must be executed (with dry-run counts, fresh V4 safety snapshots
+per useful project and a restore-tested backup first), production must prove
+pre-V4 snapshot count zero with V4 snapshots remaining, and a representative
+V4 create/restore must succeed. Representative V1/V2/V3 restoration is no
+longer required. The purge itself does NOT authorize PR 2.
 
 Stop conditions: any non-zero exit, fingerprint/count mismatch, unexpected
 drift, readiness failure, audit failure, backup/restore failure, or any
