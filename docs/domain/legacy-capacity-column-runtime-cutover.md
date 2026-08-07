@@ -16,9 +16,10 @@ The corrected production contract is:
 6. run `npm run capacity-profiles:purge-pre-v4-snapshots -- --apply`;
 7. prove V1 = 0, V2 = 0, V3 = 0, malformed/unsupported = 0, and that current project/backlog/resource/profile/timeline state is unchanged apart from the deliberate `BacklogSnapshot` deletion;
 8. restart the application and rerun `npm run capacity-profiles:readiness`;
-9. remediate only the remaining current/live CapacityProfile blockers under the reviewed #421 process;
-10. once live-state readiness passes, create a fresh V4 snapshot on a representative useful project and prove supported V4 restore succeeds with CapacityProfile ownership/integrity still valid;
-11. authorize #418 PR 2 only after readiness passes, the restore-tested backup is retained, pre-V4 snapshot count is zero, and representative V4 create/restore has passed.
+9. remediate only the remaining current/live CapacityProfile blockers under the reviewed #421 process until readiness passes;
+10. create a fresh V4 snapshot on a representative useful project and prove supported V4 restore succeeds with CapacityProfile ownership/integrity still valid;
+11. rerun `npm run capacity-profiles:readiness` against the post-restore database state and require exit 0;
+12. authorize #418 PR 2 only after that final post-restore readiness pass, the restore-tested backup is retained, pre-V4 snapshot count is zero, and representative V4 create/restore has passed.
 
 The restore-tested PostgreSQL backup is the authoritative pre-purge rollback mechanism because it captures the complete useful database, including the legacy snapshots being deliberately deleted. Do not build or run a bulk 134-project snapshot mechanism solely for this migration gate. The purge command remains unchanged and must never create snapshots itself.
 
