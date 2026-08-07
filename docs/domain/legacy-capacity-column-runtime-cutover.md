@@ -1,5 +1,27 @@
 # Legacy capacity-column runtime cutover (Issue #418 — PR 1)
 
+## Sequencing correction after #404 Stage 4 evidence (2026-08-07)
+
+Production evidence from #404 showed that requiring a fresh V4 snapshot for every current project before the pre-V4 purge is not a useful safety gate: the useful database currently has no V4 snapshots and still contains known live CapacityProfile completeness/shape blockers. A V4 snapshot would preserve that current state but would not prove that the state is migration-ready.
+
+This correction supersedes the older sequencing text later in this document under **Fresh V4 safety snapshots**, **Revised #404 production sequence**, and the first bullet under **Sequencing and rollback** wherever those sections require V4 snapshot creation/restoration before the pre-V4 purge.
+
+The corrected production contract is:
+
+1. install the exact reviewed non-destructive release and verify service/database health;
+2. run `npm run capacity-profiles:purge-pre-v4-snapshots` in dry-run mode and require malformed/unsupported = 0;
+3. enter maintenance mode;
+4. create a fresh PostgreSQL backup of the useful database and successfully restore-test it before any purge write; retain this backup through migration acceptance;
+5. rerun the purge dry-run and require the pre-V4 counts to reconcile;
+6. run `npm run capacity-profiles:purge-pre-v4-snapshots -- --apply`;
+7. prove V1 = 0, V2 = 0, V3 = 0, malformed/unsupported = 0, and that current project/backlog/resource/profile/timeline state is unchanged apart from the deliberate `BacklogSnapshot` deletion;
+8. restart the application and rerun `npm run capacity-profiles:readiness`;
+9. remediate only the remaining current/live CapacityProfile blockers under the reviewed #421 process;
+10. once live-state readiness passes, create a fresh V4 snapshot on a representative useful project and prove supported V4 restore succeeds with CapacityProfile ownership/integrity still valid;
+11. authorize #418 PR 2 only after readiness passes, the restore-tested backup is retained, pre-V4 snapshot count is zero, and representative V4 create/restore has passed.
+
+The restore-tested PostgreSQL backup is the authoritative pre-purge rollback mechanism because it captures the complete useful database, including the legacy snapshots being deliberately deleted. Do not build or run a bulk 134-project snapshot mechanism solely for this migration gate. The purge command remains unchanged and must never create snapshots itself.
+
 ## Status after PR 1
 
 - The candidate legacy capacity columns **still physically exist** in the
