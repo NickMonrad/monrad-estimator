@@ -81,27 +81,10 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const fallbackHoursPerDay = project.hoursPerDay
   const resourceTypeById = new Map(project.resourceTypes.map(rt => [rt.id, rt]))
-  // Materialize capacity plan for shared model consumption
-  const capacityPlanByRt = materializeCapacityPlanResources(
-    (project.capacityPlans?.[0] ?? null)?.periods ?? [],
-  )
-  // Build capacity-profile enrichment map (profile-first, fail-closed)
-  const { roleProfiles, namedResourceProfiles } = buildResourceCapacityProfileMap(
-    project as unknown as Parameters<typeof buildResourceCapacityProfileMap>[0],
-  )
-  // Resolve profile-first scheduler capacity — the single source for
-  // per-resource availability (legacy-shaped display fields are projected
-  // from authoritative profiles, never read from candidate columns).
-  const resolvedCapacity = await resolveSchedulerCapacity(prisma, projectId)
 
-  // Project duration in weeks
-  const planningWindow = computePlanningWindow(
-    project.timelineEntries,
-    project.startDate,
-    project.bufferWeeks ?? 0,
-    project.onboardingWeeks ?? 0,
-  )
-  const projectDurationWeeks = planningWindow.maxWeek ?? 0
+  // ── Effort aggregation (backlog-owned; runs before any planning-derived
+  // computation so the NEEDS_REPLAN branch below can serve effort/inputs
+  // without touching the capacity model). ──────────────────────────────────
 
   // Build lookup maps for timeline entries
   const featureEntryMap = new Map(project.timelineEntries.map(e => [e.featureId, e]))
@@ -222,6 +205,132 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       }
     }
   }
+
+  if (project.planningState === 'NEEDS_REPLAN') {
+    // Reset Planning discarded the capacity model. Serve the estimation and
+    // business inputs the user needs to replan — roles, counts, rates, effort
+    // rollups, named-resource identity — with NO planning-derived values:
+    // no capacity-plan materialisation, no profile/legacy projection, no
+    // scheduler resolution, no assignments, no commercial totals. The client
+    // shows the explicit "Planning needs attention" state instead of treating
+    // any of this as current planning.
+    const resourceRows = Array.from(resourceAgg.values())
+      .map(agg => {
+        const resourceType = resourceTypeById.get(agg.resourceTypeId)!
+        const dayRate = resourceType.dayRate ?? resourceType.globalType?.defaultDayRate ?? null
+        return {
+          resourceTypeId: resourceType.id,
+          name: resourceType.name,
+          category: resourceType.category,
+          count: resourceType.count,
+          hoursPerDay: agg.hoursPerDay,
+          dayRate,
+          totalHours: round2(agg.totalHours),
+          effortDays: round2(agg.totalDays),
+          totalDays: 0,
+          allocatedDays: 0,
+          // Display-only default matching the pre-existing no-profile row
+          // shape, so the capacity editor opens with the same 100% "As
+          // needed" draft a normal project gets. Nothing is persisted or
+          // fabricated: allocatedDays/totalDays/cost stay zero and the
+          // explicit planningState marker keeps the UI in quarantine.
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          derivedStartWeek: null,
+          derivedEndWeek: null,
+          estimatedCost: null,
+          epics: [],
+          namedResources: resourceType.namedResources.map(nr => ({
+            id: nr.id,
+            name: nr.name,
+            resourceTypeId: nr.resourceTypeId,
+            pricingModel: nr.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
+            allocationMode: 'EFFORT',
+            allocationPercent: 100,
+            allocationPct: 100,
+            allocationStartWeek: null,
+            allocationEndWeek: null,
+            startWeek: null,
+            endWeek: null,
+            allocatedDays: 0,
+            derivedStartWeek: null,
+            derivedEndWeek: null,
+            actualAllocatedDays: 0,
+            actualAllocationStartWeek: null,
+            actualAllocationEndWeek: null,
+            actualAllocatedWeeks: [],
+            actualAllocationSegments: [],
+            synthetic: false,
+            resourceIdentity: 'NAMED_PERSON' as const,
+          })),
+        }
+      })
+      .sort((a, b) => {
+        const indexOf = (cat: string) => {
+          const idx = CATEGORY_ORDER.indexOf(cat as ResourceCategory)
+          return idx === -1 ? CATEGORY_ORDER.length : idx
+        }
+        const catDiff = indexOf(a.category) - indexOf(b.category)
+        if (catDiff !== 0) return catDiff
+        return a.name.localeCompare(b.name)
+      })
+
+    const totalResourceHours = round2(resourceRows.reduce((sum, row) => sum + row.totalHours, 0))
+
+    res.json({
+      projectId,
+      planningState: 'NEEDS_REPLAN',
+      hoursPerDay: fallbackHoursPerDay,
+      projectDurationWeeks: 0,
+      bufferWeeks: project.bufferWeeks ?? 0,
+      onboardingWeeks: project.onboardingWeeks ?? 0,
+      resourceRows,
+      overheadRows: project.overheads.map(overhead => ({
+        overheadId: overhead.id,
+        name: overhead.name,
+        resourceTypeId: overhead.resourceTypeId,
+        resourceTypeName: overhead.resourceType?.name ?? null,
+        dayRate: overhead.resourceType?.dayRate ?? overhead.resourceType?.globalType?.defaultDayRate ?? null,
+        type: overhead.type,
+        value: overhead.value,
+        computedDays: 0,
+        estimatedCost: null,
+        requiredFTE: 0,
+        currentCount: overhead.resourceType?.count ?? null,
+      })),
+      summary: {
+        totalHours: totalResourceHours,
+        totalDays: 0,
+        totalCost: null,
+        hasCost: false,
+      },
+    })
+    return
+  }
+
+  // Materialize capacity plan for shared model consumption
+  const capacityPlanByRt = materializeCapacityPlanResources(
+    (project.capacityPlans?.[0] ?? null)?.periods ?? [],
+  )
+  // Build capacity-profile enrichment map (profile-first, fail-closed)
+  const { roleProfiles, namedResourceProfiles } = buildResourceCapacityProfileMap(
+    project as unknown as Parameters<typeof buildResourceCapacityProfileMap>[0],
+  )
+  // Resolve profile-first scheduler capacity — the single source for
+  // per-resource availability (legacy-shaped display fields are projected
+  // from authoritative profiles, never read from candidate columns).
+  const resolvedCapacity = await resolveSchedulerCapacity(prisma, projectId)
+
+  // Project duration in weeks
+  const planningWindow = computePlanningWindow(
+    project.timelineEntries,
+    project.startDate,
+    project.bufferWeeks ?? 0,
+    project.onboardingWeeks ?? 0,
+  )
+  const projectDurationWeeks = planningWindow.maxWeek ?? 0
 
   // ── Fallback weekly demand from shared model ──────────────────────
   // Build entries at story-level granularity to preserve story-level scheduling semantics.

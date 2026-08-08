@@ -362,6 +362,14 @@ import { login, createProject, createTestUser, createUserAndLogin, TEST_EMAIL, T
 
 ---
 
+### `planning-reset.spec.ts` — Planning reset & replan workflow (1 test — issue #449)
+
+| Test | Description |
+|------|-------------|
+| reset planning, replan via Resource Profile, and return to CURRENT | Creates a project, seeds a backlog via CSV, establishes an "As needed" capacity profile, runs Reset Planning with explicit confirmation, observes the "Planning needs attention" banner, verifies the backlog remains, replans through the Resource Profile capacity editor, completes replanning (project returns to CURRENT), and verifies Update Timeline works again |
+
+---
+
 ## Config Reference (`playwright.config.ts`)
 
 | Option | Value |

@@ -135,7 +135,7 @@ export async function buildSnapshot(
     fetchEpics(projectId, db),
     db.project.findUnique({
       where: { id: projectId },
-      select: { startDate: true, onboardingWeeks: true, bufferWeeks: true, hoursPerDay: true, weeklyDemandCache: true },
+      select: { startDate: true, onboardingWeeks: true, bufferWeeks: true, hoursPerDay: true, weeklyDemandCache: true, planningState: true },
     }),
     db.resourceType.findMany({
       where: { projectId },
@@ -218,6 +218,7 @@ export async function buildSnapshot(
         bufferWeeks: project.bufferWeeks,
         hoursPerDay: project.hoursPerDay,
         weeklyDemandCache: parseWeeklyDemandCache(project.weeklyDemandCache),
+        planningState: project.planningState,
       }
     : null
 
@@ -379,6 +380,13 @@ export async function restoreSnapshotCommonState(
                 ? Prisma.DbNull
                 : data.project.weeklyDemandCache,
             }
+          : {}),
+        // Issue #449: restore the explicit planning state only when the
+        // snapshot carries one. Pre-feature snapshots leave it untouched so
+        // rollback can never implicitly un-quarantine a NEEDS_REPLAN project
+        // (or quarantine a CURRENT one) from an older payload.
+        ...(data.project.planningState !== undefined
+          ? { planningState: data.project.planningState }
           : {}),
       },
     })
