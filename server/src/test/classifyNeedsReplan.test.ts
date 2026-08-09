@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { Prisma } from '@prisma/client'
 
 import {
   parseClassifyManifest,
@@ -20,6 +21,7 @@ import {
   ClassifyManifestError,
   ClassifyAbortError,
   ClassifyDriftError,
+  ClassifySerializationConflictError,
   type ClassifyManifest,
   type ClassifyDb,
 } from '../lib/classifyNeedsReplan.js'
@@ -50,7 +52,7 @@ interface FakeState {
  * Build a fake db/tx whose query methods serve the given state. The same
  * object serves as both the outer client and the transaction client.
  */
-function makeDb(state: FakeState) {
+function makeDb(state: FakeState, opts: { transactionError?: unknown } = {}) {
   const queries = {
     project: {
       findMany: vi.fn().mockResolvedValue(state.projects ?? []),
@@ -74,7 +76,12 @@ function makeDb(state: FakeState) {
   }
   const db = {
     ...queries,
-    $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(queries)),
+    $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const result = await fn(queries)
+      // Simulated commit-time failure (e.g. a serialization conflict).
+      if (opts.transactionError) throw opts.transactionError
+      return result
+    }),
   } as unknown as ClassifyDb
   return { db, queries }
 }
@@ -286,6 +293,8 @@ describe('classifyNeedsReplan', () => {
     expect(report.classifiedCount).toBe(2)
     expect(report.stateFingerprint).toMatch(/^[0-9a-f]{64}$/)
     expect(report.stateFingerprint).toBe(await computeClassificationFingerprint(db, manifest))
+    // Dry-run never opens a (Serializable or any other) transaction.
+    expect(db.$transaction).not.toHaveBeenCalled()
     expect(resetProjectPlanningWithinTransaction).not.toHaveBeenCalled()
   })
 
@@ -331,6 +340,60 @@ describe('classifyNeedsReplan', () => {
     // Every to-classify project goes through the same reset body.
     expect(resetProjectPlanningWithinTransaction).toHaveBeenCalledTimes(2)
     expect(vi.mocked(resetProjectPlanningWithinTransaction).mock.calls.map(c => c[1])).toEqual(['p1', 'p2'])
+  })
+
+  it('requests Serializable isolation for the destructive apply transaction', async () => {
+    const { db } = makeDb(defaultState)
+    const reviewed = await computeClassificationFingerprint(db, manifest)
+
+    await classifyNeedsReplan(db, manifest, {
+      apply: true,
+      expectedFingerprint: reviewed,
+    })
+
+    expect(db.$transaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      { isolationLevel: 'Serializable' },
+    )
+  })
+
+  it('maps a Prisma P2034 serialization conflict to the actionable fail-closed error without retry', async () => {
+    const conflict = new Prisma.PrismaClientKnownRequestError('Transaction failed', {
+      code: 'P2034',
+      clientVersion: '7.8.0',
+    })
+    const { db, queries } = makeDb(defaultState, { transactionError: conflict })
+    const reviewed = await computeClassificationFingerprint(db, manifest)
+
+    const attempt = classifyNeedsReplan(db, manifest, { apply: true, expectedFingerprint: reviewed })
+    await expect(attempt).rejects.toThrow(ClassifySerializationConflictError)
+    await expect(attempt).rejects.toThrow(/changed concurrently/)
+    // The apply attempt is invalidated — the destructive transaction is NEVER
+    // retried automatically with the stale reviewed fingerprint.
+    expect(db.$transaction).toHaveBeenCalledTimes(1)
+    expect(queries.project.update).not.toHaveBeenCalled()
+  })
+
+  it('maps a driver-level 40001 serialization conflict to the actionable fail-closed error', async () => {
+    const conflict = new Error('serialization_failure') as Error & { cause?: unknown }
+    conflict.cause = { originalCode: '40001' }
+    const { db } = makeDb(defaultState, { transactionError: conflict })
+    const reviewed = await computeClassificationFingerprint(db, manifest)
+
+    await expect(
+      classifyNeedsReplan(db, manifest, { apply: true, expectedFingerprint: reviewed }),
+    ).rejects.toThrow(ClassifySerializationConflictError)
+    expect(db.$transaction).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves unrelated transaction failures unmodified (no retry, no masking)', async () => {
+    const { db } = makeDb(defaultState, { transactionError: new Error('disk full') })
+    const reviewed = await computeClassificationFingerprint(db, manifest)
+
+    await expect(
+      classifyNeedsReplan(db, manifest, { apply: true, expectedFingerprint: reviewed }),
+    ).rejects.toThrow('disk full')
+    expect(db.$transaction).toHaveBeenCalledTimes(1)
   })
 
   it('skips already-NEEDS_REPLAN projects and still runs in one transaction', async () => {

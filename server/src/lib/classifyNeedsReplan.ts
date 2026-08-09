@@ -29,7 +29,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { Prisma, PrismaClient } from '@prisma/client'
+import { Prisma, type PrismaClient } from '@prisma/client'
 
 import { resetProjectPlanningWithinTransaction } from './resetProjectPlanning.js'
 
@@ -63,6 +63,41 @@ export class ClassifyDriftError extends ClassifyAbortError {
     )
     this.name = 'ClassifyDriftError'
   }
+}
+
+/**
+ * Raised when the Serializable classification transaction is aborted by a
+ * concurrent write to reset-relevant state (PostgreSQL serialization
+ * conflict). The transaction rolled back with zero committed writes and the
+ * apply attempt is invalidated — it is NEVER retried automatically, because
+ * automatic retry could reuse the stale reviewed fingerprint after the
+ * database changed.
+ */
+export class ClassifySerializationConflictError extends ClassifyAbortError {
+  constructor() {
+    super(
+      'Classification aborted because project planning state changed concurrently. ' +
+      'Rerun the dry-run and review the new fingerprint before retrying. Nothing was changed.',
+    )
+    this.name = 'ClassifySerializationConflictError'
+  }
+}
+
+/**
+ * Detect a PostgreSQL serialization failure surfaced by Prisma/adapter-pg:
+ * Prisma P2034 ("transaction failed due to a write conflict or deadlock") or
+ * the driver error cause with originalCode 40001 (serialization_failure).
+ * Mirrors the detection used by the Squad Planner apply path.
+ */
+export function isSerializationConflict(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+    return true
+  }
+  if (typeof err !== 'object' || err === null) return false
+  const cause = (err as { cause?: unknown }).cause
+  return typeof cause === 'object'
+    && cause !== null
+    && (cause as { originalCode?: unknown }).originalCode === '40001'
 }
 
 export interface ClassifyManifest {
@@ -328,31 +363,56 @@ export async function classifyNeedsReplan(
     }
     const expectedFingerprint: string = options.expectedFingerprint
 
-    // One atomic transaction for the complete reviewed set.
-    return db.$transaction(async tx => {
-      const stateFingerprint = await computeClassificationFingerprint(tx, manifest)
-      if (stateFingerprint !== expectedFingerprint) {
-        throw new ClassifyDriftError(expectedFingerprint, stateFingerprint)
-      }
-
-      const plan = await planClassification(tx, manifest)
-      if (!plan.completed) {
-        throw new ClassifyAbortError(
-          `Classification aborted: ${plan.notFoundCount} manifest project(s) no longer exist. ` +
-          'Re-review the manifest before retrying; nothing was changed.',
-        )
-      }
-
-      for (const entry of plan.entries) {
-        if (entry.status !== 'to-classify') continue
-        await resetProjectPlanningWithinTransaction(tx, entry.projectId)
-        if (options.afterProjectReset) {
-          await options.afterProjectReset(tx, entry.projectId)
+    // One atomic, SERIALIZABLE transaction for the complete reviewed set.
+    //
+    // Serializable isolation closes the review→write race: the fingerprint is
+    // computed inside this transaction, so any concurrent commit that changes
+    // reset-relevant state between the fingerprint reads and the destructive
+    // writes forces a serialization conflict at the transaction boundary and
+    // rolls the WHOLE batch back. A project changed after review can never be
+    // destructively reset on stale review evidence.
+    //
+    // The destructive classification transaction is invoked on the root
+    // client (the apply path is only ever entered with one); the dry-run and
+    // fingerprint helpers accept transaction clients too, but only the root
+    // client supports an explicit isolation level.
+    const batchClient = db as PrismaClient
+    try {
+      return await batchClient.$transaction(async tx => {
+        const stateFingerprint = await computeClassificationFingerprint(tx, manifest)
+        if (stateFingerprint !== expectedFingerprint) {
+          throw new ClassifyDriftError(expectedFingerprint, stateFingerprint)
         }
-      }
 
-      return { ...plan, stateFingerprint }
-    })
+        const plan = await planClassification(tx, manifest)
+        if (!plan.completed) {
+          throw new ClassifyAbortError(
+            `Classification aborted: ${plan.notFoundCount} manifest project(s) no longer exist. ` +
+            'Re-review the manifest before retrying; nothing was changed.',
+          )
+        }
+
+        for (const entry of plan.entries) {
+          if (entry.status !== 'to-classify') continue
+          await resetProjectPlanningWithinTransaction(tx, entry.projectId)
+          if (options.afterProjectReset) {
+            await options.afterProjectReset(tx, entry.projectId)
+          }
+        }
+
+        return { ...plan, stateFingerprint }
+      }, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      })
+    } catch (error) {
+      // Serialization conflict: the reviewed transaction raced a concurrent
+      // write and was rolled back with zero committed writes. Invalidate the
+      // apply attempt — never retry automatically with the stale fingerprint.
+      if (isSerializationConflict(error)) {
+        throw new ClassifySerializationConflictError()
+      }
+      throw error
+    }
   }
 
   // Dry run (default): read-only plan plus the reviewed-state fingerprint.

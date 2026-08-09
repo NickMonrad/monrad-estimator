@@ -34,7 +34,7 @@ import { PrismaClient } from '@prisma/client'
 import { app } from '../app.js'
 import { resetProjectPlanning } from '../lib/resetProjectPlanning.js'
 import { runProductionMigrationReadiness, formatReadinessReport } from '../lib/productionMigrationReadiness.js'
-import { classifyNeedsReplan, parseClassifyManifest, ClassifyAbortError } from '../lib/classifyNeedsReplan.js'
+import { classifyNeedsReplan, parseClassifyManifest, ClassifyAbortError, type ClassificationReport } from '../lib/classifyNeedsReplan.js'
 // Override the global prisma mock so route handlers use real PostgreSQL.
 vi.mock('../lib/prisma.js', async importOriginal => await importOriginal())
 
@@ -804,5 +804,80 @@ describeIf('Reviewed production maintenance classification (issue #449 / #404)',
       expect(await prisma.task.count({ where: { userStory: { feature: { epic: { projectId: f.projectId } } } } })).toBeGreaterThan(0)
       expect(await prisma.projectDiscount.count({ where: { projectId: f.projectId } })).toBe(1)
     }
+  })
+
+  it('Serializable isolation rolls the whole batch back when reset-relevant state changes concurrently', async () => {
+    const f1 = await createFullyPlannedProject()
+    const f2 = await createFullyPlannedProject()
+    const manifest = parseClassifyManifest({ projectIds: [f1.projectId, f2.projectId] })
+
+    const dry = await classifyNeedsReplan(prisma, manifest)
+
+    // A second real connection mutates state while the apply is in flight.
+    const prisma2 = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+    })
+    await prisma2.$connect()
+
+    // Narrow test seam: hold the batch AFTER the fingerprint reads and the
+    // FIRST project's (uncommitted) reset, BEFORE the second project's
+    // destructive writes. No production synchronization code is involved.
+    let seamReached: () => void = () => {}
+    const seamReachedPromise = new Promise<void>(resolve => { seamReached = resolve })
+    let release: () => void = () => {}
+    const gate = new Promise<void>(resolve => { release = resolve })
+
+    let applyPromise: Promise<ClassificationReport> | null = null
+    try {
+      applyPromise = classifyNeedsReplan(prisma, manifest, {
+        apply: true,
+        expectedFingerprint: dry.stateFingerprint,
+        afterProjectReset: async (_tx, projectId) => {
+          if (projectId === f1.projectId) {
+            seamReached()
+            await gate
+          }
+        },
+      })
+
+      // Wait for the apply to be paused at the seam, then commit a concurrent
+      // change to reset-relevant state of the SECOND project (a segment row
+      // the reviewed fingerprint covered).
+      await seamReachedPromise
+      const seg = await prisma2.capacitySegment.findFirst({
+        where: { capacityProfile: { projectId: f2.projectId } },
+      })
+      expect(seg).not.toBeNull()
+      await prisma2.capacitySegment.update({
+        where: { id: seg!.id },
+        data: { capacityPercent: 77 },
+      })
+    } finally {
+      release()
+      if (applyPromise) {
+        // The apply must fail with the serialization-conflict mapping, not
+        // commit the stale review: the concurrent write was never part of the
+        // reviewed fingerprint and must not be destroyed.
+        await expect(applyPromise).rejects.toThrow(/changed concurrently/)
+      }
+      await prisma2.$disconnect()
+    }
+
+    // Whole batch rolled back: neither project became NEEDS_REPLAN…
+    const state1 = await prisma.project.findUnique({ where: { id: f1.projectId } })
+    expect(state1!.planningState).toBe('CURRENT')
+    const state2 = await prisma.project.findUnique({ where: { id: f2.projectId } })
+    expect(state2!.planningState).toBe('CURRENT')
+
+    // …no partial deletion of prior planning state…
+    expect(await prisma.capacityProfile.count({ where: { projectId: f1.projectId } })).toBe(3)
+    expect(await prisma.capacityPlan.count({ where: { projectId: f1.projectId } })).toBe(1)
+    expect(await prisma.capacityProfile.count({ where: { projectId: f2.projectId } })).toBe(3)
+
+    // …and the concurrently committed mutation survived.
+    const segAfter = await prisma.capacitySegment.findFirst({
+      where: { capacityProfile: { projectId: f2.projectId } },
+    })
+    expect(segAfter!.capacityPercent).toBe(77)
   })
 })
