@@ -235,4 +235,96 @@ describe('accessible surfaces while NEEDS_REPLAN', () => {
     expect(res.body.summary.hasCost).toBe(false)
     expect(res.body.summary.totalDays).toBe(0)
   })
+
+  it('GET /resource-profile exposes preserved zero-demand roles while NEEDS_REPLAN', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...NEEDS_REPLAN_PROJECT,
+      resourceTypes: [{
+        id: 'rt-1',
+        name: 'Engineer',
+        category: 'ENGINEERING',
+        count: 2,
+        hoursPerDay: 7.6,
+        dayRate: 500,
+        globalType: null,
+        namedResources: [{
+          id: 'nr-1',
+          resourceTypeId: 'rt-1',
+          name: 'Alice',
+          pricingModel: 'ACTUAL_DAYS',
+        }],
+      }, {
+        // Preserved role with NO task demand (no tasks reference it).
+        id: 'rt-2',
+        name: 'Designer',
+        category: 'DESIGN',
+        count: 1,
+        hoursPerDay: 7.6,
+        dayRate: 400,
+        globalType: null,
+        namedResources: [],
+      }],
+      epics: [{
+        id: 'epic-1',
+        name: 'Epic 1',
+        order: 0,
+        isActive: true,
+        features: [{
+          id: 'feat-1',
+          name: 'Feature 1',
+          order: 0,
+          isActive: true,
+          userStories: [{
+            id: 'story-1',
+            name: 'Story 1',
+            order: 0,
+            isActive: true,
+            tasks: [{
+              id: 'task-1',
+              name: 'Task 1',
+              hoursEffort: 10,
+              durationDays: null,
+              resourceTypeId: 'rt-1',
+              resourceType: { id: 'rt-1', name: 'Engineer', hoursPerDay: 7.6 },
+            }],
+          }],
+        }],
+      }],
+      overheads: [],
+      timelineEntries: [],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+      capacityProfiles: [],
+    } as never)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.planningState).toBe('NEEDS_REPLAN')
+    // Every preserved role is visible — including the zero-demand one — so
+    // the user can create its profile before completing replanning.
+    expect(res.body.resourceRows).toHaveLength(2)
+    const zeroRow = res.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === 'rt-2')
+    expect(zeroRow).toBeDefined()
+    // Real identity and non-planning metadata…
+    expect(zeroRow.name).toBe('Designer')
+    expect(zeroRow.count).toBe(1)
+    expect(zeroRow.hoursPerDay).toBe(7.6)
+    expect(zeroRow.dayRate).toBe(400)
+    // …zero effort/demand and NO fabricated capacity.
+    expect(zeroRow.totalHours).toBe(0)
+    expect(zeroRow.effortDays).toBe(0)
+    expect(zeroRow.totalDays).toBe(0)
+    expect(zeroRow.allocatedDays).toBe(0)
+    expect(zeroRow.estimatedCost).toBeNull()
+    // Editor-usable default shape (same draft a normal project gets).
+    expect(zeroRow.allocationMode).toBe('EFFORT')
+    expect(zeroRow.allocationPercent).toBe(100)
+    expect(zeroRow.capacityProfile).toBeUndefined()
+    // A named resource on the zero-demand role keeps its identity.
+    const rt2Named = res.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === 'rt-2')
+    expect(rt2Named.namedResources).toEqual([])
+  })
 })

@@ -267,7 +267,62 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           })),
         }
       })
-      .sort((a, b) => {
+
+    // Preserved zero-demand roles: Reset Planning keeps every ResourceType,
+    // and canonical completion requires a profile for each role without
+    // named-resource coverage. While NEEDS_REPLAN, every preserved role must
+    // therefore be visible in the replanning surface — including roles with
+    // no active task demand — so the user can create their chosen profile
+    // through the normal capacity editor. Identity and non-planning metadata
+    // are kept; effort/demand are zero and no capacity is fabricated.
+    for (const resourceType of project.resourceTypes) {
+      if (resourceAgg.has(resourceType.id)) continue
+      resourceRows.push({
+        resourceTypeId: resourceType.id,
+        name: resourceType.name,
+        category: resourceType.category,
+        count: resourceType.count,
+        hoursPerDay: resourceType.hoursPerDay ?? fallbackHoursPerDay,
+        dayRate: resourceType.dayRate ?? resourceType.globalType?.defaultDayRate ?? null,
+        totalHours: 0,
+        effortDays: 0,
+        totalDays: 0,
+        allocatedDays: 0,
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        derivedStartWeek: null,
+        derivedEndWeek: null,
+        estimatedCost: null,
+        epics: [],
+        namedResources: resourceType.namedResources.map(nr => ({
+          id: nr.id,
+          name: nr.name,
+          resourceTypeId: nr.resourceTypeId,
+          pricingModel: nr.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationPct: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          startWeek: null,
+          endWeek: null,
+          allocatedDays: 0,
+          derivedStartWeek: null,
+          derivedEndWeek: null,
+          actualAllocatedDays: 0,
+          actualAllocationStartWeek: null,
+          actualAllocationEndWeek: null,
+          actualAllocatedWeeks: [],
+          actualAllocationSegments: [],
+          synthetic: false,
+          resourceIdentity: 'NAMED_PERSON' as const,
+        })),
+      })
+    }
+
+    resourceRows.sort((a, b) => {
         const indexOf = (cat: string) => {
           const idx = CATEGORY_ORDER.indexOf(cat as ResourceCategory)
           return idx === -1 ? CATEGORY_ORDER.length : idx

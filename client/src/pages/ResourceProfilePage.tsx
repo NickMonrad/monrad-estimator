@@ -78,20 +78,30 @@ export default function ResourceProfilePage() {
             )}
             <button
               onClick={handleExportProfile}
-              disabled={!profile}
+              disabled={!profile || needsReplan}
+              title={needsReplan ? 'Replan the project before exporting planning data.' : undefined}
+              aria-disabled={needsReplan || !profile}
               className="border border-gray-300 text-gray-700 dark:text-gray-300 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
             >
               ⬇ Export Resource Profile
             </button>
             <button
               onClick={handleExportFull}
-              disabled={!profile}
+              disabled={!profile || needsReplan}
+              title={needsReplan ? 'Replan the project before exporting planning data.' : undefined}
+              aria-disabled={needsReplan || !profile}
               className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50"
             >
               ⬇ Export Full Project
             </button>
           </div>
         </div>
+
+        {needsReplan && (
+          <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-800 dark:text-amber-300" role="status" data-testid="export-quarantine-notice">
+            Exports are paused while planning is not current. Replan the project before exporting planning data.
+          </div>
+        )}
 
         {resetFeedback && (
           <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-3 text-sm text-blue-800 dark:text-blue-300" role="status" data-testid="reset-feedback">

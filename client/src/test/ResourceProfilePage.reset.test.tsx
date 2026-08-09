@@ -154,6 +154,29 @@ describe('Reset Planning on the Resource Profile page', () => {
     expect(screen.getByText('Commercial totals need a current plan')).toBeInTheDocument()
     expect(screen.getByText(/Replan from the existing backlog first/i)).toBeInTheDocument()
   })
+
+  it('keeps export buttons enabled for a CURRENT project', () => {
+    vi.mocked(useResourceProfile).mockReturnValue(baseState() as never)
+    renderPage()
+    expect(screen.getByRole('button', { name: '⬇ Export Resource Profile' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '⬇ Export Full Project' })).toBeEnabled()
+    expect(screen.queryByTestId('export-quarantine-notice')).not.toBeInTheDocument()
+  })
+
+  it('disables planning exports with replan guidance while NEEDS_REPLAN', () => {
+    vi.mocked(useResourceProfile).mockReturnValue(
+      baseState({ project: { id: 'project-1', name: 'Alpha', planningState: 'NEEDS_REPLAN' }, profile: undefined }) as never,
+    )
+    renderPage()
+
+    const exportProfile = screen.getByRole('button', { name: '⬇ Export Resource Profile' })
+    const exportFull = screen.getByRole('button', { name: '⬇ Export Full Project' })
+    expect(exportProfile).toBeDisabled()
+    expect(exportFull).toBeDisabled()
+    expect(exportProfile).toHaveAttribute('title', 'Replan the project before exporting planning data.')
+    expect(exportFull).toHaveAttribute('title', 'Replan the project before exporting planning data.')
+    expect(screen.getByTestId('export-quarantine-notice')).toHaveTextContent(/Replan the project before exporting planning data/i)
+  })
 })
 
 // Keep the import used for type-level re-export parity.

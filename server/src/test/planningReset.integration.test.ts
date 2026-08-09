@@ -34,7 +34,7 @@ import { PrismaClient } from '@prisma/client'
 import { app } from '../app.js'
 import { resetProjectPlanning } from '../lib/resetProjectPlanning.js'
 import { runProductionMigrationReadiness, formatReadinessReport } from '../lib/productionMigrationReadiness.js'
-import { classifyNeedsReplan, parseClassifyManifest, ClassifyAbortError, type ClassificationReport } from '../lib/classifyNeedsReplan.js'
+import { classifyNeedsReplan, parseClassifyManifest, computeClassificationFingerprint, ClassifyAbortError, type ClassificationReport } from '../lib/classifyNeedsReplan.js'
 // Override the global prisma mock so route handlers use real PostgreSQL.
 vi.mock('../lib/prisma.js', async importOriginal => await importOriginal())
 
@@ -423,6 +423,94 @@ describeIf('Reset Planning — full boundary (issue #449)', () => {
     expect(after.nr.length).toBe(before.nr.length)
     expect(after.project!.weeklyDemandCache).toEqual(before.project!.weeklyDemandCache)
   })
+
+  it('removes proven legacy Squad Planner placeholders and preserves ambiguous ones', async () => {
+    const f = await createFullyPlannedProject()
+
+    // A proven legacy planner placeholder: NAMED_PERSON profile with the
+    // SQUAD_PLANNER + CAPACITY_PROFILE markers (isLegacyPlannerProfile).
+    const legacyRt = await prisma.resourceType.create({
+      data: {
+        projectId: f.projectId,
+        name: 'Legacy Planner Role',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: 7.6,
+      },
+    })
+    const legacyNr = await prisma.namedResource.create({
+      data: { resourceTypeId: legacyRt.id, name: 'Legacy Planner Person', pricingModel: 'ACTUAL_DAYS' },
+    })
+    const legacyProfile = await prisma.capacityProfile.create({
+      data: {
+        projectId: f.projectId,
+        resourceTypeId: null,
+        namedResourceId: legacyNr.id,
+        ownerKind: 'NAMED_PERSON',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+      },
+    })
+    await prisma.capacitySegment.create({
+      data: {
+        capacityProfileId: legacyProfile.id,
+        startWeek: 0,
+        endWeek: 10,
+        capacityPercent: 100,
+        source: 'SQUAD_PLANNER',
+      },
+    })
+
+    // An ambiguous row that must be preserved: a NAMED_PERSON profile that
+    // does NOT satisfy the safe planner-provenance rule (MANUAL source), i.e.
+    // a real user-authored resource.
+    const ambiguousRt = await prisma.resourceType.create({
+      data: {
+        projectId: f.projectId,
+        name: 'Ambiguous Role',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: 7.6,
+      },
+    })
+    const ambiguousNr = await prisma.namedResource.create({
+      data: { resourceTypeId: ambiguousRt.id, name: 'Bob', pricingModel: 'PRO_RATA' },
+    })
+    await prisma.capacityProfile.create({
+      data: {
+        projectId: f.projectId,
+        namedResourceId: ambiguousNr.id,
+        ownerKind: 'NAMED_PERSON',
+        source: 'MANUAL',
+        planningBasis: 'WHOLE_PROJECT_ALLOCATION',
+        defaultPercent: 100,
+      },
+    })
+
+    await resetProjectPlanning(prisma, f.projectId)
+
+    const nr = await prisma.namedResource.findMany({ where: { resourceType: { projectId: f.projectId } } })
+    const nrIds = nr.map(n => n.id)
+    // PLANNED_RESOURCE placeholder removed (existing behaviour)…
+    expect(nrIds).not.toContain(f.plannedNrId)
+    // …and the proven LEGACY planner placeholder is removed too.
+    expect(nrIds).not.toContain(legacyNr.id)
+    // Real user-authored NAMED_PERSON resources survive with identity intact,
+    // including the ambiguous row and the fixture's ordinary resource.
+    const preserved = [f.userNrId, ambiguousNr.id]
+    for (const id of preserved) {
+      const row = nr.find(n => n.id === id)
+      expect(row).toBeDefined()
+    }
+    const alice = nr.find(n => n.id === f.userNrId)!
+    expect(alice.pricingModel).toBe('PRO_RATA')
+    const bob = nr.find(n => n.id === ambiguousNr.id)!
+    expect(bob.pricingModel).toBe('PRO_RATA')
+    expect(bob.resourceTypeId).toBe(ambiguousRt.id)
+  })
 })
 
 describeIf('NEEDS_REPLAN quarantine (issue #449)', () => {
@@ -447,6 +535,18 @@ describeIf('NEEDS_REPLAN quarantine (issue #449)', () => {
 
   it('NEEDS_REPLAN projects stay accessible with expected missing planning state', async () => {
     const f = await createFullyPlannedProject()
+    // A preserved role with NO task demand: the replanning surface must still
+    // expose it so its profile can be created before completion.
+    const zeroDemandRt = await prisma.resourceType.create({
+      data: {
+        projectId: f.projectId,
+        name: 'Designer',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: 7.6,
+        dayRate: 400,
+      },
+    })
     await request(app)
       .post(`/api/projects/${f.projectId}/planning/reset`)
       .set('Authorization', authHeader)
@@ -465,9 +565,25 @@ describeIf('NEEDS_REPLAN quarantine (issue #449)', () => {
       .set('Authorization', authHeader)
     expect(rp.status).toBe(200)
     expect(rp.body.planningState).toBe('NEEDS_REPLAN')
-    expect(rp.body.resourceRows[0].totalHours).toBe(16)
+    const demandRow = rp.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === f.rtId)
+    expect(demandRow.totalHours).toBe(16)
     expect(rp.body.summary.totalCost).toBeNull()
-    expect(rp.body.resourceRows[0].namedResources).toHaveLength(1) // Alice preserved
+    expect(demandRow.namedResources).toHaveLength(1) // Alice preserved
+
+    // Every preserved role is visible, including the zero-demand one.
+    const rowIds = rp.body.resourceRows.map((r: { resourceTypeId: string }) => r.resourceTypeId)
+    expect(rowIds).toContain(f.rtId)
+    expect(rowIds).toContain(zeroDemandRt.id)
+    const zeroRow = rp.body.resourceRows.find((r: { resourceTypeId: string }) => r.resourceTypeId === zeroDemandRt.id)
+    // Real identity, zero demand, no fabricated capacity.
+    expect(zeroRow.name).toBe('Designer')
+    expect(zeroRow.count).toBe(1)
+    expect(zeroRow.dayRate).toBe(400)
+    expect(zeroRow.totalHours).toBe(0)
+    expect(zeroRow.effortDays).toBe(0)
+    expect(zeroRow.totalDays).toBe(0)
+    expect(zeroRow.allocatedDays).toBe(0)
+    expect(zeroRow.estimatedCost).toBeNull()
 
     // Timeline is explicitly empty, never derived from stale state.
     const tl = await request(app)
@@ -804,6 +920,70 @@ describeIf('Reviewed production maintenance classification (issue #449 / #404)',
       expect(await prisma.task.count({ where: { userStory: { feature: { epic: { projectId: f.projectId } } } } })).toBeGreaterThan(0)
       expect(await prisma.projectDiscount.count({ where: { projectId: f.projectId } })).toBe(1)
     }
+  })
+
+  it('dry-run report and fingerprint come from one consistent snapshot', async () => {
+    const f = await createFullyPlannedProject()
+    const manifest = parseClassifyManifest({ projectIds: [f.projectId] })
+
+    // The project is already NEEDS_REPLAN: the dry run's classification must
+    // describe that state.
+    await prisma.project.update({
+      where: { id: f.projectId },
+      data: { planningState: 'NEEDS_REPLAN' },
+    })
+
+    // A second real connection flips reset-relevant state to CURRENT while
+    // the dry-run transaction is open, between the classification read and
+    // the fingerprint read. Without one consistent snapshot the fingerprint
+    // would describe the NEW state while the report describes the OLD one.
+    const prisma2 = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+    })
+    await prisma2.$connect()
+
+    let seamReached: () => void = () => {}
+    const seamReachedPromise = new Promise<void>(resolve => { seamReached = resolve })
+    let release: () => void = () => {}
+    const gate = new Promise<void>(resolve => { release = resolve })
+
+    const promise = classifyNeedsReplan(prisma, manifest, {
+      afterPlanRead: async () => {
+        seamReached()
+        await gate
+      },
+    })
+    await seamReachedPromise
+    await prisma2.project.update({
+      where: { id: f.projectId },
+      data: { planningState: 'CURRENT' },
+    })
+    release()
+
+    let report: ClassificationReport
+    try {
+      report = await promise
+    } finally {
+      await prisma2.$disconnect()
+    }
+
+    // The report saw NEEDS_REPLAN (snapshot taken before the concurrent flip).
+    expect(report.alreadyCount).toBe(1)
+    expect(report.stateFingerprint).toMatch(/^[0-9a-f]{64}$/)
+    // Zero writes: the flip is the ONLY state change.
+    expect((await prisma.project.findUnique({ where: { id: f.projectId } }))!.planningState).toBe('CURRENT')
+
+    // The fingerprint describes the SAME snapshot as the report: it matches a
+    // fingerprint over the state as read (NEEDS_REPLAN), and differs from the
+    // post-commit state (CURRENT).
+    const freshNow = await computeClassificationFingerprint(prisma, manifest)
+    expect(report.stateFingerprint).not.toBe(freshNow)
+    await prisma.project.update({
+      where: { id: f.projectId },
+      data: { planningState: 'NEEDS_REPLAN' },
+    })
+    const snapshotStateFingerprint = await computeClassificationFingerprint(prisma, manifest)
+    expect(report.stateFingerprint).toBe(snapshotStateFingerprint)
   })
 
   it('Serializable isolation rolls the whole batch back when reset-relevant state changes concurrently', async () => {

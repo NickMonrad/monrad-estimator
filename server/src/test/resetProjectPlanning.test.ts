@@ -70,25 +70,61 @@ describe('resetProjectPlanning', () => {
     expect(calls.some(c => c.op === 'epic.deleteMany')).toBe(false)
   })
 
-  it('deletes only NamedResources whose provenance is a PLANNED_RESOURCE profile', async () => {
+  it('deletes NamedResources with PLANNED_RESOURCE or proven legacy planner provenance', async () => {
     const { tx } = makeTx()
     tx.project.findUnique.mockResolvedValue(CURRENT_PROJECT)
     tx.capacityProfile.findMany.mockResolvedValue([
-      { namedResourceId: 'nr-planned-1' },
-      { namedResourceId: 'nr-planned-2' },
-      { namedResourceId: 'nr-planned-2' }, // duplicate → deduped
+      // PLANNED_RESOURCE provenance (Squad Planner apply writes these).
+      { namedResourceId: 'nr-planned-1', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+      { namedResourceId: 'nr-planned-2', ownerKind: 'PLANNED_RESOURCE', source: 'MANUAL', planningBasis: 'DEMAND_FOLLOWING' },
+      // Legacy proven placeholder form: NAMED_PERSON + SQUAD_PLANNER +
+      // CAPACITY_PROFILE (isLegacyPlannerProfile).
+      { namedResourceId: 'nr-legacy-1', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+      { namedResourceId: 'nr-legacy-2', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+      // Ambiguous / real user rows: do NOT match either provenance rule.
+      { namedResourceId: 'nr-user-1', ownerKind: 'NAMED_PERSON', source: 'MANUAL', planningBasis: 'WHOLE_PROJECT_ALLOCATION' },
+      { namedResourceId: 'nr-user-2', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'DEMAND_FOLLOWING' },
       { namedResourceId: null },
     ])
 
     await resetProjectPlanning(makeDb(tx), 'proj-1')
 
     expect(tx.capacityProfile.findMany).toHaveBeenCalledWith({
-      where: { projectId: 'proj-1', ownerKind: 'PLANNED_RESOURCE' },
-      select: { namedResourceId: true },
+      where: {
+        projectId: 'proj-1',
+        OR: [
+          { ownerKind: 'PLANNED_RESOURCE' },
+          {
+            ownerKind: 'NAMED_PERSON',
+            source: 'SQUAD_PLANNER',
+            planningBasis: 'CAPACITY_PROFILE',
+          },
+        ],
+      },
+      select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
     })
     expect(tx.namedResource.deleteMany).toHaveBeenCalledWith({
       where: {
-        id: { in: ['nr-planned-1', 'nr-planned-2'] },
+        id: { in: ['nr-planned-1', 'nr-planned-2', 'nr-legacy-1', 'nr-legacy-2'] },
+        resourceType: { projectId: 'proj-1' },
+      },
+    })
+  })
+
+  it('removes a legacy planner placeholder while preserving an ambiguous SQUAD_PLANNER row', async () => {
+    const { tx } = makeTx()
+    tx.project.findUnique.mockResolvedValue(CURRENT_PROJECT)
+    tx.capacityProfile.findMany.mockResolvedValue([
+      { namedResourceId: 'nr-legacy', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
+      // SQUAD_PLANNER source alone is NOT the proven legacy form — preserved.
+      { namedResourceId: 'nr-squad-demand', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', planningBasis: 'DEMAND_FOLLOWING' },
+    ])
+
+    await resetProjectPlanning(makeDb(tx), 'proj-1')
+
+    expect(tx.namedResource.deleteMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: ['nr-legacy'] },
         resourceType: { projectId: 'proj-1' },
       },
     })

@@ -52,7 +52,7 @@ Prisma transaction. Any failure rolls the whole reset back.
 | `CapacityPlan` / `CapacityPlanPeriod` / `CapacityPlanEntry` | Planning inputs/outputs |
 | `TimelineEntry` / `StoryTimelineEntry` (generated and manual) | Generated schedule output; Timeline/Planning owns manual overrides as planning state |
 | `Project.weeklyDemandCache` | Derived planning cache |
-| NamedResource rows with a `PLANNED_RESOURCE` profile | Proven planner-generated placeholders: Squad Planner's `findOrCreatePlannedResources` writes those rows and marks them with a `PLANNED_RESOURCE` profile; user-authored named resources always carry `NAMED_PERSON` profiles |
+| NamedResource rows with proven planner provenance | Proven planner-generated placeholders, matched ONLY by exact provenance markers: (a) a `CapacityProfile` with `ownerKind = PLANNED_RESOURCE` (what Squad Planner's `findOrCreatePlannedResources` writes), or (b) the established legacy planner form `NAMED_PERSON` + `SQUAD_PLANNER` + `CAPACITY_PROFILE` (`isLegacyPlannerProfile` — the same safe provenance rule the Squad Planner adoption path uses). User-authored named resources always carry `NAMED_PERSON` profiles outside those exact markers |
 | `Project.planningState` → `NEEDS_REPLAN` | Explicit quarantine |
 
 ### Preserved (never touched)
@@ -144,6 +144,19 @@ historical timeline viewer is out of scope for this issue.
   runs the completion validation; on success the project returns to `CURRENT`; on
   `REPLAN_INCOMPLETE` the actionable findings are shown inline with a link into
   Resource Profile.
+- **Zero-demand roles stay visible while NEEDS_REPLAN.** Reset preserves every
+  ResourceType, and canonical completion requires a profile per preserved role.
+  While `NEEDS_REPLAN` the Resource Profile surface therefore exposes EVERY
+  preserved role — including roles with no task demand — with real identity and
+  non-planning metadata, zero effort/demand, and no fabricated capacity, editable
+  through the existing capacity-profile editor. The client's normal
+  zero-demand-row filtering is suspended only while `NEEDS_REPLAN`; `CURRENT`
+  behaviour is unchanged.
+- **Planning exports are quarantined.** Export Resource Profile and Export Full
+  Project are disabled while `NEEDS_REPLAN` with the guidance "Replan the project
+  before exporting planning data." (the timeline CSV endpoint inside the full
+  export is additionally protected by the server-side `REPLAN_REQUIRED` guard).
+  `CURRENT` export is unchanged.
 - No planning option is automatically selected because of migration history; the
   user picks the approach (As needed, fixed whole project, fixed selected weeks,
   manually shaped, Squad Planner) in the existing surfaces.
@@ -170,25 +183,36 @@ npx tsx src/scripts/classifyNeedsReplan.ts --manifest manifest.json --apply \
   never invented selection rules on production.
 - Dry-run by default; `--apply` required to write. Every dry-run prints
   `stateFingerprint: <sha256>`.
+- **Dry-run snapshot consistency.** The classification entries/counts AND the
+  fingerprint are generated inside ONE Prisma transaction at repeatable-read
+  isolation, so the report and the reviewed fingerprint always describe the same
+  database snapshot. The dry run performs zero writes (the transaction is
+  nominally read-write only because Prisma has no read-only transaction option).
+  A concurrent change cannot produce a report whose entries describe one state
+  and whose fingerprint describes another.
 - **Reviewed-state fingerprint.** The fingerprint is a deterministic SHA-256 over
   exactly the reset-relevant state of the manifest set: manifest project IDs and
   existence, `planningState`, `weeklyDemandCache`, `CapacityProfile`
   ownership/provenance fields, `CapacitySegment`s, `CapacityPlan`/period/entry
   rows, `TimelineEntry`/`StoryTimelineEntry` rows, and the `NamedResource` identity
-  linkage that (with profile ownerKind) determines which rows are proven
-  `PLANNED_RESOURCE` planner artefacts. Ordering is canonicalised (sorted IDs and
-  rows, sorted JSON object keys), so unchanged state always yields the same
-  fingerprint. Unrelated backlog/business fields are never included.
+  linkage that (with profile ownerKind + the legacy `isLegacyPlannerProfile` form)
+  determines which rows are proven planner artefacts. Ordering is canonicalised
+  (sorted IDs and rows, sorted JSON object keys), so unchanged state always yields
+  the same fingerprint. Unrelated backlog/business fields are never included.
 - **Apply contract.** `--apply` REQUIRES the reviewed fingerprint
   (`--expected-fingerprint <sha256>` from a dry-run on unchanged state). The
   fingerprint is recomputed INSIDE the apply transaction immediately before any
   write; any mismatch aborts with zero writes and an explicit drift error telling
   the operator to rerun the dry-run and review the new state. A project changed
   after review can never be destructively reset on stale evidence.
-- **Atomic batch.** The complete manifest apply runs in ONE Prisma transaction:
-  either every to-classify project is reset (via the same reset transaction body
-  the product uses) or none is. A failure on any project rolls the whole batch
-  back — no partial classification.
+- **Atomic batch, Serializable isolation.** The complete manifest apply runs in
+  ONE Prisma transaction at SERIALIZABLE isolation: either every to-classify
+  project is reset (via the same reset transaction body the product uses) or none
+  is. A failure on any project rolls the whole batch back — no partial
+  classification. A serialization conflict (concurrent reset-relevant write
+  between review and apply) aborts with a typed error and is NEVER retried
+  automatically with the stale reviewed fingerprint — the operator reruns the
+  dry-run and reviews the new fingerprint.
 - **Idempotence.** Already-`NEEDS_REPLAN` projects are skipped, but only when that
   state is part of the reviewed fingerprint; the drift check still refuses every
   other unexpected change.

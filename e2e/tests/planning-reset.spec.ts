@@ -2,18 +2,21 @@
  * planning-reset.spec.ts — Targeted E2E flow for the Reset Planning /
  * Replan project workflow (issue #449):
  *
- *   1. Open a valid project with backlog and an established capacity plan.
+ *   1. Open a valid project with backlog and an established capacity plan
+ *      (the project carries both a demand-bearing role and preserved
+ *      zero-demand roles — no role is deleted anywhere in this flow).
  *   2. Reset planning (with confirmation).
  *   3. Observe "Planning needs attention".
  *   4. Verify the backlog remains.
  *   5. Enter the supported replanning path (Resource Profile).
- *   6. Establish new capacity inputs ("As needed" / demand-following).
+ *   6. Establish new capacity inputs ("As needed" / demand-following) for
+ *      EVERY preserved role, including the zero-demand ones.
  *   7. Complete replanning → project returns to CURRENT.
  *   8. Update Timeline works again.
  */
 
-import { test, expect } from '@playwright/test'
-import { login, createProject, quickSchedule, API_BASE } from './helpers'
+import { test, expect, type Page } from '@playwright/test'
+import { login, createProject, quickSchedule } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -26,7 +29,7 @@ const CSV_CONTENT = [
   'Task,Platform Build,Core API,API Design,Design endpoints,,Tech Lead,24,3,,,,,',
 ].join('\n')
 
-async function seedBacklogViaCsv(page: import('@playwright/test').Page) {
+async function seedBacklogViaCsv(page: Page) {
   await page.getByRole('button', { name: /backlog/i }).click()
   await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
 
@@ -42,33 +45,25 @@ async function seedBacklogViaCsv(page: import('@playwright/test').Page) {
 }
 
 /**
- * New projects are seeded with every global resource type. The canonical
- * completion rule requires a ROLE profile per role, and the Resource Profile
- * surface only renders roles that carry demand — so remove the roles that
- * have no tasks (a supported planning action) and keep the role the backlog
- * uses. This mirrors what a user shaping a replan does.
+ * Open the capacity profile editor for EVERY role row and save "As needed".
+ * While NEEDS_REPLAN the Resource Profile exposes every preserved role —
+ * including zero-demand roles — so this creates the user's chosen profile
+ * for each of them. Rows are iterated by index (the row list keeps its
+ * order across the refetch after each save; `.first()` would re-target the
+ * same row forever because every editable row shares the same button title).
  */
-async function keepOnlyBacklogRole(page: import('@playwright/test').Page, projectId: string, roleName: string) {
-  const token = await page.evaluate(() => localStorage.getItem('token'))
-  const auth = { Authorization: `Bearer ${token}` }
-  const res = await page.request.get(`${API_BASE}/api/projects/${projectId}/resource-types`, { headers: auth })
-  const resourceTypes: Array<{ id: string; name: string }> = await res.json()
-  for (const rt of resourceTypes) {
-    if (rt.name !== roleName) {
-      await page.request.delete(`${API_BASE}/api/projects/${projectId}/resource-types/${rt.id}`, { headers: auth })
-    }
+async function setAllRoleCapacitiesAsNeeded(page: Page) {
+  const rows = page.locator('tr[data-testid^="resource-profile-row-"]')
+  const rowCount = await rows.count()
+  for (let i = 0; i < rowCount; i++) {
+    const editButton = rows.nth(i).locator('button[title="Click to edit capacity profile"]')
+    await editButton.waitFor({ state: 'visible', timeout: 10_000 })
+    await editButton.click()
+    await expect(page.getByTestId('capacity-profile-editor')).toBeVisible({ timeout: 8_000 })
+    await page.locator('#cp-planning-basis').selectOption('demandFollowing')
+    await page.getByTestId('cp-save-btn').click()
+    await expect(page.getByTestId('capacity-profile-editor')).not.toBeVisible({ timeout: 10_000 })
   }
-}
-
-/** Open the capacity profile editor for the first role row and save "As needed". */
-async function setRoleCapacityAsNeeded(page: import('@playwright/test').Page) {
-  const editButton = page.locator('button[title="Click to edit capacity profile"]').first()
-  await expect(editButton).toBeVisible({ timeout: 10_000 })
-  await editButton.click()
-  await expect(page.getByTestId('capacity-profile-editor')).toBeVisible({ timeout: 8_000 })
-  await page.locator('#cp-planning-basis').selectOption('demandFollowing')
-  await page.getByTestId('cp-save-btn').click()
-  await expect(page.getByTestId('capacity-profile-editor')).not.toBeVisible({ timeout: 10_000 })
 }
 
 test.describe('Planning reset and replan workflow', () => {
@@ -84,13 +79,12 @@ test.describe('Planning reset and replan workflow', () => {
     const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
     expect(projectId).toBeTruthy()
 
-    // Shape the plan: keep only the role the backlog uses (see helper).
-    await keepOnlyBacklogRole(page, projectId, 'Tech Lead')
-
-    // ── Establish an initial plan so there is planning state to discard ──
+    // ── Establish canonical pre-reset planning ────────────────────────────
+    // (CURRENT Resource Profile shows demand-bearing roles only; the seeded
+    // project's roles carry pre-existing auto-created profiles.)
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(page.getByRole('heading', { name: /resource profile/i })).toBeVisible({ timeout: 10_000 })
-    await setRoleCapacityAsNeeded(page)
+    await setAllRoleCapacitiesAsNeeded(page)
 
     // ── Reset planning with explicit confirmation ─────────────────────────
     await page.getByRole('button', { name: /reset planning…/i }).click()
@@ -112,8 +106,10 @@ test.describe('Planning reset and replan workflow', () => {
     // ── Replan through the supported Resource Profile surface ─────────────
     await page.goto(`/projects/${projectId}/resource-profile`)
     await expect(page.getByTestId('planning-needs-attention')).toBeVisible({ timeout: 10_000 })
-    // Choose "As needed" / demand-following for the role — the new plan.
-    await setRoleCapacityAsNeeded(page)
+    // Choose "As needed" / demand-following for EVERY preserved role — the
+    // zero-demand roles that Reset Planning preserved stay visible and
+    // editable here; no role is deleted (issue #449).
+    await setAllRoleCapacitiesAsNeeded(page)
 
     // ── Complete replanning → project returns to CURRENT ──────────────────
     await page.getByTestId('replan-project-button').click()

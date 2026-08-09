@@ -165,6 +165,12 @@ export interface ClassifyOptions {
    */
   expectedFingerprint?: string
   /**
+   * Test-only seam: invoked inside the dry-run snapshot transaction after the
+   * classification read and before the fingerprint read. Lets tests prove
+   * that report and fingerprint come from one consistent snapshot.
+   */
+  afterPlanRead?: (tx: Prisma.TransactionClient) => Promise<void>
+  /**
    * Test-only seam: invoked inside the batch transaction after each project
    * reset. Throwing from it rolls the whole batch back.
    */
@@ -335,15 +341,18 @@ function summarizeClassification(entries: ClassificationEntry[]) {
 /**
  * Classify the reviewed project set as NEEDS_REPLAN.
  *
- * Dry-run (default): read-only plan plus the deterministic `stateFingerprint`
- * of the reset-relevant state the operator reviews.
+ * Dry-run (default): read-only plan plus the deterministic `stateFingerprint`,
+ * generated inside ONE repeatable-read transaction so the classification
+ * report and the fingerprint describe the same database snapshot.
  *
  * Apply: requires `expectedFingerprint` (the reviewed dry-run value). The
- * whole manifest set runs in ONE Prisma transaction: the fingerprint is
- * recomputed inside that transaction immediately before any write, the plan
- * is re-derived, and every to-classify project goes through the same atomic
- * reset transaction body used by the product. Any drift, missing project or
- * failure rolls the entire batch back — no partial classification.
+ * whole manifest set runs in ONE SERIALIZABLE Prisma transaction: the
+ * fingerprint is recomputed inside that transaction immediately before any
+ * write, the plan is re-derived, and every to-classify project goes through
+ * the same atomic reset transaction body used by the product. Any drift,
+ * missing project, serialization conflict or failure rolls the entire batch
+ * back — no partial classification, and a serialization conflict never
+ * auto-retries with the stale reviewed fingerprint.
  *
  * Already-NEEDS_REPLAN projects are skipped (idempotent) only when their
  * state is part of the reviewed fingerprint; the drift check still refuses
@@ -415,16 +424,29 @@ export async function classifyNeedsReplan(
     }
   }
 
-  // Dry run (default): read-only plan plus the reviewed-state fingerprint.
-  const plan = await planClassification(db, manifest)
-  if (!plan.completed) {
-    throw new ClassifyAbortError(
-      `Classification aborted: ${plan.notFoundCount} manifest project(s) no longer exist. ` +
-      'Re-review the manifest before retrying; nothing was changed.',
-    )
-  }
-  const stateFingerprint = await computeClassificationFingerprint(db, manifest)
-  return { ...plan, stateFingerprint }
+  // Dry run (default): classification entries and the reviewed fingerprint
+  // are generated inside ONE repeatable-read transaction, so the report and
+  // the fingerprint always describe the same database snapshot — the operator
+  // can never review a fingerprint that belongs to a different state than the
+  // classification they were shown. Zero writes. Concurrent changes after the
+  // dry-run are still handled by the apply fingerprint + Serializable checks.
+  const dryClient = db as PrismaClient
+  return dryClient.$transaction(async tx => {
+    const plan = await planClassification(tx, manifest)
+    if (!plan.completed) {
+      throw new ClassifyAbortError(
+        `Classification aborted: ${plan.notFoundCount} manifest project(s) no longer exist. ` +
+        'Re-review the manifest before retrying; nothing was changed.',
+      )
+    }
+    if (options.afterPlanRead) {
+      await options.afterPlanRead(tx)
+    }
+    const stateFingerprint = await computeClassificationFingerprint(tx, manifest)
+    return { ...plan, stateFingerprint }
+  }, {
+    isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+  })
 }
 
 /** Render the report as aggregate sanitized evidence (IDs are operator-supplied). */

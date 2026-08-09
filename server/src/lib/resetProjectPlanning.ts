@@ -15,10 +15,13 @@
  *                                                        overrides as planning state too)
  *   - weeklyDemandCache                                  (derived planning cache)
  *   - NamedResource rows proven to be planner-generated placeholders:
- *     provenance = an existing CapacityProfile with ownerKind PLANNED_RESOURCE.
- *     Squad Planner's findOrCreatePlannedResources creates those rows and marks
- *     them with a PLANNED_RESOURCE profile; user-authored named resources
- *     always carry NAMED_PERSON profiles. Ambiguous rows are preserved.
+ *     provenance = a CapacityProfile with ownerKind PLANNED_RESOURCE, or the
+ *     established legacy planner form NAMED_PERSON + SQUAD_PLANNER +
+ *     CAPACITY_PROFILE (isLegacyPlannerProfile — the same safe rule the Squad
+ *     Planner adoption path uses). Squad Planner's findOrCreatePlannedResources
+ *     writes the PLANNED_RESOURCE rows; user-authored named resources always
+ *     carry NAMED_PERSON profiles outside those exact markers. Ambiguous rows
+ *     are preserved.
  *   - project.planningState → NEEDS_REPLAN
  *
  * ── Preserved (never touched) ───────────────────────────────────────────────
@@ -41,6 +44,8 @@
  */
 
 import { Prisma, type PrismaClient } from '@prisma/client'
+
+import { isLegacyPlannerProfile } from './squadPlannerProfileWriter.js'
 
 export interface ResetPlanningOptions {
   /**
@@ -106,16 +111,36 @@ export async function resetProjectPlanningWithinTransaction(
     throw new ResetPlanningError(404, 'Project not found')
   }
 
-  // Proven planner-generated placeholders: NamedResources that carry a
-  // PLANNED_RESOURCE profile (the provenance mark written by the Squad
-  // Planner apply path). User-authored resources always get NAMED_PERSON
-  // profiles, so they are never matched here.
+  // Proven planner-generated placeholders: NamedResources that carry either
+  // (a) a PLANNED_RESOURCE profile (the provenance mark written by the Squad
+  // Planner apply path) or (b) the established legacy planner profile form
+  // NAMED_PERSON + SQUAD_PLANNER + CAPACITY_PROFILE (isLegacyPlannerProfile —
+  // the same safe provenance rule the Squad Planner adoption path uses).
+  // User-authored resources always get NAMED_PERSON profiles outside those
+  // exact markers, so they are never matched here. Ambiguous rows (unprofiled,
+  // or SQUAD_PLANNER markers that do not satisfy the safe rule) are preserved.
   const plannerProfiles = await tx.capacityProfile.findMany({
-    where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
-    select: { namedResourceId: true },
+    where: {
+      projectId,
+      OR: [
+        { ownerKind: 'PLANNED_RESOURCE' },
+        {
+          ownerKind: 'NAMED_PERSON',
+          source: 'SQUAD_PLANNER',
+          planningBasis: 'CAPACITY_PROFILE',
+        },
+      ],
+    },
+    select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
   })
   const plannerNamedResourceIds = Array.from(
-    new Set(plannerProfiles.map(p => p.namedResourceId).filter((id): id is string => id != null)),
+    new Set(
+      plannerProfiles
+        .filter(p => p.namedResourceId != null && (
+          p.ownerKind === 'PLANNED_RESOURCE' || isLegacyPlannerProfile(p)
+        ))
+        .map(p => p.namedResourceId as string),
+    ),
   )
 
   // Planning-owned state (see module doc for the evidence-based allow-list).

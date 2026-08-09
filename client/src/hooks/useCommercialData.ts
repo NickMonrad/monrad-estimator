@@ -58,6 +58,11 @@ export function useCommercialData(
 
   const filteredResourceRows = useMemo(() => {
     if (!profile) return []
+    // While NEEDS_REPLAN every preserved role must stay visible for
+    // replanning — including zero-demand roles — so the user can create
+    // their chosen capacity profile for each role before completing
+    // replanning (issue #449). Normal CURRENT filtering is unchanged.
+    if (profile.planningState === 'NEEDS_REPLAN') return profile.resourceRows
     const overheadLinkedRtIds = new Set(
       profile.overheadRows
         .filter(r => r.resourceTypeId)

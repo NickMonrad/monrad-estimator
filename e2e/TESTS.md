@@ -366,7 +366,7 @@ import { login, createProject, createTestUser, createUserAndLogin, TEST_EMAIL, T
 
 | Test | Description |
 |------|-------------|
-| reset planning, replan via Resource Profile, and return to CURRENT | Creates a project, seeds a backlog via CSV, establishes an "As needed" capacity profile, runs Reset Planning with explicit confirmation, observes the "Planning needs attention" banner, verifies the backlog remains, replans through the Resource Profile capacity editor, completes replanning (project returns to CURRENT), and verifies Update Timeline works again |
+| reset planning, replan via Resource Profile, and return to CURRENT | Creates a project, seeds a backlog via CSV, establishes "As needed" capacity profiles, runs Reset Planning with explicit confirmation, observes the "Planning needs attention" banner, verifies the backlog remains, replans through the Resource Profile capacity editor — creating explicit profiles for EVERY preserved role, including zero-demand roles that Reset preserved (no role is deleted) — completes replanning (project returns to CURRENT), and verifies Update Timeline works again |
 
 ---
 

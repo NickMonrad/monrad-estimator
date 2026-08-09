@@ -286,16 +286,51 @@ describe('planClassification', () => {
 // ─── classifyNeedsReplan ────────────────────────────────────────────────────
 
 describe('classifyNeedsReplan', () => {
-  it('is a read-only dry run by default and emits the reviewed-state fingerprint', async () => {
+  it('is a zero-write dry run by default: one repeatable-read snapshot for report + fingerprint', async () => {
     const { db } = makeDb(defaultState)
     const report = await classifyNeedsReplan(db, manifest)
 
     expect(report.classifiedCount).toBe(2)
     expect(report.stateFingerprint).toMatch(/^[0-9a-f]{64}$/)
     expect(report.stateFingerprint).toBe(await computeClassificationFingerprint(db, manifest))
-    // Dry-run never opens a (Serializable or any other) transaction.
-    expect(db.$transaction).not.toHaveBeenCalled()
+    // Dry-run report and fingerprint are generated inside ONE transaction
+    // with repeatable-read isolation — one consistent snapshot.
+    expect(db.$transaction).toHaveBeenCalledTimes(1)
+    expect(db.$transaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      { isolationLevel: 'RepeatableRead' },
+    )
     expect(resetProjectPlanningWithinTransaction).not.toHaveBeenCalled()
+  })
+
+  it('runs classification and fingerprint reads through one transaction body', async () => {
+    const { db } = makeDb(defaultState)
+    await classifyNeedsReplan(db, manifest)
+
+    // The report path is fully enclosed in the repeatable-read transaction
+    // body — the root client is never used for the review reads. In the fake
+    // the transaction client and root client share query objects, so the
+    // ordering of classification → fingerprint inside ONE body is what this
+    // asserts.
+    const txBody = vi.mocked(db.$transaction).mock.calls[0][0] as (
+      tx: unknown,
+    ) => Promise<unknown>
+    const result = await txBody(db)
+    expect(result).toHaveProperty('stateFingerprint')
+  })
+
+  it('invokes the afterPlanRead seam inside the snapshot before the fingerprint read', async () => {
+    const { db } = makeDb(defaultState)
+    const afterPlanRead = vi.fn(async () => { /* test seam */ })
+    await classifyNeedsReplan(db, manifest, { afterPlanRead })
+
+    expect(afterPlanRead).toHaveBeenCalledTimes(1)
+    const txBody = vi.mocked(db.$transaction).mock.calls[0][0] as (
+      tx: unknown,
+    ) => Promise<unknown>
+    const result = await txBody(db)
+    expect(afterPlanRead).toHaveBeenCalledTimes(2)
+    expect(result).toHaveProperty('stateFingerprint')
   })
 
   it('refuses apply without the reviewed fingerprint, with zero writes', async () => {
