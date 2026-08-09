@@ -3,6 +3,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toPng } from 'html-to-image'
 import { api, apiErrorMessage } from '../lib/api'
+import PlanningNeedsAttentionBanner from '../components/shared/PlanningNeedsAttentionBanner'
 import type { OptimiserCandidate } from '../lib/api'
 import { useIsDark } from '../hooks/useIsDark'
 import AppLayout from '../components/layout/AppLayout'
@@ -477,7 +478,7 @@ export default function TimelinePage() {
     }
   }, [editingFeatureId, timeline])
 
-  const { mutate: scheduleTimelineMutate, isPending: isSchedulePending } = useMutation({
+  const { mutate: scheduleTimelineMutate, isPending: isSchedulePending, error: scheduleError } = useMutation({
     mutationFn: (body: { startDate?: string; resourceLevel?: boolean }) =>
       api.post(`/projects/${projectId}/timeline/schedule`, body).then(r => r.data),
     onSuccess: (data) => {
@@ -488,9 +489,12 @@ export default function TimelinePage() {
 
   // Auto-schedule on page load ONLY if no entries exist yet (first run for new projects).
   // For projects with existing entries, the user drives rescheduling via the button.
+  // A NEEDS_REPLAN project is intentionally unscheduled; never auto-schedule it
+  // (the server rejects planning actions until replanning completes).
   useEffect(() => {
     if (!initialScheduleDone.current && timeline !== undefined && project !== undefined) {
       initialScheduleDone.current = true
+      if (project.planningState === 'NEEDS_REPLAN') return
       if (timeline.entries.length === 0) {
         const body = project.startDate ? { startDate: project.startDate.slice(0, 10), resourceLevel } : { resourceLevel }
         scheduleTimelineMutate(body)
@@ -912,6 +916,14 @@ export default function TimelinePage() {
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Timeline Planner</h1>
         </div>
+
+        {project?.planningState === 'NEEDS_REPLAN' && <PlanningNeedsAttentionBanner projectId={projectId!} />}
+
+        {scheduleError && (
+          <div className="bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-xl px-4 py-3 text-sm text-red-800 dark:text-red-300" role="alert" data-testid="schedule-error">
+            {apiErrorMessage(scheduleError, 'Failed to update the timeline')}
+          </div>
+        )}
 
         {/* Setup bar */}
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">

@@ -22,6 +22,7 @@ try {
       'test:remediation-integration',
       'test:snapshot-evidence-integration',
       'test:purge-pre-v4-integration',
+      'test:planning-reset-integration',
     ]) {
       if (guard.triggered) break
       await runCommand('npm', ['run', script, '--workspace=server'], { cwd: root, env: environment, signal: guard.abortSignal })

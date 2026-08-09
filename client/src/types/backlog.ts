@@ -104,6 +104,8 @@ export interface Project {
   description?: string
   customer?: string | ProjectCustomer | null
   status: string
+  /** Explicit project-level planning state (issue #449). */
+  planningState?: 'CURRENT' | 'NEEDS_REPLAN'
   hoursPerDay: number
   bufferWeeks?: number
   onboardingWeeks?: number
@@ -358,6 +360,8 @@ export interface OverheadProfileRow {
 
 export interface ResourceProfile {
   projectId: string
+  /** Explicit project-level planning state (issue #449). */
+  planningState?: 'CURRENT' | 'NEEDS_REPLAN'
   hoursPerDay: number
   projectDurationWeeks: number
   bufferWeeks: number

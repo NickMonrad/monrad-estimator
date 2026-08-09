@@ -35,6 +35,7 @@ import documentRoutes from './routes/documents.js'
 import optimiserRoutes from './routes/optimiser.js'
 import squadPlanRoutes from './routes/squadPlan.js'
 import capacityProfileRoutes from './routes/capacityProfiles.js'
+import planningRoutes from './routes/planning.js'
 
 const app = express()
 
@@ -73,6 +74,7 @@ app.use('/api/projects/:projectId/documents', documentRoutes)
 app.use('/api/projects/:projectId/optimise', optimiserRoutes)
 app.use('/api/projects/:projectId/squad-plan', squadPlanRoutes)
 app.use('/api/projects/:projectId/capacity-profiles', capacityProfileRoutes)
+app.use('/api/projects/:projectId/planning', planningRoutes)
 app.use('/api/projects/:projectId/squad-plans', squadPlanRoutes)
 app.use('/api/orgs', authenticate, orgRoutes)
 app.use('/api/customers', authenticate, customerRoutes)

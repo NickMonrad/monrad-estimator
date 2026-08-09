@@ -136,6 +136,10 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
         customerId: source.customerId,
         orgId: source.orgId,
         status: 'DRAFT',
+        // A clone of a NEEDS_REPLAN project must stay quarantined: its
+        // planning state is copied verbatim so the copy never presents an
+        // absent capacity model as CURRENT (issue #449).
+        planningState: source.planningState,
         onboardingWeeks: source.onboardingWeeks,
         bufferWeeks: source.bufferWeeks,
         startDate: source.startDate,

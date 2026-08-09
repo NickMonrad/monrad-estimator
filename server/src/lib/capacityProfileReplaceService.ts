@@ -15,7 +15,8 @@
 import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import { mapPersistedProfilesToDTOs } from './capacityProfileMapping.js'
 import type { CapacityProfileDTO } from './capacityProfileMapping.js'
-import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
+import { loadAndValidateOwnerProfile, type ValidatedOwnerProfile } from './ownerProfileLoader.js'
+import { CapacityIntegrityError } from './capacityIntegrityError.js'
 import { classifyNRsForRoleUpdate } from './classifyNRsForRoleUpdate.js'
 import { isRoleDefaultClone } from './roleProfileClonePolicy.js'
 import type { PrismaClient } from '@prisma/client'
@@ -168,65 +169,79 @@ export async function replaceCapacityProfile(
   }> = []
   if (ownerKind === 'ROLE') {
     // Load and validate the authoritative pre-mutation role profile (fails
-    // closed on missing, duplicate, malformed or cross-project state).
-    const oldRoleProfile = await loadAndValidateOwnerProfile({
-      tx,
-      projectId,
-      ownerKind: 'ROLE',
-      ownerId,
-    })
-
-    // Load all named resources for this ResourceType
-    const nrs = await tx.namedResource.findMany({
-      where: { resourceTypeId: ownerId },
-      orderBy: { createdAt: 'asc' },
-    })
-
-    // Load NR capacity profiles with segments and validate exactly one per NR
-    const nrProfileRows = nrs.length > 0
-      ? await tx.capacityProfile.findMany({
-          where: { namedResourceId: { in: nrs.map((n: { id: string }) => n.id) }, projectId },
-          include: { segments: true },
-        })
-      : []
-
-    const profilesByNRId = new Map<string, any[]>()
-    for (const profile of nrProfileRows) {
-      if (!profile.namedResourceId) continue
-      const arr = profilesByNRId.get(profile.namedResourceId) ?? []
-      arr.push(profile)
-      profilesByNRId.set(profile.namedResourceId, arr)
-    }
-    for (const nr of nrs) {
-      const profiles = profilesByNRId.get(nr.id) ?? []
-      if (profiles.length === 0) {
-        throw new ServiceError(409, `Missing capacity profile for named resource ${nr.id}`)
-      }
-      if (profiles.length > 1) {
-        throw new ServiceError(409, `Multiple capacity profiles exist for named resource ${nr.id}`)
+    // closed on duplicate, malformed or cross-project state). A genuinely
+    // missing role profile is the CREATE path (the documented
+    // "replace (create or update)" contract): after Reset Planning (issue
+    // #449) every profile is gone and the user builds the new plan through
+    // this surface. With no prior role profile there is nothing for named
+    // resources to inherit, so the inherited-NR classification is skipped.
+    let oldRoleProfile: ValidatedOwnerProfile | null = null
+    try {
+      oldRoleProfile = await loadAndValidateOwnerProfile({
+        tx,
+        projectId,
+        ownerKind: 'ROLE',
+        ownerId,
+      })
+    } catch (error) {
+      if (!(error instanceof CapacityIntegrityError) || existingProfiles.length > 0) {
+        throw error
       }
     }
 
-    // Classify: which NRs inherit the role default vs. are explicitly custom
-    const classification = classifyNRsForRoleUpdate(
-      nrs as any,
-      nrProfileRows as any,
-      {
-        planningBasis: oldRoleProfile.planningBasis,
-        defaultPercent: oldRoleProfile.defaultPercent,
-        startWeek: oldRoleProfile.startWeek,
-        endWeek: oldRoleProfile.endWeek,
-        segments: oldRoleProfile.segments.map(s => ({
-          startWeek: s.startWeek,
-          endWeek: s.endWeek,
-          capacityPercent: s.capacityPercent,
-        })),
-      },
-    )
+    if (oldRoleProfile) {
+      // Load all named resources for this ResourceType
+      const nrs = await tx.namedResource.findMany({
+        where: { resourceTypeId: ownerId },
+        orderBy: { createdAt: 'asc' },
+      })
 
-    inheritedNRProfiles = classification.inheritedNRIds
-      .map(id => profilesByNRId.get(id)?.[0])
-      .filter((profile): profile is NonNullable<typeof profile> => profile != null)
+      // Load NR capacity profiles with segments and validate exactly one per NR
+      const nrProfileRows = nrs.length > 0
+        ? await tx.capacityProfile.findMany({
+            where: { namedResourceId: { in: nrs.map((n: { id: string }) => n.id) }, projectId },
+            include: { segments: true },
+          })
+        : []
+
+      const profilesByNRId = new Map<string, any[]>()
+      for (const profile of nrProfileRows) {
+        if (!profile.namedResourceId) continue
+        const arr = profilesByNRId.get(profile.namedResourceId) ?? []
+        arr.push(profile)
+        profilesByNRId.set(profile.namedResourceId, arr)
+      }
+      for (const nr of nrs) {
+        const profiles = profilesByNRId.get(nr.id) ?? []
+        if (profiles.length === 0) {
+          throw new ServiceError(409, `Missing capacity profile for named resource ${nr.id}`)
+        }
+        if (profiles.length > 1) {
+          throw new ServiceError(409, `Multiple capacity profiles exist for named resource ${nr.id}`)
+        }
+      }
+
+      // Classify: which NRs inherit the role default vs. are explicitly custom
+      const classification = classifyNRsForRoleUpdate(
+        nrs as any,
+        nrProfileRows as any,
+        {
+          planningBasis: oldRoleProfile.planningBasis,
+          defaultPercent: oldRoleProfile.defaultPercent,
+          startWeek: oldRoleProfile.startWeek,
+          endWeek: oldRoleProfile.endWeek,
+          segments: oldRoleProfile.segments.map(s => ({
+            startWeek: s.startWeek,
+            endWeek: s.endWeek,
+            capacityPercent: s.capacityPercent,
+          })),
+        },
+      )
+
+      inheritedNRProfiles = classification.inheritedNRIds
+        .map(id => profilesByNRId.get(id)?.[0])
+        .filter((profile): profile is NonNullable<typeof profile> => profile != null)
+    }
   }
 
   // ── 4. Prepare segment data with deterministic ordering ────────────────

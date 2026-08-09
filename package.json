@@ -35,6 +35,7 @@
     "capacity-profiles:remediate-readiness": "npm run capacity-profiles:remediate-readiness --workspace=server --",
     "capacity-profiles:snapshot-evidence": "npm run capacity-profiles:snapshot-evidence --workspace=server --",
     "capacity-profiles:purge-pre-v4-snapshots": "npm run capacity-profiles:purge-pre-v4-snapshots --workspace=server --",
+    "capacity-profiles:classify-needs-replan": "npm run capacity-profiles:classify-needs-replan --workspace=server --",
     "capacity-profiles:backfill": "npm run capacity-profiles:backfill --workspace=server",
     "capacity-profiles:reconcile": "npm run capacity-profiles:reconcile --workspace=server"
   },
