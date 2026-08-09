@@ -22,6 +22,7 @@ import { buildProjectPlanningModel, convertWeeklyDemandCache } from '../lib/proj
 import { runSAPlanner } from '../lib/sa-planner.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
+import { assertPlanningCurrent } from '../lib/projectPlanningState.js'
 const router = Router({ mergeParams: true })
 router.use(authenticate)
 
@@ -370,6 +371,32 @@ function buildResponse(
 
 // GET /api/projects/:projectId/timeline
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const project = await ownedProject(req.params.projectId as string, req.userId!)
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  if (project.planningState === 'NEEDS_REPLAN') {
+    // Reset Planning clears generated schedule output and manual overrides.
+    // The timeline is intentionally empty (never derived from stale state)
+    // until the user replans and the project returns to CURRENT.
+    res.json({
+      projectId: project.id,
+      startDate: project.startDate,
+      hoursPerDay: project.hoursPerDay,
+      projectedEndDate: null,
+      bufferWeeks: project.bufferWeeks ?? 0,
+      onboardingWeeks: project.onboardingWeeks ?? 0,
+      parallelWarnings: [],
+      entries: [],
+      storyEntries: [],
+      featureDependencies: [],
+      storyDependencies: [],
+      epicDependencies: [],
+      weeklyDemand: [],
+      weeklyCapacity: [],
+      namedResources: [],
+      planningState: 'NEEDS_REPLAN',
+    })
+    return
+  }
   const model = await buildProjectPlanningModel(req.params.projectId as string, req.userId!)
     .catch(() => { res.status(404).json({ error: 'Project not found' }); return null })
   if (!model) return
@@ -481,6 +508,8 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) => {
   let project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  // Planning-dependent: the scheduler consumes the current capacity model.
+  assertPlanningCurrent(project)
 
   const { startDate } = req.body
   const resourceLevel: boolean = req.body.resourceLevel === true
@@ -638,6 +667,8 @@ router.post('/schedule', asyncHandler(async (req: AuthRequest, res: Response) =>
 router.put('/stories/:storyId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  // Manual overrides are planning-owned state (Timeline/Planning boundary).
+  assertPlanningCurrent(project)
 
   const { startWeek, durationWeeks } = req.body
   if (startWeek == null || durationWeeks == null) {
@@ -680,6 +711,8 @@ router.put('/stories/:storyId', asyncHandler(async (req: AuthRequest, res: Respo
 router.delete('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  // Manual overrides are planning-owned state (Timeline/Planning boundary).
+  assertPlanningCurrent(project)
 
   await Promise.all([
     prisma.timelineEntry.deleteMany({ where: { projectId: project.id, isManual: true } }),
@@ -699,6 +732,8 @@ router.delete('/', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.delete('/stories/:storyId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  // Manual overrides are planning-owned state (Timeline/Planning boundary).
+  assertPlanningCurrent(project)
 
   await prisma.storyTimelineEntry.deleteMany({
     where: { storyId: req.params.storyId as string, projectId: project.id },
@@ -723,6 +758,8 @@ router.get('/export/csv', asyncHandler(async (req: AuthRequest, res: Response) =
     },
   })
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  // Planning-dependent export: the schedule/capacity CSV is a planning output.
+  assertPlanningCurrent(project)
 
   const projectId = project.id
   const hpd = project.hoursPerDay
@@ -884,6 +921,8 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  // Planning-dependent: levelling consumes the current capacity model.
+  assertPlanningCurrent(project)
 
   const { dryRun } = req.body as { dryRun?: boolean }
 
@@ -1053,6 +1092,8 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
 router.put('/:featureId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  // Manual overrides are planning-owned state (Timeline/Planning boundary).
+  assertPlanningCurrent(project)
 
   const { startWeek, durationWeeks } = req.body
   if (startWeek == null || durationWeeks == null) {
@@ -1097,6 +1138,8 @@ router.put('/:featureId', asyncHandler(async (req: AuthRequest, res: Response) =
 router.delete('/:featureId', asyncHandler(async (req: AuthRequest, res: Response) => {
   const project = await ownedProject(req.params.projectId as string, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  // Manual overrides are planning-owned state (Timeline/Planning boundary).
+  assertPlanningCurrent(project)
 
   await prisma.timelineEntry.deleteMany({
     where: { featureId: req.params.featureId as string, projectId: project.id },

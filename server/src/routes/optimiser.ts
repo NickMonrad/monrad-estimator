@@ -16,6 +16,7 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { ownedProject } from '../lib/ownership.js'
+import { assertPlanningCurrent } from '../lib/projectPlanningState.js'
 import {
   type SchedulerInput,
   type SchedulerResourceType,
@@ -158,6 +159,8 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  // Planning-dependent: the optimiser consumes the current capacity model.
+  assertPlanningCurrent(project)
 
   const { resourceTypes: candidateRTs, optimiserScopeResourceTypeIds, staggerEpics } = req.body as {
     resourceTypes: ApplyCandidateResourceType[]
@@ -234,6 +237,8 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const projectId = req.params.projectId as string
   const project = await ownedProject(projectId, req.userId!)
   if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+  // Planning-dependent: the optimiser consumes the current capacity model.
+  assertPlanningCurrent(project)
 
   // ── 1. Parse request body ─────────────────────────────────────────────────
   const body = req.body as {

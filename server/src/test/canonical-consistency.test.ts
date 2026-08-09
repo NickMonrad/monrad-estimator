@@ -193,6 +193,8 @@ beforeEach(() => vi.clearAllMocks())
 describe('canonical cross-surface consistency', () => {
   it('Timeline reports correct named-resource labels, allocation days, and onboarding-shifted dates', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValueOnce(baseProjectFixture() as never)
+    // The route's planning-state lookup consumes a findFirst before the model loads.
+    vi.mocked(prisma.project.findFirst).mockResolvedValueOnce(baseProjectFixture() as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValueOnce(timelineEntryFixture() as never)
     vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValueOnce([] as never)
@@ -319,6 +321,8 @@ describe('canonical cross-surface consistency', () => {
     expect(res.body.summary.totalCost).toBe(rowCostSum + overheadCostSum)
   })
   it('Timeline and Resource Profile agree on actualAllocatedDays for the same NR', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValueOnce(baseProjectFixture() as never)
+    // The route's planning-state lookup consumes a findFirst before the model loads.
     vi.mocked(prisma.project.findFirst).mockResolvedValueOnce(baseProjectFixture() as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValueOnce(resourceTypeWithNamedResources() as never)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValueOnce(timelineEntryFixture() as never)

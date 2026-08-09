@@ -80,6 +80,7 @@ async function checkProjectCompleteness(prisma: PrismaClient): Promise<Readiness
     select: {
       id: true,
       name: true,
+      planningState: true,
       resourceTypes: {
         include: { namedResources: { orderBy: { createdAt: 'asc' as const } } },
       },
@@ -94,8 +95,21 @@ async function checkProjectCompleteness(prisma: PrismaClient): Promise<Readiness
   })
 
   const blockers: string[] = []
+  let quarantinedCount = 0
   for (const project of projects) {
     const prefix = `project "${project.name}" (${project.id})`
+    if (project.planningState === 'NEEDS_REPLAN') {
+      // Issue #449: a NEEDS_REPLAN project deliberately retired its planning
+      // state (Reset Planning / the reviewed maintenance classification).
+      // Expected missing planning state is allowed here ONLY because the
+      // state is explicitly persisted and planning-dependent execution is
+      // quarantined until the project is replanned. The global ownership
+      // audit section still fails on cross-project ownership, impossible
+      // FK/ownership relationships and duplicate owners where rows remain —
+      // NEEDS_REPLAN is never a generic "ignore this project" switch.
+      quarantinedCount++
+      continue
+    }
     const resourceTypeIds = new Set(project.resourceTypes.map(rt => rt.id))
     const namedResourceIds = new Set(
       project.resourceTypes.flatMap(rt => rt.namedResources.map(nr => nr.id)),
@@ -130,6 +144,9 @@ async function checkProjectCompleteness(prisma: PrismaClient): Promise<Readiness
     name: 'per-project profile completeness and shape',
     passed: blockers.length === 0,
     blockers,
+    notes: quarantinedCount > 0
+      ? [`NEEDS_REPLAN projects (intentional planning quarantine): ${quarantinedCount}`]
+      : undefined,
   }
 }
 

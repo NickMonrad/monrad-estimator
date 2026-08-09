@@ -147,6 +147,13 @@ export type SnapshotProjectFields = {
   hoursPerDay: number | null
   /** Optional cache field added after v3 snapshots were introduced. */
   weeklyDemandCache?: Record<string, number> | null
+  /**
+   * Optional project planning state (issue #449). Absent on snapshots
+   * created before the field existed; those restores leave the project's
+   * planning state untouched so a pre-feature snapshot can never flip a
+   * quarantined project to CURRENT (or vice versa) implicitly.
+   */
+  planningState?: 'CURRENT' | 'NEEDS_REPLAN'
 }
 
 export type SnapshotResourceType = {

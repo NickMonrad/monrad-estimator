@@ -94,13 +94,17 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     })),
   })
 
-  if (completenessErrors.length > 0) {
+  if (completenessErrors.length > 0 && project.planningState !== 'NEEDS_REPLAN') {
     res.status(409).json({
       error: 'Persisted capacity profiles are incomplete: ' + completenessErrors.join('; '),
       code: 'CAPACITY_INTEGRITY_ERROR',
     })
     return
   }
+  // NEEDS_REPLAN (issue #449): missing profile coverage is the intentional,
+  // expected state after Reset Planning — the user is mid-replanning. The
+  // structural validation above still fails closed on genuinely malformed
+  // rows, so the quarantine never masks unrelated corruption.
 
   const resourceTypeById = new Map<string, { id: string; name: string }>()
   const namedResourceById = new Map<string, { id: string; name: string; resourceTypeId: string }>()

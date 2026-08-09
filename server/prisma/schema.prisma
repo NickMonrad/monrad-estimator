@@ -57,6 +57,14 @@ model Project {
   customerId String?
   customer   Customer?     @relation(fields: [customerId], references: [id])
   status      ProjectStatus @default(DRAFT)
+  /// Explicit project-level planning state (issue #449).
+  ///
+  /// CURRENT: planning is expected to be canonical — missing, malformed or
+  /// conflicting profile state remains an integrity failure.
+  /// NEEDS_REPLAN: the project deliberately discarded its planning state via
+  /// Reset Planning; planning incompleteness is expected and capacity-dependent
+  /// operations are quarantined until the user replans and completes replanning.
+  planningState ProjectPlanningState @default(CURRENT)
   hoursPerDay Float         @default(7.6)
   bufferWeeks     Int           @default(0)
   onboardingWeeks Int           @default(0)
@@ -87,6 +95,19 @@ enum ProjectStatus {
   REVIEW
   COMPLETE
   ARCHIVED
+}
+
+/// Explicit project-level planning state (issue #449).
+///
+/// CURRENT — planning is expected to be canonical; unexpected incomplete or
+/// malformed profile state fails closed as an integrity defect.
+/// NEEDS_REPLAN — the project deliberately retired its planning state through
+/// Reset Planning; planning incompleteness is expected and capacity-dependent
+/// operations return REPLAN_REQUIRED until the user replans through the normal
+/// supported planning surfaces and completes replanning.
+enum ProjectPlanningState {
+  CURRENT
+  NEEDS_REPLAN
 }
 
 model ResourceType {

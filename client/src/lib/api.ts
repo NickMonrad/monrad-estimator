@@ -150,3 +150,43 @@ export const transferToManualCapacity = (
       resourceTypeId,
     })
     .then(r => r.data)
+
+// ---------------------------------------------------------------------------
+// Reset Planning / Replan project (issue #449)
+// ---------------------------------------------------------------------------
+
+export interface ResetPlanningResult {
+  projectId: string
+  planningState: 'NEEDS_REPLAN'
+}
+
+/**
+ * Deliberately discard the project's planning state (Reset Planning).
+ * Requires explicit `{ confirm: true }` on the wire; preserves the backlog,
+ * estimation and business/commercial data and marks the project NEEDS_REPLAN.
+ */
+export const resetProjectPlanning = (projectId: string): Promise<ResetPlanningResult> =>
+  api
+    .post<ResetPlanningResult>(`/projects/${projectId}/planning/reset`, { confirm: true })
+    .then(r => r.data)
+
+export interface CompleteReplanningResult {
+  projectId: string
+  planningState: 'CURRENT'
+}
+
+export interface ReplanIncompleteResponse {
+  error: string
+  code: 'REPLAN_INCOMPLETE'
+  findings: string[]
+}
+
+/**
+ * Complete replanning: the server validates the canonical project planning
+ * state and atomically returns the project to CURRENT only when valid.
+ * Rejects with `ReplanIncompleteResponse` (422) when the plan is incomplete.
+ */
+export const completeReplanning = (projectId: string): Promise<CompleteReplanningResult> =>
+  api
+    .post<CompleteReplanningResult>(`/projects/${projectId}/planning/complete`)
+    .then(r => r.data)
