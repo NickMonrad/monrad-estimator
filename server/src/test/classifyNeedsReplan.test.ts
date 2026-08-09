@@ -1,10 +1,13 @@
 /**
  * classifyNeedsReplan.test.ts — Unit tests for the reviewed production
  * maintenance path (issue #449 / #404): classifying an explicitly supplied
- * project set as NEEDS_REPLAN via the same atomic reset transaction.
+ * project set as NEEDS_REPLAN via the same atomic reset transaction body.
  *
- * Covers manifest parsing (fail closed), dry-run planning, apply, idempotent
- * already-NEEDS_REPLAN skipping, and abort-on-missing-project.
+ * Covers manifest parsing (fail closed), the deterministic reset-state
+ * fingerprint (stability, ordering, per-state-change sensitivity, exclusion
+ * of unrelated backlog state), the dry-run/apply fingerprint contract
+ * (refusal without/with wrong fingerprint, zero writes), the atomic batch
+ * apply, and the CLI argument contract.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -13,17 +16,108 @@ import {
   parseClassifyManifest,
   planClassification,
   classifyNeedsReplan,
+  computeClassificationFingerprint,
   ClassifyManifestError,
   ClassifyAbortError,
+  ClassifyDriftError,
   type ClassifyManifest,
+  type ClassifyDb,
 } from '../lib/classifyNeedsReplan.js'
-import { resetProjectPlanning } from '../lib/resetProjectPlanning.js'
+import { parseClassifyCliArgs } from '../scripts/classifyNeedsReplan.js'
+import { resetProjectPlanningWithinTransaction } from '../lib/resetProjectPlanning.js'
 
 vi.mock('../lib/resetProjectPlanning.js', () => ({
-  resetProjectPlanning: vi.fn().mockResolvedValue({ projectId: 'x', planningState: 'NEEDS_REPLAN' }),
+  resetProjectPlanningWithinTransaction: vi.fn().mockResolvedValue({ projectId: 'x', planningState: 'NEEDS_REPLAN' }),
 }))
 
 beforeEach(() => vi.clearAllMocks())
+
+// ─── Fake database ──────────────────────────────────────────────────────────
+
+interface FakeState {
+  projects?: Array<{ id: string; planningState: string; weeklyDemandCache?: unknown }>
+  capacityProfiles?: Array<Record<string, unknown>>
+  capacitySegments?: Array<Record<string, unknown>>
+  capacityPlans?: Array<Record<string, unknown>>
+  capacityPlanPeriods?: Array<Record<string, unknown>>
+  capacityPlanEntries?: Array<Record<string, unknown>>
+  timelineEntries?: Array<Record<string, unknown>>
+  storyTimelineEntries?: Array<Record<string, unknown>>
+  namedResources?: Array<Record<string, unknown>>
+}
+
+/**
+ * Build a fake db/tx whose query methods serve the given state. The same
+ * object serves as both the outer client and the transaction client.
+ */
+function makeDb(state: FakeState) {
+  const queries = {
+    project: {
+      findMany: vi.fn().mockResolvedValue(state.projects ?? []),
+      findUnique: vi.fn().mockImplementation(async ({ where }: { where: { id: string } }) =>
+        (state.projects ?? []).find(p => p.id === where.id) ?? null),
+      update: vi.fn(),
+    },
+    capacityProfile: {
+      findMany: vi.fn().mockResolvedValue(state.capacityProfiles ?? []),
+      deleteMany: vi.fn(),
+    },
+    capacitySegment: { findMany: vi.fn().mockResolvedValue(state.capacitySegments ?? []) },
+    capacityPlan: { findMany: vi.fn().mockResolvedValue(state.capacityPlans ?? []), deleteMany: vi.fn() },
+    capacityPlanPeriod: { findMany: vi.fn().mockResolvedValue(state.capacityPlanPeriods ?? []) },
+    capacityPlanEntry: { findMany: vi.fn().mockResolvedValue(state.capacityPlanEntries ?? []) },
+    timelineEntry: { findMany: vi.fn().mockResolvedValue(state.timelineEntries ?? []), deleteMany: vi.fn() },
+    storyTimelineEntry: { findMany: vi.fn().mockResolvedValue(state.storyTimelineEntries ?? []), deleteMany: vi.fn() },
+    namedResource: { findMany: vi.fn().mockResolvedValue(state.namedResources ?? []), deleteMany: vi.fn() },
+    epic: { findMany: vi.fn().mockResolvedValue([]) },
+    task: { findMany: vi.fn().mockResolvedValue([]) },
+  }
+  const db = {
+    ...queries,
+    $transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(queries)),
+  } as unknown as ClassifyDb
+  return { db, queries }
+}
+
+const manifest: ClassifyManifest = { projectIds: ['p1', 'p2'] }
+
+const defaultState: FakeState = {
+  projects: [
+    { id: 'p1', planningState: 'CURRENT', weeklyDemandCache: { 'rt-1|1': 5 } },
+    { id: 'p2', planningState: 'CURRENT', weeklyDemandCache: null },
+  ],
+  capacityProfiles: [
+    { id: 'cp-1', projectId: 'p1', resourceTypeId: 'rt-1', namedResourceId: null, ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 100, startWeek: null, endWeek: null },
+  ],
+  capacitySegments: [
+    { id: 'seg-1', capacityProfileId: 'cp-1', startWeek: 0, endWeek: 4, capacityPercent: 100, source: 'MANUAL' },
+  ],
+  capacityPlans: [
+    { id: 'plan-1', projectId: 'p1', name: 'Plan A', targetWeeks: 8, periodWeeks: 4, maxDelta: 1, isActive: true, totalCost: 1000, deliveryWeeks: 8 },
+  ],
+  capacityPlanPeriods: [
+    { id: 'per-1', planId: 'plan-1', periodIndex: 0, startWeek: 0, endWeek: 4 },
+  ],
+  capacityPlanEntries: [
+    { id: 'ent-1', periodId: 'per-1', resourceTypeId: 'rt-1', headcount: 2, demandFTE: 1.5, utilisationPct: 75 },
+  ],
+  timelineEntries: [
+    { id: 'tl-1', projectId: 'p1', featureId: 'f-1', startWeek: 0, durationWeeks: 6, isManual: false },
+  ],
+  storyTimelineEntries: [
+    { id: 'stl-1', projectId: 'p1', storyId: 's-1', startWeek: 0, durationWeeks: 6, isManual: false },
+  ],
+  namedResources: [
+    { id: 'nr-1', resourceTypeId: 'rt-1' },
+  ],
+}
+
+async function fingerprintFor(state: FakeState): Promise<string> {
+  const { db } = makeDb(state)
+  return computeClassificationFingerprint(db, manifest)
+}
+
+// ─── Manifest parsing ───────────────────────────────────────────────────────
 
 describe('parseClassifyManifest', () => {
   it('accepts a valid reviewed manifest', () => {
@@ -44,20 +138,124 @@ describe('parseClassifyManifest', () => {
   })
 })
 
-function mockPrisma(projects: Array<{ id: string; planningState: string }>) {
-  return {
-    project: {
-      findMany: vi.fn().mockResolvedValue(projects),
-    },
-  } as never
-}
+// ─── Fingerprint ────────────────────────────────────────────────────────────
+
+describe('computeClassificationFingerprint', () => {
+  it('is identical across repeated dry-runs on unchanged state', async () => {
+    const a = await fingerprintFor(defaultState)
+    const b = await fingerprintFor(defaultState)
+    expect(a).toMatch(/^[0-9a-f]{64}$/)
+    expect(a).toBe(b)
+  })
+
+  it('is independent of database return order', async () => {
+    const reversed: FakeState = {
+      ...defaultState,
+      projects: [...defaultState.projects!].reverse(),
+      capacityProfiles: [...defaultState.capacityProfiles!].reverse(),
+      capacitySegments: [...defaultState.capacitySegments!].reverse(),
+      capacityPlans: [...defaultState.capacityPlans!].reverse(),
+      capacityPlanPeriods: [...defaultState.capacityPlanPeriods!].reverse(),
+      capacityPlanEntries: [...defaultState.capacityPlanEntries!].reverse(),
+      timelineEntries: [...defaultState.timelineEntries!].reverse(),
+      storyTimelineEntries: [...defaultState.storyTimelineEntries!].reverse(),
+      namedResources: [...defaultState.namedResources!].reverse(),
+    }
+    expect(await fingerprintFor(reversed)).toBe(await fingerprintFor(defaultState))
+  })
+
+  it('changes when a manifest project is missing (existence drift)', async () => {
+    const missing: FakeState = { ...defaultState, projects: [defaultState.projects![0]] }
+    expect(await fingerprintFor(missing)).not.toBe(await fingerprintFor(defaultState))
+  })
+
+  it('changes when project planningState or weeklyDemandCache changes', async () => {
+    const stateChanged: FakeState = {
+      ...defaultState,
+      projects: [{ ...defaultState.projects![0], planningState: 'NEEDS_REPLAN' }, defaultState.projects![1]],
+    }
+    expect(await fingerprintFor(stateChanged)).not.toBe(await fingerprintFor(defaultState))
+
+    const cacheChanged: FakeState = {
+      ...defaultState,
+      projects: [{ ...defaultState.projects![0], weeklyDemandCache: { 'rt-1|2': 9 } }, defaultState.projects![1]],
+    }
+    expect(await fingerprintFor(cacheChanged)).not.toBe(await fingerprintFor(defaultState))
+  })
+
+  it('changes when any reset-relevant CapacityProfile field changes', async () => {
+    const changed: FakeState = {
+      ...defaultState,
+      capacityProfiles: [{ ...defaultState.capacityProfiles![0], ownerKind: 'NAMED_PERSON' }],
+    }
+    expect(await fingerprintFor(changed)).not.toBe(await fingerprintFor(defaultState))
+  })
+
+  it('changes when a CapacitySegment changes', async () => {
+    const changed: FakeState = {
+      ...defaultState,
+      capacitySegments: [{ ...defaultState.capacitySegments![0], capacityPercent: 50 }],
+    }
+    expect(await fingerprintFor(changed)).not.toBe(await fingerprintFor(defaultState))
+  })
+
+  it('changes when CapacityPlan/period/entry state changes', async () => {
+    const planChanged: FakeState = { ...defaultState, capacityPlans: [{ ...defaultState.capacityPlans![0], isActive: false }] }
+    expect(await fingerprintFor(planChanged)).not.toBe(await fingerprintFor(defaultState))
+
+    const periodChanged: FakeState = { ...defaultState, capacityPlanPeriods: [{ ...defaultState.capacityPlanPeriods![0], endWeek: 5 }] }
+    expect(await fingerprintFor(periodChanged)).not.toBe(await fingerprintFor(defaultState))
+
+    const entryChanged: FakeState = { ...defaultState, capacityPlanEntries: [{ ...defaultState.capacityPlanEntries![0], headcount: 3 }] }
+    expect(await fingerprintFor(entryChanged)).not.toBe(await fingerprintFor(defaultState))
+  })
+
+  it('changes when Timeline or StoryTimeline state changes', async () => {
+    const tlChanged: FakeState = { ...defaultState, timelineEntries: [{ ...defaultState.timelineEntries![0], durationWeeks: 8 }] }
+    expect(await fingerprintFor(tlChanged)).not.toBe(await fingerprintFor(defaultState))
+
+    const stlChanged: FakeState = { ...defaultState, storyTimelineEntries: [{ ...defaultState.storyTimelineEntries![0], startWeek: 2 }] }
+    expect(await fingerprintFor(stlChanged)).not.toBe(await fingerprintFor(defaultState))
+  })
+
+  it('changes when planner provenance (profile ownerKind) changes', async () => {
+    // A named resource becomes a proven PLANNED_RESOURCE planner artefact only
+    // via its profile ownerKind — that change must alter the fingerprint.
+    const changed: FakeState = {
+      ...defaultState,
+      capacityProfiles: [{
+        ...defaultState.capacityProfiles![0],
+        namedResourceId: 'nr-1',
+        resourceTypeId: null,
+        ownerKind: 'PLANNED_RESOURCE',
+        source: 'SQUAD_PLANNER',
+        planningBasis: 'CAPACITY_PROFILE',
+      }],
+    }
+    expect(await fingerprintFor(changed)).not.toBe(await fingerprintFor(defaultState))
+  })
+
+  it('does not read unrelated backlog/business state', async () => {
+    const { db, queries } = makeDb(defaultState)
+    await computeClassificationFingerprint(db, manifest)
+    // Fingerprint input is exactly the reset-relevant state: epic/task queries
+    // are never issued, so backlog changes cannot invalidate the fingerprint.
+    expect(queries.epic.findMany).not.toHaveBeenCalled()
+    expect(queries.task.findMany).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Plan classification ────────────────────────────────────────────────────
 
 describe('planClassification', () => {
   it('classifies CURRENT projects as to-classify and NEEDS_REPLAN ones as already', async () => {
-    const report = await planClassification(mockPrisma([
-      { id: 'p1', planningState: 'CURRENT' },
-      { id: 'p2', planningState: 'NEEDS_REPLAN' },
-    ]), { projectIds: ['p1', 'p2'] })
+    const { db } = makeDb({
+      projects: [
+        { id: 'p1', planningState: 'CURRENT' },
+        { id: 'p2', planningState: 'NEEDS_REPLAN' },
+      ],
+    })
+    const report = await planClassification(db, { projectIds: ['p1', 'p2'] })
 
     expect(report.completed).toBe(true)
     expect(report.classifiedCount).toBe(1)
@@ -69,9 +267,8 @@ describe('planClassification', () => {
   })
 
   it('reports not-found projects (fail closed)', async () => {
-    const report = await planClassification(mockPrisma([{ id: 'p1', planningState: 'CURRENT' }]), {
-      projectIds: ['p1', 'p-missing'],
-    })
+    const { db } = makeDb({ projects: [{ id: 'p1', planningState: 'CURRENT' }] })
+    const report = await planClassification(db, { projectIds: ['p1', 'p-missing'] })
 
     expect(report.completed).toBe(false)
     expect(report.notFoundCount).toBe(1)
@@ -79,43 +276,130 @@ describe('planClassification', () => {
   })
 })
 
-describe('classifyNeedsReplan', () => {
-  const manifest: ClassifyManifest = { projectIds: ['p1', 'p2'] }
+// ─── classifyNeedsReplan ────────────────────────────────────────────────────
 
-  it('is a read-only dry run by default', async () => {
-    const report = await classifyNeedsReplan(mockPrisma([
-      { id: 'p1', planningState: 'CURRENT' },
-      { id: 'p2', planningState: 'CURRENT' },
-    ]), manifest)
+describe('classifyNeedsReplan', () => {
+  it('is a read-only dry run by default and emits the reviewed-state fingerprint', async () => {
+    const { db } = makeDb(defaultState)
+    const report = await classifyNeedsReplan(db, manifest)
 
     expect(report.classifiedCount).toBe(2)
-    expect(resetProjectPlanning).not.toHaveBeenCalled()
+    expect(report.stateFingerprint).toMatch(/^[0-9a-f]{64}$/)
+    expect(report.stateFingerprint).toBe(await computeClassificationFingerprint(db, manifest))
+    expect(resetProjectPlanningWithinTransaction).not.toHaveBeenCalled()
   })
 
-  it('applies the atomic reset transaction for each to-classify project', async () => {
-    const report = await classifyNeedsReplan(mockPrisma([
-      { id: 'p1', planningState: 'CURRENT' },
-      { id: 'p2', planningState: 'NEEDS_REPLAN' },
-    ]), manifest, { apply: true })
+  it('refuses apply without the reviewed fingerprint, with zero writes', async () => {
+    const { db, queries } = makeDb(defaultState)
+    await expect(
+      classifyNeedsReplan(db, manifest, { apply: true }),
+    ).rejects.toThrow(ClassifyAbortError)
+    expect(resetProjectPlanningWithinTransaction).not.toHaveBeenCalled()
+    expect(queries.project.update).not.toHaveBeenCalled()
+  })
+
+  it('refuses apply on fingerprint drift, with zero reset calls', async () => {
+    const { db } = makeDb(defaultState)
+    const reviewed = await computeClassificationFingerprint(db, manifest)
+
+    // One reset-relevant field changes after review.
+    const drifted = makeDb({
+      ...defaultState,
+      capacityProfiles: [{ ...defaultState.capacityProfiles![0], defaultPercent: 80 }],
+    })
+
+    await expect(
+      classifyNeedsReplan(drifted.db, manifest, { apply: true, expectedFingerprint: reviewed }),
+    ).rejects.toThrow(ClassifyDriftError)
+    expect(resetProjectPlanningWithinTransaction).not.toHaveBeenCalled()
+    expect(drifted.queries.project.update).not.toHaveBeenCalled()
+    expect(drifted.queries.capacityProfile.deleteMany).not.toHaveBeenCalled()
+  })
+
+  it('applies the reviewed set atomically in one transaction via the reset body', async () => {
+    const { db } = makeDb(defaultState)
+    const reviewed = await computeClassificationFingerprint(db, manifest)
+
+    const report = await classifyNeedsReplan(db, manifest, {
+      apply: true,
+      expectedFingerprint: reviewed,
+    })
+
+    expect(report.classifiedCount).toBe(2)
+    expect(report.stateFingerprint).toBe(reviewed)
+    expect(db.$transaction).toHaveBeenCalledTimes(1)
+    // Every to-classify project goes through the same reset body.
+    expect(resetProjectPlanningWithinTransaction).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(resetProjectPlanningWithinTransaction).mock.calls.map(c => c[1])).toEqual(['p1', 'p2'])
+  })
+
+  it('skips already-NEEDS_REPLAN projects and still runs in one transaction', async () => {
+    const state: FakeState = {
+      ...defaultState,
+      projects: [
+        { id: 'p1', planningState: 'CURRENT' },
+        { id: 'p2', planningState: 'NEEDS_REPLAN' },
+      ],
+    }
+    const { db } = makeDb(state)
+    const reviewed = await computeClassificationFingerprint(db, manifest)
+
+    const report = await classifyNeedsReplan(db, manifest, {
+      apply: true,
+      expectedFingerprint: reviewed,
+    })
 
     expect(report.classifiedCount).toBe(1)
-    expect(resetProjectPlanning).toHaveBeenCalledTimes(1)
-    // Only p1 was reset; p2 was already quarantined (idempotent skip).
-    expect(vi.mocked(resetProjectPlanning).mock.calls[0][1]).toBe('p1')
+    expect(report.alreadyCount).toBe(1)
+    expect(db.$transaction).toHaveBeenCalledTimes(1)
+    expect(resetProjectPlanningWithinTransaction).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(resetProjectPlanningWithinTransaction).mock.calls[0][1]).toBe('p1')
   })
 
-  it('aborts apply when a manifest project no longer exists', async () => {
+  it('aborts when a manifest project no longer exists', async () => {
+    const { db } = makeDb({ projects: [{ id: 'p1', planningState: 'CURRENT' }] })
     await expect(
-      classifyNeedsReplan(mockPrisma([{ id: 'p1', planningState: 'CURRENT' }]), {
-        projectIds: ['p1', 'p-gone'],
-      }, { apply: true }),
+      classifyNeedsReplan(db, { projectIds: ['p1', 'p-gone'] }),
     ).rejects.toThrow(ClassifyAbortError)
-    expect(resetProjectPlanning).not.toHaveBeenCalled()
+
+    await expect(
+      classifyNeedsReplan(db, { projectIds: ['p1', 'p-gone'] }, { apply: true, expectedFingerprint: '0'.repeat(64) }),
+    ).rejects.toThrow(ClassifyAbortError)
+  })
+})
+
+// ─── CLI argument contract ──────────────────────────────────────────────────
+
+describe('parseClassifyCliArgs', () => {
+  it('parses a valid dry-run invocation', () => {
+    expect(parseClassifyCliArgs(['--manifest', 'm.json'])).toEqual({
+      apply: false,
+      manifestPath: 'm.json',
+      expectedFingerprint: null,
+      error: null,
+    })
   })
 
-  it('aborts dry run planning when a manifest project no longer exists', async () => {
-    await expect(
-      classifyNeedsReplan(mockPrisma([]), { projectIds: ['p-gone'] }),
-    ).rejects.toThrow(ClassifyAbortError)
+  it('parses a valid apply invocation with the reviewed fingerprint', () => {
+    const args = parseClassifyCliArgs(['--manifest', 'm.json', '--apply', '--expected-fingerprint', 'a'.repeat(64)])
+    expect(args.error).toBeNull()
+    expect(args.apply).toBe(true)
+    expect(args.expectedFingerprint).toBe('a'.repeat(64))
+  })
+
+  it('rejects apply without the reviewed fingerprint', () => {
+    const args = parseClassifyCliArgs(['--manifest', 'm.json', '--apply'])
+    expect(args.error).toContain('--expected-fingerprint')
+  })
+
+  it('rejects a malformed fingerprint', () => {
+    const args = parseClassifyCliArgs(['--manifest', 'm.json', '--apply', '--expected-fingerprint', 'not-a-hash'])
+    expect(args.error).toContain('SHA-256')
+  })
+
+  it('rejects missing manifest and unknown arguments', () => {
+    expect(parseClassifyCliArgs([]).error).toContain('usage')
+    expect(parseClassifyCliArgs(['--bogus']).error).toContain('usage')
+    expect(parseClassifyCliArgs(['--manifest']).error).toContain('usage')
   })
 })

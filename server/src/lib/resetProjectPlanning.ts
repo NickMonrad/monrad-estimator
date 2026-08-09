@@ -77,48 +77,64 @@ export async function resetProjectPlanning(
   options: ResetPlanningOptions = {},
 ): Promise<ResetPlanningResult> {
   return db.$transaction(async tx => {
-    const project = await tx.project.findUnique({
-      where: { id: projectId },
-      select: { id: true, planningState: true },
-    })
-    if (!project) {
-      throw new ResetPlanningError(404, 'Project not found')
-    }
-
-    // Proven planner-generated placeholders: NamedResources that carry a
-    // PLANNED_RESOURCE profile (the provenance mark written by the Squad
-    // Planner apply path). User-authored resources always get NAMED_PERSON
-    // profiles, so they are never matched here.
-    const plannerProfiles = await tx.capacityProfile.findMany({
-      where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
-      select: { namedResourceId: true },
-    })
-    const plannerNamedResourceIds = Array.from(
-      new Set(plannerProfiles.map(p => p.namedResourceId).filter((id): id is string => id != null)),
-    )
-
-    // Planning-owned state (see module doc for the evidence-based allow-list).
-    await tx.capacityProfile.deleteMany({ where: { projectId } }) // cascades segments
-    await tx.capacityPlan.deleteMany({ where: { projectId } }) // cascades periods/entries
-    await tx.timelineEntry.deleteMany({ where: { projectId } })
-    await tx.storyTimelineEntry.deleteMany({ where: { projectId } })
-    if (plannerNamedResourceIds.length > 0) {
-      await tx.namedResource.deleteMany({
-        where: { id: { in: plannerNamedResourceIds }, resourceType: { projectId } },
-      })
-    }
-    await tx.project.update({
-      where: { id: projectId },
-      data: {
-        weeklyDemandCache: Prisma.DbNull,
-        planningState: 'NEEDS_REPLAN',
-      },
-    })
-
+    const result = await resetProjectPlanningWithinTransaction(tx, projectId)
     if (options.afterWrites) {
       await options.afterWrites(tx)
     }
-
-    return { projectId, planningState: 'NEEDS_REPLAN' as const }
+    return result
   })
+}
+
+/**
+ * The reset transaction body, executed against an already-open transaction
+ * client. Shared by the product-facing single-project wrapper above and the
+ * maintenance classification batch, which runs the whole reviewed manifest
+ * set inside ONE transaction (issue #449 remediation).
+ *
+ * No writes are committed by this helper itself; the caller's transaction
+ * decides commit/rollback.
+ */
+export async function resetProjectPlanningWithinTransaction(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+): Promise<ResetPlanningResult> {
+  const project = await tx.project.findUnique({
+    where: { id: projectId },
+    select: { id: true, planningState: true },
+  })
+  if (!project) {
+    throw new ResetPlanningError(404, 'Project not found')
+  }
+
+  // Proven planner-generated placeholders: NamedResources that carry a
+  // PLANNED_RESOURCE profile (the provenance mark written by the Squad
+  // Planner apply path). User-authored resources always get NAMED_PERSON
+  // profiles, so they are never matched here.
+  const plannerProfiles = await tx.capacityProfile.findMany({
+    where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
+    select: { namedResourceId: true },
+  })
+  const plannerNamedResourceIds = Array.from(
+    new Set(plannerProfiles.map(p => p.namedResourceId).filter((id): id is string => id != null)),
+  )
+
+  // Planning-owned state (see module doc for the evidence-based allow-list).
+  await tx.capacityProfile.deleteMany({ where: { projectId } }) // cascades segments
+  await tx.capacityPlan.deleteMany({ where: { projectId } }) // cascades periods/entries
+  await tx.timelineEntry.deleteMany({ where: { projectId } })
+  await tx.storyTimelineEntry.deleteMany({ where: { projectId } })
+  if (plannerNamedResourceIds.length > 0) {
+    await tx.namedResource.deleteMany({
+      where: { id: { in: plannerNamedResourceIds }, resourceType: { projectId } },
+    })
+  }
+  await tx.project.update({
+    where: { id: projectId },
+    data: {
+      weeklyDemandCache: Prisma.DbNull,
+      planningState: 'NEEDS_REPLAN',
+    },
+  })
+
+  return { projectId, planningState: 'NEEDS_REPLAN' as const }
 }

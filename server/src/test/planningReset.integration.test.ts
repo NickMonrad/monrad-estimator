@@ -34,7 +34,7 @@ import { PrismaClient } from '@prisma/client'
 import { app } from '../app.js'
 import { resetProjectPlanning } from '../lib/resetProjectPlanning.js'
 import { runProductionMigrationReadiness, formatReadinessReport } from '../lib/productionMigrationReadiness.js'
-import { classifyNeedsReplan, parseClassifyManifest } from '../lib/classifyNeedsReplan.js'
+import { classifyNeedsReplan, parseClassifyManifest, ClassifyAbortError } from '../lib/classifyNeedsReplan.js'
 // Override the global prisma mock so route handlers use real PostgreSQL.
 vi.mock('../lib/prisma.js', async importOriginal => await importOriginal())
 
@@ -672,32 +672,137 @@ describeIf('Readiness with NEEDS_REPLAN (issue #449)', () => {
   })
 })
 
-describeIf('Reviewed production maintenance classification (issue #449 / #404)', () => {  it('dry-run reports, apply classifies via the same reset transaction', async () => {
+describeIf('Reviewed production maintenance classification (issue #449 / #404)', () => {
+  it('dry-run emits the reviewed fingerprint; apply with it classifies via the reset body', async () => {
     const f = await createFullyPlannedProject()
     const manifest = parseClassifyManifest({ projectIds: [f.projectId] })
 
-    // Dry run: zero writes.
+    // Dry run: zero writes, emits the deterministic reviewed-state fingerprint.
     const dry = await classifyNeedsReplan(prisma, manifest)
     expect(dry.classifiedCount).toBe(1)
+    expect(dry.stateFingerprint).toMatch(/^[0-9a-f]{64}$/)
     const afterDry = await prisma.project.findUnique({ where: { id: f.projectId } })
     expect(afterDry!.planningState).toBe('CURRENT')
     expect(await prisma.capacityProfile.count({ where: { projectId: f.projectId } })).toBeGreaterThan(0)
 
-    // Apply: classifies via the atomic reset (planning cleared, business kept).
-    const applied = await classifyNeedsReplan(prisma, manifest, { apply: true })
+    // Apply with the exact reviewed fingerprint: atomic classification
+    // (planning cleared, business kept).
+    const applied = await classifyNeedsReplan(prisma, manifest, {
+      apply: true,
+      expectedFingerprint: dry.stateFingerprint,
+    })
     expect(applied.classifiedCount).toBe(1)
+    expect(applied.stateFingerprint).toBe(dry.stateFingerprint)
     const afterApply = await prisma.project.findUnique({ where: { id: f.projectId } })
     expect(afterApply!.planningState).toBe('NEEDS_REPLAN')
     expect(await prisma.capacityProfile.count({ where: { projectId: f.projectId } })).toBe(0)
     expect(await prisma.task.count({ where: { userStory: { feature: { epic: { projectId: f.projectId } } } } })).toBeGreaterThan(0)
 
-    // Idempotent re-run: already NEEDS_REPLAN is skipped.
-    const again = await classifyNeedsReplan(prisma, manifest, { apply: true })
+    // Idempotent re-run with the NEW reviewed state: already NEEDS_REPLAN is
+    // skipped — but only with a fingerprint matching the new state.
+    const freshDry = await classifyNeedsReplan(prisma, manifest)
+    expect(freshDry.stateFingerprint).not.toBe(dry.stateFingerprint)
+    const again = await classifyNeedsReplan(prisma, manifest, {
+      apply: true,
+      expectedFingerprint: freshDry.stateFingerprint,
+    })
     expect(again.alreadyCount).toBe(1)
     expect(again.classifiedCount).toBe(0)
 
-    // Fails closed for a missing project.
+    // The stale (pre-apply) fingerprint now REFUSES — idempotence never
+    // weakens drift detection.
+    await expect(
+      classifyNeedsReplan(prisma, manifest, { apply: true, expectedFingerprint: dry.stateFingerprint }),
+    ).rejects.toThrow(/does not match the reviewed fingerprint/)
+
+    // Fails closed for a missing project: the stale reviewed fingerprint no
+    // longer matches (existence drift) and nothing is written.
     const badManifest = parseClassifyManifest({ projectIds: [f.projectId, 'does-not-exist'] })
-    await expect(classifyNeedsReplan(prisma, badManifest, { apply: true })).rejects.toThrow('no longer exist')
+    await expect(
+      classifyNeedsReplan(prisma, badManifest, { apply: true, expectedFingerprint: dry.stateFingerprint }),
+    ).rejects.toThrow(ClassifyAbortError)
+  })
+
+  it('refuses apply on reset-relevant drift with zero changes to any project', async () => {
+    const f = await createFullyPlannedProject()
+    const manifest = parseClassifyManifest({ projectIds: [f.projectId] })
+
+    const dry = await classifyNeedsReplan(prisma, manifest)
+
+    // One reset-relevant field changes after review: the weekly demand cache.
+    await prisma.project.update({
+      where: { id: f.projectId },
+      data: { weeklyDemandCache: { 'rt-changed|3': 7 } },
+    })
+
+    await expect(
+      classifyNeedsReplan(prisma, manifest, { apply: true, expectedFingerprint: dry.stateFingerprint }),
+    ).rejects.toThrow(/does not match the reviewed fingerprint/)
+
+    // Zero writes: the project and all planning state remain untouched.
+    const state = await prisma.project.findUnique({ where: { id: f.projectId } })
+    expect(state!.planningState).toBe('CURRENT')
+    expect(state!.weeklyDemandCache).toEqual({ 'rt-changed|3': 7 })
+    expect(await prisma.capacityProfile.count({ where: { projectId: f.projectId } })).toBe(3)
+    expect(await prisma.capacityPlan.count({ where: { projectId: f.projectId } })).toBe(1)
+    expect(await prisma.timelineEntry.count({ where: { projectId: f.projectId } })).toBe(1)
+  })
+
+  it('rolls the whole batch back when a later project fails (no partial classification)', async () => {
+    const f1 = await createFullyPlannedProject()
+    const f2 = await createFullyPlannedProject()
+    const manifest = parseClassifyManifest({ projectIds: [f1.projectId, f2.projectId] })
+
+    const dry = await classifyNeedsReplan(prisma, manifest)
+    expect(dry.classifiedCount).toBe(2)
+
+    // Inject a failure while resetting the SECOND project.
+    let resets = 0
+    await expect(
+      classifyNeedsReplan(prisma, manifest, {
+        apply: true,
+        expectedFingerprint: dry.stateFingerprint,
+        afterProjectReset: async (_tx, projectId) => {
+          resets++
+          if (projectId === f2.projectId) {
+            throw new Error('injected batch failure')
+          }
+        },
+      }),
+    ).rejects.toThrow('injected batch failure')
+    expect(resets).toBe(2)
+
+    // The whole batch rolled back: the FIRST project was not left quarantined
+    // and its planning data is intact.
+    const state1 = await prisma.project.findUnique({ where: { id: f1.projectId } })
+    expect(state1!.planningState).toBe('CURRENT')
+    expect(await prisma.capacityProfile.count({ where: { projectId: f1.projectId } })).toBe(3)
+    expect(await prisma.capacityPlan.count({ where: { projectId: f1.projectId } })).toBe(1)
+    expect(await prisma.timelineEntry.count({ where: { projectId: f1.projectId } })).toBe(1)
+
+    const state2 = await prisma.project.findUnique({ where: { id: f2.projectId } })
+    expect(state2!.planningState).toBe('CURRENT')
+  })
+
+  it('applies a multi-project manifest atomically on unchanged state', async () => {
+    const f1 = await createFullyPlannedProject()
+    const f2 = await createFullyPlannedProject()
+    const manifest = parseClassifyManifest({ projectIds: [f1.projectId, f2.projectId] })
+
+    const dry = await classifyNeedsReplan(prisma, manifest)
+    const applied = await classifyNeedsReplan(prisma, manifest, {
+      apply: true,
+      expectedFingerprint: dry.stateFingerprint,
+    })
+
+    expect(applied.classifiedCount).toBe(2)
+    for (const f of [f1, f2]) {
+      const state = await prisma.project.findUnique({ where: { id: f.projectId } })
+      expect(state!.planningState).toBe('NEEDS_REPLAN')
+      expect(await prisma.capacityProfile.count({ where: { projectId: f.projectId } })).toBe(0)
+      // Preserved business data remains intact.
+      expect(await prisma.task.count({ where: { userStory: { feature: { epic: { projectId: f.projectId } } } } })).toBeGreaterThan(0)
+      expect(await prisma.projectDiscount.count({ where: { projectId: f.projectId } })).toBe(1)
+    }
   })
 })

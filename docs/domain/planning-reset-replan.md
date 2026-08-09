@@ -161,20 +161,46 @@ user actions and are never merged into one "detach/reset" operation.
 `lib/classifyNeedsReplan.ts`):
 
 ```
-npx tsx src/scripts/classifyNeedsReplan.ts --manifest manifest.json            # DRY RUN (default)
-npx tsx src/scripts/classifyNeedsReplan.ts --manifest manifest.json --apply    # apply
+npx tsx src/scripts/classifyNeedsReplan.ts --manifest manifest.json                          # DRY RUN (default)
+npx tsx src/scripts/classifyNeedsReplan.ts --manifest manifest.json --apply \
+     --expected-fingerprint <sha256>                                                          # apply
 ```
 
 - Manifest shape: `{ "projectIds": ["<id>", ...] }` — an explicitly reviewed input,
   never invented selection rules on production.
-- Dry-run by default; `--apply` required to write.
+- Dry-run by default; `--apply` required to write. Every dry-run prints
+  `stateFingerprint: <sha256>`.
+- **Reviewed-state fingerprint.** The fingerprint is a deterministic SHA-256 over
+  exactly the reset-relevant state of the manifest set: manifest project IDs and
+  existence, `planningState`, `weeklyDemandCache`, `CapacityProfile`
+  ownership/provenance fields, `CapacitySegment`s, `CapacityPlan`/period/entry
+  rows, `TimelineEntry`/`StoryTimelineEntry` rows, and the `NamedResource` identity
+  linkage that (with profile ownerKind) determines which rows are proven
+  `PLANNED_RESOURCE` planner artefacts. Ordering is canonicalised (sorted IDs and
+  rows, sorted JSON object keys), so unchanged state always yields the same
+  fingerprint. Unrelated backlog/business fields are never included.
+- **Apply contract.** `--apply` REQUIRES the reviewed fingerprint
+  (`--expected-fingerprint <sha256>` from a dry-run on unchanged state). The
+  fingerprint is recomputed INSIDE the apply transaction immediately before any
+  write; any mismatch aborts with zero writes and an explicit drift error telling
+  the operator to rerun the dry-run and review the new state. A project changed
+  after review can never be destructively reset on stale evidence.
+- **Atomic batch.** The complete manifest apply runs in ONE Prisma transaction:
+  either every to-classify project is reset (via the same reset transaction body
+  the product uses) or none is. A failure on any project rolls the whole batch
+  back — no partial classification.
+- **Idempotence.** Already-`NEEDS_REPLAN` projects are skipped, but only when that
+  state is part of the reviewed fingerprint; the drift check still refuses every
+  other unexpected change.
 - Each classified project goes through the same atomic reset transaction as the
   product action: planning state discarded, business data preserved, marked
   `NEEDS_REPLAN`.
-- Fails closed: malformed manifest, unknown arguments, or a manifest project that no
-  longer exists abort with nothing changed.
+- Fails closed: malformed manifest, unknown arguments, missing or malformed
+  fingerprint for apply, fingerprint drift, or a manifest project that no longer
+  exists abort with nothing changed.
 - No capacity inference, profile reconstruction, percentage, window or owner-kind
-  decisions. Output is sanitized (operator-supplied IDs and aggregate counts only).
+  decisions. Output is sanitized (operator-supplied IDs, the reviewed hash, and
+  aggregate counts only).
 - Production execution under #404 remains owned by the production agent; the
   restore-tested backup retained by #404 is untouched by this command.
 
@@ -198,16 +224,45 @@ available in both states (a pre-replan snapshot is a useful safety net).
 
 ## Migration sequencing
 
-Once merged and proven on production (under #404's process):
+### Deployment prerequisite: the ownership-invariants migration must be applied first
 
-1. Classify the affected legacy projects as `NEEDS_REPLAN` via the reviewed
-   maintenance command.
-2. Run permanent readiness: `CURRENT` projects must pass; `NEEDS_REPLAN` projects
-   are explicitly quarantined.
-3. Prove the normal Reset/Replan workflow on a representative project and return it
-   to `CURRENT`.
-4. Create/restore a representative V4 snapshot and rerun readiness.
-5. Only then authorize #418 PR 2 legacy-column removal.
+The new #450 migration `20260808221539_add_project_planning_state` sits AFTER
+`20260721000001_enforce_capacity_profile_ownership_invariants` in Prisma migration
+order. Production evidence (#404) records `20260721000001` as the single pending
+migration (37 found, 36 applied). A normal `prisma migrate deploy` therefore
+applies `20260721000001` before the #450 migration, and it must already be applied
+before the #450 release is installed.
+
+The #450 release must NOT be installed on production while
+`20260721000001_enforce_capacity_profile_ownership_invariants` is still pending.
+
+Required production sequence:
+
+1. **#404 executes the reviewed pending migration as its own controlled step**
+   (before the #450 release is installed), using the #404 production safety
+   process:
+   - exact reviewed commit containing `20260721000001_enforce_capacity_profile_ownership_invariants`;
+   - maintenance window with no application writes as required;
+   - current ownership audit/preflight clean;
+   - appropriate current backup/rollback protection;
+   - `prisma migrate deploy`;
+   - verify ONLY that migration was newly applied;
+   - rerun the ownership audit / required validation;
+   - stop on any failure.
+2. Only after production migration state confirms
+   `20260721000001_enforce_capacity_profile_ownership_invariants` is applied may
+   the #450 release be installed; its `20260808221539_add_project_planning_state`
+   migration then deploys in order.
+3. Continue the approved #449/#404 sequence:
+
+   a. Classify the affected legacy projects as `NEEDS_REPLAN` via the reviewed
+      maintenance command (dry-run → reviewed fingerprint → `--apply` with it).
+   b. Run permanent readiness: `CURRENT` projects must pass; `NEEDS_REPLAN`
+      projects are explicitly quarantined.
+   c. Prove the normal Reset/Replan workflow on a representative project and
+      return it to `CURRENT`.
+   d. Create/restore a representative V4 snapshot and rerun readiness.
+   e. Only then authorize #418 PR 2 legacy-column removal.
 
 The #421 2,011-write/130-decision preservation plan is superseded and must not be
 applied.
