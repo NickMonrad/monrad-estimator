@@ -156,10 +156,6 @@ async function createResourceType(
     count: number
     hoursPerDay: number | null
     dayRate: number | null
-    allocationMode: $Enums.AllocationMode
-    allocationPercent: number
-    allocationStartWeek: number | null
-    allocationEndWeek: number | null
   }> = {},
 ): Promise<string> {
   await prisma.resourceType.create({
@@ -171,10 +167,6 @@ async function createResourceType(
       count: overrides.count ?? 2,
       hoursPerDay: overrides.hoursPerDay ?? null,
       dayRate: overrides.dayRate ?? null,
-      allocationMode: overrides.allocationMode ?? 'TIMELINE',
-      allocationPercent: overrides.allocationPercent ?? 100,
-      allocationStartWeek: overrides.allocationStartWeek ?? null,
-      allocationEndWeek: overrides.allocationEndWeek ?? null,
     },
   })
   return id
@@ -186,13 +178,6 @@ async function createNamedResource(
   id: string,
   name: string,
   overrides: Partial<{
-    startWeek: number | null
-    endWeek: number | null
-    allocationPct: number
-    allocationMode: $Enums.AllocationMode
-    allocationPercent: number
-    allocationStartWeek: number | null
-    allocationEndWeek: number | null
     pricingModel: string
   }> = {},
 ): Promise<string> {
@@ -201,13 +186,6 @@ async function createNamedResource(
       id,
       resourceTypeId,
       name,
-      startWeek: overrides.startWeek ?? null,
-      endWeek: overrides.endWeek ?? null,
-      allocationPct: overrides.allocationPct ?? 100,
-      allocationMode: overrides.allocationMode ?? 'EFFORT',
-      allocationPercent: overrides.allocationPercent ?? 100,
-      allocationStartWeek: overrides.allocationStartWeek ?? null,
-      allocationEndWeek: overrides.allocationEndWeek ?? null,
       pricingModel: overrides.pricingModel ?? 'ACTUAL_DAYS',
     },
   })
@@ -589,13 +567,13 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     rtEngId = await createResourceType(srcProjectId, crypto.randomUUID(), 'Engineering',
       { category: 'ENGINEERING', count: 3, hoursPerDay: 8, dayRate: 800 })
     rtGovId = await createResourceType(srcProjectId, crypto.randomUUID(), 'Governance',
-      { category: 'GOVERNANCE', count: 1, allocationMode: 'FULL_PROJECT' })
+      { category: 'GOVERNANCE', count: 1 })
 
     // Named resources under Engineering (2 — one of each billing model)
     nrJohnId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'John Developer',
-      { pricingModel: 'ACTUAL_DAYS', allocationPct: 100 })
+      { pricingModel: 'ACTUAL_DAYS' })
     nrJaneId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'Jane Architect',
-      { pricingModel: 'PRO_RATA', allocationPct: 80, startWeek: 2, endWeek: 10 })
+      { pricingModel: 'PRO_RATA' })
 
     // ── Capacity profiles (11) ───────────────────────────────────────────
     // ROLE — scalar shape (single segment, same window). Segmented with
@@ -1017,13 +995,8 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       expect(cloneRT!.count).toBe(srcRT.count)
       expect(cloneRT!.hoursPerDay).toBe(srcRT.hoursPerDay)
       expect(cloneRT!.dayRate).toBe(srcRT.dayRate)
-      // Issue #418: the candidate legacy capacity columns are never copied —
-      // the clone's rows keep the schema defaults; capacity follows via the
-      // cloned capacity profiles.
-      expect(cloneRT!.allocationMode).toBe('TIMELINE')
-      expect(cloneRT!.allocationPercent).toBe(100)
-      expect(cloneRT!.allocationStartWeek).toBeNull()
-      expect(cloneRT!.allocationEndWeek).toBeNull()
+      // Issue #418: the legacy capacity columns no longer exist; capacity
+      // follows via the cloned capacity profiles.
     }
   })
   // ── Test A11: Discounts endpoint parity via production HTTP GET ──────
@@ -1631,7 +1604,7 @@ describeIf('Scenario C — clone rolls back transaction after invalid profile ow
     rtEngId = await createResourceType(srcProjectId, crypto.randomUUID(), 'Engineering',
       { category: 'ENGINEERING', count: 2, dayRate: 800 })
     nrBobId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'Bob',
-      { pricingModel: 'ACTUAL_DAYS', allocationPct: 100 })
+      { pricingModel: 'ACTUAL_DAYS' })
 
     // Create a valid ROLE capacity profile (FK-safe: has resourceTypeId, no
     // namedResourceId). Segmented → CAPACITY_PROFILE.

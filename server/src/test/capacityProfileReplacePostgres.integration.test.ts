@@ -135,10 +135,7 @@ async function snapshotRoleState(rtId: string): Promise<{
       where: { id: rtId },
       select: {
         id: true,
-        allocationMode: true,
-        allocationPercent: true,
-        allocationStartWeek: true,
-        allocationEndWeek: true,
+        name: true,
       },
     }),
   )
@@ -184,10 +181,6 @@ beforeAll(async () => {
       category: 'ENGINEERING',
       count: 2,
       hoursPerDay: 8,
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
-      allocationStartWeek: 0,
-      allocationEndWeek: 4,
       projectId,
     },
   })
@@ -223,13 +216,6 @@ beforeAll(async () => {
     data: {
       resourceTypeId: roleRt.id,
       name: 'InheritedRoleDefault',
-      allocationPct: 100,
-      allocationPercent: 100,
-      allocationMode: 'EFFORT',
-      allocationStartWeek: 0,
-      allocationEndWeek: 4,
-      startWeek: 0,
-      endWeek: 4,
     },
   })
   inheritedNrId = inheritedNr.id
@@ -241,8 +227,6 @@ beforeAll(async () => {
       category: 'ENGINEERING',
       count: 1,
       hoursPerDay: 8,
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
       projectId,
     },
   })
@@ -250,13 +234,6 @@ beforeAll(async () => {
     data: {
       resourceTypeId: nrRt.id,
       name: 'ReplaceableNR',
-      allocationPct: 100,
-      allocationPercent: 100,
-      allocationMode: 'TIMELINE',
-      allocationStartWeek: 0,
-      allocationEndWeek: 4,
-      startWeek: 0,
-      endWeek: 4,
     },
   })
   nrId = nr.id
@@ -294,8 +271,6 @@ beforeAll(async () => {
       category: 'ENGINEERING',
       count: 1,
       hoursPerDay: 8,
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
       projectId,
     },
   })
@@ -308,7 +283,6 @@ beforeAll(async () => {
       category: 'ENGINEERING',
       count: 3,
       hoursPerDay: 8,
-      allocationMode: 'EFFORT',
       projectId,
     },
   })
@@ -590,18 +564,22 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
 
     expect(res.status).toBe(200)
 
-    // The DTO legacy field is null in the persisted-authority path;
-    // the actual legacy values are written to the database. Assert DB fields.
+    // Issue #418: the legacy capacity columns no longer exist. The replace
+    // endpoint persists the compatibility projection in the profile's
+    // `legacy` JSON provenance payload — assert that instead of DB columns.
 
-    // Verify persisted legacy fields on the resource type
-    const dbRt = await prisma.resourceType.findFirst({
-      where: { id: roleRtId },
+    // Verify persisted legacy projection on the role profile
+    const roleProf = await prisma.capacityProfile.findFirst({
+      where: { projectId, resourceTypeId: roleRtId, namedResourceId: null },
     })
-    expect(dbRt!.allocationMode).toBe('CAPACITY_PLAN')
-    expect(dbRt!.allocationPercent).toBe(64)
-    // Cap-window: start = min segment start, end = max segment end
-    expect(dbRt!.allocationStartWeek).toBe(0)
-    expect(dbRt!.allocationEndWeek).toBe(9)
+    expect(roleProf).toBeDefined()
+    expect(roleProf!.legacy).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: 64,
+      // Cap-window: start = min segment start, end = max segment end
+      allocationStartWeek: 0,
+      allocationEndWeek: 9,
+    })
 
     // Now replace a named-person profile
     const nrBody = {
@@ -619,19 +597,18 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
 
     expect(nrRes.status).toBe(200)
 
-    // Verify persisted legacy fields on named resource
-    const dbNr = await prisma.namedResource.findFirst({
-      where: { id: nrId },
+    // Verify persisted legacy projection on the named-person profile
+    const nrProf = await prisma.capacityProfile.findFirst({
+      where: { projectId, namedResourceId: nrId, resourceTypeId: null },
     })
-    expect(dbNr).toBeDefined()
-    expect(dbNr!.allocationMode).toBe('CAPACITY_PLAN')
-    // DWA: (6*90 + 3*30)/9 = 70
-    expect(dbNr!.allocationPercent).toBe(70)
-    expect(dbNr!.allocationPct).toBe(70)
-    expect(dbNr!.allocationStartWeek).toBe(2)
-    expect(dbNr!.allocationEndWeek).toBe(10)
-    expect(dbNr!.startWeek).toBe(2)
-    expect(dbNr!.endWeek).toBe(10)
+    expect(nrProf).toBeDefined()
+    expect(nrProf!.legacy).toMatchObject({
+      allocationMode: 'CAPACITY_PLAN',
+      // DWA: (6*90 + 3*30)/9 = 70
+      allocationPercent: 70,
+      allocationStartWeek: 2,
+      allocationEndWeek: 10,
+    })
   })
 
   // ── Test 6: Owner uniqueness constraints remain satisfied ─────
@@ -835,8 +812,6 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
         category: 'ENGINEERING',
         count: 5,
         hoursPerDay: 8,
-        allocationMode: 'EFFORT',
-        allocationPercent: 60,
       },
     })
 
@@ -846,9 +821,6 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
           data: {
             resourceTypeId: inheritanceRole.id,
             name,
-            allocationMode: 'EFFORT',
-            allocationPercent: 60,
-            allocationPct: 60,
           },
         }),
       ),
@@ -939,21 +911,12 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
       include: { segments: { orderBy: [{ startWeek: 'asc' }, { endWeek: 'asc' }] } },
       orderBy: { namedResourceId: 'asc' },
     }))
-    const beforeExplicitResources = canonicalize(await prisma.namedResource.findMany({
-      where: { id: { in: explicitIds } },
-      orderBy: { id: 'asc' },
-    }))
     const scalarProfile = beforeExplicitProfiles.find(profile => profile.namedResourceId === manualScalar.id)
     expect(scalarProfile?.legacy).toMatchObject({
       version: 1,
       writer: 'manual-editor',
       allocationMode: 'EFFORT',
       allocationPercent: 60,
-    })
-    expect(beforeExplicitResources.find(resource => resource.id === manualScalar.id)).toMatchObject({
-      allocationMode: 'EFFORT',
-      allocationPercent: 60,
-      allocationPct: 60,
     })
 
     await prisma.project.update({
@@ -1021,10 +984,6 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
       include: { segments: { orderBy: [{ startWeek: 'asc' }, { endWeek: 'asc' }] } },
       orderBy: { namedResourceId: 'asc' },
     }))).toEqual(beforeExplicitProfiles)
-    expect(canonicalize(await prisma.namedResource.findMany({
-      where: { id: { in: explicitIds } },
-      orderBy: { id: 'asc' },
-    }))).toEqual(beforeExplicitResources)
     expect((await prisma.project.findUniqueOrThrow({
       where: { id: projectId },
       select: { weeklyDemandCache: true },

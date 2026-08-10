@@ -127,7 +127,6 @@ async function createResourceType(
   overrides: Partial<{
     category: $Enums.ResourceCategory
     count: number
-    allocationMode: $Enums.AllocationMode
   }> = {},
 ): Promise<string> {
   await prisma.resourceType.create({
@@ -137,7 +136,6 @@ async function createResourceType(
       projectId,
       category: overrides.category ?? 'ENGINEERING',
       count: overrides.count ?? 2,
-      allocationMode: overrides.allocationMode ?? 'TIMELINE',
     },
   })
   return id
@@ -148,28 +146,12 @@ async function createNamedResource(
   resourceTypeId: string,
   id: string,
   name: string,
-  overrides: Partial<{
-    allocationMode: $Enums.AllocationMode
-    allocationPercent: number
-    allocationPct: number
-    allocationStartWeek: number | null
-    allocationEndWeek: number | null
-    startWeek: number | null
-    endWeek: number | null
-  }> = {},
 ): Promise<string> {
   await prisma.namedResource.create({
     data: {
       id,
       resourceTypeId,
       name,
-      allocationMode: overrides.allocationMode ?? 'CAPACITY_PLAN',
-      allocationPercent: overrides.allocationPercent ?? 100,
-      allocationPct: overrides.allocationPct ?? 100,
-      allocationStartWeek: overrides.allocationStartWeek ?? null,
-      allocationEndWeek: overrides.allocationEndWeek ?? null,
-      startWeek: overrides.startWeek ?? null,
-      endWeek: overrides.endWeek ?? null,
     },
   })
   return id
@@ -304,10 +286,6 @@ function segmentStructuralFields(segments: SegmentRow[]) {
 async function fetchNamedResources(resourceTypeId: string): Promise<Array<{
   id: string
   name: string
-  allocationMode: string | null
-  allocationPercent: number | null
-  allocationStartWeek: number | null
-  allocationEndWeek: number | null
 }>> {
   return prisma.namedResource.findMany({
     where: { resourceTypeId },
@@ -315,10 +293,6 @@ async function fetchNamedResources(resourceTypeId: string): Promise<Array<{
     select: {
       id: true,
       name: true,
-      allocationMode: true,
-      allocationPercent: true,
-      allocationStartWeek: true,
-      allocationEndWeek: true,
     },
   })
 }
@@ -639,7 +613,6 @@ describeIf('Scenario 2 — Protected named-person profiles unchanged', () => {
     // Create a named person (explicit, not planner)
     namedPersonNrId = await createNamedResource(
       projectId, rtId, 'nr-named-s2', 'Alice',
-      { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: 100 },
     )
 
     // Create an explicit NAMED_PERSON profile (MANUAL source, DEMAND_FOLLOWING)
@@ -658,7 +631,6 @@ describeIf('Scenario 2 — Protected named-person profiles unchanged', () => {
     // Create a planner-managed PLANNED_RESOURCE profile WITH segments
     const plannerNrId = await createNamedResource(
       projectId, rtId, 'nr-planner-s2', 'Planned Resource 1',
-      { allocationMode: 'CAPACITY_PLAN' },
     )
     await createProfile(
       projectId, 'cp-planned-s2', 'PLANNED_RESOURCE', null, plannerNrId,
@@ -854,7 +826,6 @@ describeIf('Scenario 7 — Compatibility projection', () => {
 
     nrId = await createNamedResource(
       projectId, rtId, 'nr-s7', 'Projection Test 1',
-      { allocationMode: 'CAPACITY_PLAN' },
     )
 
     await createProfile(
@@ -872,7 +843,7 @@ describeIf('Scenario 7 — Compatibility projection', () => {
     await createSegment('cp-nr-s7', 4, 7, 50)
   })
 
-  it('freezes ResourceType candidate columns during transfer', async () => {
+  it('transfers planner profiles to MANUAL with the compatibility projection', async () => {
     const res = await request(app)
       .post(`/api/projects/${projectId}/capacity-profiles/transfer-to-manual`)
       .set('Authorization', authHeader)
@@ -880,26 +851,14 @@ describeIf('Scenario 7 — Compatibility projection', () => {
 
     expect(res.status).toBe(200)
 
-    // Issue #418: transfer never writes candidate columns — the seeded
-    // defaults stay frozen; the transferred MANUAL profiles are authority.
+    // Issue #418: the legacy candidate columns no longer exist; the
+    // transferred MANUAL profiles are authority.
     const rt = await prisma.resourceType.findUnique({
       where: { id: rtId },
-      select: { allocationMode: true, allocationPercent: true, allocationStartWeek: true, allocationEndWeek: true },
+      select: { id: true, name: true },
     })
     expect(rt).toBeDefined()
-    expect(rt!.allocationMode).toBe('TIMELINE')
-    expect(rt!.allocationPercent).toBe(100)
-    expect(rt!.allocationStartWeek).toBeNull()
-    expect(rt!.allocationEndWeek).toBeNull()
-  })
-
-  it('freezes NamedResource candidate columns during transfer', async () => {
-    // The NR was seeded with CAPACITY_PLAN — it stays frozen; the transferred
-    // MANUAL PLANNED_RESOURCE profile carries the (now zeroed) capacity.
-    const nrs = await fetchNamedResources(rtId)
-    const nr = nrs.find(n => n.id === nrId)
-    expect(nr).toBeDefined()
-    expect(nr!.allocationMode).toBe('CAPACITY_PLAN')
+    expect(rt!.id).toBe(rtId)
   })
 })
 
@@ -929,7 +888,6 @@ describeIf('Scenario 8 — Later Squad Planner apply blocked', () => {
     // Create planner resource profile with segments
     const nrId = await createNamedResource(
       projectId, rtId, 'nr-s8', 'Planned 1',
-      { allocationMode: 'CAPACITY_PLAN' },
     )
     await createProfile(
       projectId, 'cp-nr-s8', 'PLANNED_RESOURCE', null, nrId,
@@ -1122,10 +1080,6 @@ describeIf('Scenario 11 — Atomic rollback on failure', () => {
     const beforeRoleSegments = await fetchSegments('cp-role-s11')
     const beforeNRSegments = await fetchSegments('cp-nr-s11')
     const beforeNR = await fetchNamedResources(rtId)
-    const beforeRT = await prisma.resourceType.findUnique({
-      where: { id: rtId },
-      select: { allocationMode: true, allocationPercent: true, allocationStartWeek: true, allocationEndWeek: true },
-    })
     const beforeProject = await prisma.project.findUnique({
       where: { id: projectId },
       select: { weeklyDemandCache: true },
@@ -1164,12 +1118,6 @@ describeIf('Scenario 11 — Atomic rollback on failure', () => {
 
     const afterNR = await fetchNamedResources(rtId)
     expect(afterNR).toEqual(beforeNR)
-
-    const afterRT = await prisma.resourceType.findUnique({
-      where: { id: rtId },
-      select: { allocationMode: true, allocationPercent: true, allocationStartWeek: true, allocationEndWeek: true },
-    })
-    expect(afterRT).toEqual(beforeRT)
 
     // Verify weeklyDemandCache matches exact pre-transfer value
     const afterProject = await prisma.project.findUnique({

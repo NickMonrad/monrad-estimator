@@ -181,10 +181,6 @@ async function createResourceType(
   overrides: Partial<{
     category: $Enums.ResourceCategory
     count: number
-    allocationMode: $Enums.AllocationMode
-    allocationPercent: number
-    allocationStartWeek: number | null
-    allocationEndWeek: number | null
     dayRate: number
     hoursPerDay: number
   }> = {},
@@ -196,10 +192,6 @@ async function createResourceType(
       projectId,
       category: overrides.category ?? 'ENGINEERING',
       count: overrides.count ?? 2,
-      allocationMode: overrides.allocationMode ?? 'TIMELINE',
-      allocationPercent: overrides.allocationPercent ?? 100,
-      allocationStartWeek: overrides.allocationStartWeek ?? null,
-      allocationEndWeek: overrides.allocationEndWeek ?? null,
       dayRate: overrides.dayRate ?? null,
       hoursPerDay: overrides.hoursPerDay ?? null,
     },
@@ -238,10 +230,6 @@ async function createNamedResource(
   id: string,
   name: string,
   overrides: Partial<{
-    startWeek: number | null
-    endWeek: number | null
-    allocationPercent: number
-    allocationMode: $Enums.AllocationMode
     pricingModel: string
   }> = {},
 ): Promise<string> {
@@ -250,10 +238,6 @@ async function createNamedResource(
       id,
       resourceTypeId,
       name,
-      startWeek: overrides.startWeek ?? null,
-      endWeek: overrides.endWeek ?? null,
-      allocationPercent: overrides.allocationPercent ?? 100,
-      allocationMode: overrides.allocationMode ?? 'EFFORT',
       pricingModel: overrides.pricingModel ?? 'PRO_RATA',
     },
   })
@@ -556,12 +540,10 @@ describeIf('Scenario 1 — Rollback failure injects through production seam', ()
     const storyTimelineEntries = await prisma.storyTimelineEntry.count({ where: { projectId } })
     expect(storyTimelineEntries).toBe(0)
 
-    // ── Resource type allocation mode was NOT changed (transaction rolled
-    //     back the profile-first compatibility projection) ───────────────
+    // ── Resource type was NOT changed (transaction rolled back the
+    //     profile-first mutations; the legacy columns no longer exist) ──
     const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
     expect(rt).not.toBeNull()
-    // The RT was created with TIMELINE; after rollback it should remain TIMELINE
-    expect(rt!.allocationMode).toBe('TIMELINE')
 
     // ── No weeklyDemandCache was set ───────────────────────────────────
     const project = await prisma.project.findUnique({ where: { id: projectId } })
@@ -589,18 +571,14 @@ describeIf('Scenario 2 — Snapshot-v3 undo via real POST apply+rollback', () =>
     projectId = await createProject()
     rtDev = await createResourceType(projectId, 'rt-undo-dev', 'Developer', {
       dayRate: 500,
-      allocationMode: 'TIMELINE',
     })
     rtDes = await createResourceType(projectId, 'rt-undo-des', 'Designer', {
       dayRate: 450,
-      allocationMode: 'EFFORT',
       count: 1,
     })
 
     // Named resource on Developer
     await createNamedResource(projectId, rtDev, 'nr-undo-alice', 'Alice', {
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
       pricingModel: 'ACTUAL_DAYS',
     })
 
@@ -757,9 +735,7 @@ describeIf('Scenario 2 — Snapshot-v3 undo via real POST apply+rollback', () =>
     for (const pre of preApplyRts) {
       const post = afterRts.find(r => r.id === pre.id)
       expect(post).toBeDefined()
-      expect(post!.allocationMode).toBe(pre.allocationMode)
       expect(post!.count).toBe(pre.count)
-      expect(post!.allocationPercent).toBe(pre.allocationPercent)
     }
 
     // ── Assert named resources restored to pre-apply compatibility fields ─
@@ -770,8 +746,7 @@ describeIf('Scenario 2 — Snapshot-v3 undo via real POST apply+rollback', () =>
     for (const pre of preApplyNrs) {
       const post = afterNrs.find(n => n.id === pre.id)
       expect(post).toBeDefined()
-      expect(post!.allocationMode).toBe(pre.allocationMode)
-      expect(post!.allocationPercent).toBe(pre.allocationPercent)
+      expect(post!.name).toBe(pre.name)
     }
 
     // ── Assert profiles cleared (pre-apply had none) ────────────────────
@@ -810,17 +785,10 @@ describeIf('Scenario 3 — Resource Profile parity via production GET', () => {
     projectId = await createProject()
     rtId = await createResourceType(projectId, 'rt-rp-parity', 'Engineer', {
       dayRate: 500,
-      allocationMode: 'TIMELINE',
     })
     // Create 2 named resources so we have capacity for surplus testing
-    await createNamedResource(projectId, rtId, 'nr-rp-1', 'Planned Eng 1', {
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
-    })
-    await createNamedResource(projectId, rtId, 'nr-rp-2', 'Planned Eng 2', {
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
-    })
+    await createNamedResource(projectId, rtId, 'nr-rp-1', 'Planned Eng 1')
+    await createNamedResource(projectId, rtId, 'nr-rp-2', 'Planned Eng 2')
     await createMapperPersonProfile(projectId, 'nr-rp-1', 'prof-rp-1')
     await createMapperPersonProfile(projectId, 'nr-rp-2', 'prof-rp-2')
     await createEpicBacklog(projectId, rtId)
@@ -961,8 +929,6 @@ describeIf('Scenario 4 — Export parity via client buildProfileCsv', () => {
       dayRate: 500,
     })
     await createNamedResource(projectId, rtId, 'nr-export-1', 'Planned Export', {
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
       pricingModel: 'ACTUAL_DAYS',
     })
     await createMapperPersonProfile(projectId, 'nr-export-1', 'prof-export-1')
@@ -1078,48 +1044,24 @@ describeIf('Scenario 5 — Commercial parity before/after apply', () => {
     // ── 2 resource types with day rates ─────────────────────────────────
     rtDev = await createResourceType(projectId, 'rt-com-dev', 'Developer', {
       dayRate: 500,
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 150,
-      allocationStartWeek: 0,
-      allocationEndWeek: 7,
     })
     rtDes = await createResourceType(projectId, 'rt-com-des', 'Designer', {
       dayRate: 400,
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-      allocationStartWeek: 0,
-      allocationEndWeek: 7,
       count: 2,
     })
 
     // ── 4 named resources: 2 per RT, each with stable well-known IDs ─────
     await createNamedResource(projectId, rtDev, 'nr-com-dev-1', 'Developer 1', {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
       pricingModel: 'PRO_RATA',
-      startWeek: 0,
-      endWeek: 7,
     })
     await createNamedResource(projectId, rtDev, 'nr-com-dev-2', 'Developer 2', {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
       pricingModel: 'PRO_RATA',
-      startWeek: 0,
-      endWeek: 3,
     })
     await createNamedResource(projectId, rtDes, 'nr-com-des-1', 'Designer 1', {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
       pricingModel: 'PRO_RATA',
-      startWeek: 0,
-      endWeek: 7,
     })
     await createNamedResource(projectId, rtDes, 'nr-com-des-2', 'Designer 2', {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 0,
       pricingModel: 'PRO_RATA',
-      startWeek: null,
-      endWeek: null,
     })
 
     // ── Backlog with enough hours for non-zero actualAllocatedDays ────────
@@ -1633,11 +1575,9 @@ describeIf('Scenario 6 — Timeline parity against applied plan', () => {
     if (!runIntegration) return
     projectId = await createProject({ hoursPerDay: 8 })
     rtA = await createResourceType(projectId, 'rt-tl-a', 'Engineer', {
-      allocationMode: 'TIMELINE',
       dayRate: 500,
     })
     rtB = await createResourceType(projectId, 'rt-tl-b', 'QA', {
-      allocationMode: 'TIMELINE',
       dayRate: 400,
     })
     // Mapper-created RTs always carry a ROLE profile; a profile-less role

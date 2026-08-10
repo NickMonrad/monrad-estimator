@@ -44,7 +44,6 @@ import {
   PlannerConflictError,
   type RoleProfileWriteSet,
 } from '../lib/squadPlannerProfileWriter.js'
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 // Override the global prisma mock so route handlers use real PostgreSQL.
 vi.mock('../lib/prisma.js', async (importOriginal) => {
   return await importOriginal()
@@ -141,7 +140,6 @@ async function createResourceType(
   overrides: Partial<{
     category: $Enums.ResourceCategory
     count: number
-    allocationMode: $Enums.AllocationMode
   }> = {},
 ): Promise<string> {
   await prisma.resourceType.create({
@@ -151,7 +149,6 @@ async function createResourceType(
       projectId,
       category: overrides.category ?? 'ENGINEERING',
       count: overrides.count ?? 2,
-      allocationMode: overrides.allocationMode ?? 'TIMELINE',
     },
   })
   return id
@@ -187,22 +184,12 @@ async function createNamedResource(
   resourceTypeId: string,
   id: string,
   name: string,
-  overrides: Partial<{
-    startWeek: number | null
-    endWeek: number | null
-    allocationPercent: number
-    allocationMode: $Enums.AllocationMode
-  }> = {},
 ): Promise<string> {
   await prisma.namedResource.create({
     data: {
       id,
       resourceTypeId,
       name,
-      startWeek: overrides.startWeek ?? null,
-      endWeek: overrides.endWeek ?? null,
-      allocationPercent: overrides.allocationPercent ?? 100,
-      allocationMode: overrides.allocationMode ?? 'EFFORT',
     },
   })
   return id
@@ -728,17 +715,7 @@ describeIf('Scenario 3 — Resizing from 2 headcount to 1 produces surplus PLANN
     const surplus = await prisma.namedResource.findUnique({
       where: { id: surplusProfile!.namedResourceId! },
     })
-    // Issue #418: candidate legacy columns are never written — the zero
-    // capacity is expressed exclusively through the persisted profile.
-    expect(surplus).toMatchObject({
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
-      allocationPct: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-      startWeek: null,
-      endWeek: null,
-    })
+    expect(surplus).not.toBeNull()
 
     const resourceProfileRes = await request(app)
       .get(`/api/projects/${projectId}/resource-profile`)
@@ -820,11 +797,6 @@ describeIf('Scenario 4 — setActive:false does not mutate capacity profiles', (
     expect(profiles).toHaveLength(0)
   })
 
-  it('does not modify resource type allocation mode', async () => {
-    const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
-    expect(rt!.allocationMode).toBe('TIMELINE')
-  })
-
   it('does not create named resources', async () => {
     const nrs = await prisma.namedResource.findMany({
       where: { resourceType: { projectId } },
@@ -887,17 +859,12 @@ describeIf('Scenario 5 — Explicit NAMED_PERSON + shortfall creates planner pla
 
     const alice = nrs.find(nr => nr.id === aliceNrId)
     expect(alice).toBeDefined()
-    // Alice's original legacy aliases preserved (EFFORT was default from createNamedResource)
-    expect(alice!.allocationMode).toBe('EFFORT')
-    expect(alice!.allocationPercent).toBe(100)
 
-    // Planner placeholders: candidate columns stay frozen at schema defaults
-    // (issue #418 — capacity is expressed exclusively through profiles)
+    // Planner placeholders: capacity is expressed exclusively through profiles
+    // (issue #418 — the legacy columns no longer exist).
     const plannerNRs = nrs.filter(nr => nr.id !== aliceNrId)
     expect(plannerNRs).toHaveLength(2)
     for (const nr of plannerNRs) {
-      expect(nr.allocationMode).toBe('EFFORT')
-      expect(nr.allocationPercent).toBe(100)
       expect(nr.resourceTypeId).toBe(rtId)
     }
   })
@@ -987,9 +954,7 @@ describeIf('Scenario 6 — Legacy planner profiles are adopted only with all mar
     projectId = await createProject()
     rtId = await createResourceType(projectId, 'rt-eng-s6', 'Engineer')
     await createEpicBacklog(projectId, rtId)
-    await createNamedResource(projectId, rtId, 'nr-legacy', 'Engineer 1', {
-      allocationMode: 'CAPACITY_PLAN',
-    })
+    await createNamedResource(projectId, rtId, 'nr-legacy', 'Engineer 1')
     await createProfile(
       projectId,
       'cp-legacy',
@@ -1095,25 +1060,12 @@ describeIf('Scenario 7 — Omitted planner roles lose capacity on replacement', 
     })
     expect(omittedResourceType).toMatchObject({
       count: 0,
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
     })
 
     const omittedNamedResources = await prisma.namedResource.findMany({
       where: { resourceTypeId: omittedRtId },
     })
     expect(omittedNamedResources).toHaveLength(1)
-    expect(omittedNamedResources[0]).toMatchObject({
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
-      allocationPct: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-      startWeek: null,
-      endWeek: null,
-    })
     const omittedProfile = profiles.find(
       p => p.ownerKind === 'PLANNED_RESOURCE'
         && p.namedResourceId === omittedNamedResources[0].id,
@@ -1171,7 +1123,7 @@ describeIf('Scenario 8 — Profile writes roll back atomically', () => {
       where: { capacityProfile: { projectId } },
     })).toBe(0)
     expect(await prisma.resourceType.findUnique({ where: { id: rtId } }))
-      .toMatchObject({ allocationMode: 'TIMELINE' })
+      .toMatchObject({ name: 'Engineer' })
   })
 
   it('applies atomic rollback when the __applyFailureSeam fires inside the route transaction', async () => {
@@ -1205,9 +1157,9 @@ describeIf('Scenario 8 — Profile writes roll back atomically', () => {
       where: { capacityProfile: { projectId } },
     })).toBe(0)
 
-    // Resource type should still have its original allocation mode
+    // Resource type metadata unchanged
     const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
-    expect(rt).toMatchObject({ allocationMode: 'TIMELINE' })
+    expect(rt).toMatchObject({ name: 'Engineer' })
 
     // Snapshot was created before the transaction — it exists but the plan does not
     const snapshots = await prisma.backlogSnapshot.findMany({ where: { projectId } })
@@ -1242,30 +1194,16 @@ describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
   beforeAll(async () => {
     if (!runIntegration) return
     projectId = await createProject()
-    rtA = await createResourceType(projectId, 'rt-legacy-a', 'Engineer', { allocationMode: 'CAPACITY_PLAN' })
-    rtB = await createResourceType(projectId, 'rt-legacy-b', 'QA', { allocationMode: 'CAPACITY_PLAN' })
-    await prisma.resourceType.update({
-      where: { id: rtA },
-      data: { allocationPercent: 100, allocationStartWeek: 0, allocationEndWeek: 8 },
-    })
-    await prisma.resourceType.update({
-      where: { id: rtB },
-      data: { allocationPercent: 100, allocationStartWeek: 0, allocationEndWeek: 8 },
-    })
+    rtA = await createResourceType(projectId, 'rt-legacy-a', 'Engineer')
+    rtB = await createResourceType(projectId, 'rt-legacy-b', 'QA')
 
     // Create backlog so planner has work to schedule
     await createEpicBacklog(projectId, rtA)
 
-    // Create named resources with CAPACITY_PLAN (legacy evidence)
-    nrA = await createNamedResource(projectId, rtA, 'nr-legacy-a-1', 'Engineer 1', {
-      allocationMode: 'CAPACITY_PLAN',
-    })
-    nrB = await createNamedResource(projectId, rtB, 'nr-legacy-b-1', 'QA 1', {
-      allocationMode: 'CAPACITY_PLAN',
-    })
-    nrExplicitB = await createNamedResource(projectId, rtB, 'nr-legacy-b-explicit', 'QA Explicit', {
-      allocationMode: 'EFFORT',
-    })
+    // Create named resources (capacity is expressed through profiles)
+    nrA = await createNamedResource(projectId, rtA, 'nr-legacy-a-1', 'Engineer 1')
+    nrB = await createNamedResource(projectId, rtB, 'nr-legacy-b-1', 'QA 1')
+    nrExplicitB = await createNamedResource(projectId, rtB, 'nr-legacy-b-explicit', 'QA Explicit')
 
     // Create pre-#359 legacy NAMED_PERSON profiles (both resources)
     await createProfile(
@@ -1364,20 +1302,12 @@ describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
     expect(await fetchSegments(plannedB!.id)).toHaveLength(0)
   })
 
-  it('freezes role B named resource compatibility aliases at seeded values', async () => {
-    // Issue #418: candidate columns are never written; the zero capacity of
-    // the omitted role is expressed exclusively through the zero-capacity
-    // PLANNED_RESOURCE profile asserted above.
+  it('expresses role B omission exclusively through the zero-capacity PLANNED_RESOURCE profile', async () => {
+    // Issue #418: the legacy candidate columns no longer exist; the zero
+    // capacity of the omitted role is expressed exclusively through the
+    // zero-capacity PLANNED_RESOURCE profile asserted above.
     const nr = await prisma.namedResource.findUnique({ where: { id: nrB } })
-    expect(nr).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-      allocationPct: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-      startWeek: null,
-      endWeek: null,
-    })
+    expect(nr).not.toBeNull()
   })
 
   it('preserves explicit named-person metadata on B unchanged', async () => {
@@ -1391,10 +1321,7 @@ describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
     })
     // Verify the explicit nr was NOT touched by the planner
     const nr = await prisma.namedResource.findUnique({ where: { id: nrExplicitB } })
-    expect(nr).toMatchObject({
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
-    })
+    expect(nr).not.toBeNull()
     // Should not have a PLANNED_RESOURCE profile
     expect(profiles.filter(p => p.ownerKind === 'PLANNED_RESOURCE' && p.namedResourceId === nrExplicitB))
       .toHaveLength(0)
@@ -1403,17 +1330,12 @@ describeIf('Scenario 9 — Pre-#359 legacy role A/B omission', () => {
       .toHaveLength(1)
   })
 
-  it('freezes role B resource type compatibility fields at seeded values', async () => {
-    // The planner-managed count is zeroed on omission; the compatibility
-    // allocation fields stay frozen at seeded values (issue #418: role B's
-    // zero capacity is expressed through its zero-capacity ROLE profile).
+  it('zeros the planner-managed count on omitted role B', async () => {
+    // The planner-managed count is zeroed on omission; role B's zero
+    // capacity is expressed through its zero-capacity ROLE profile.
     const rt = await prisma.resourceType.findUnique({ where: { id: rtB } })
     expect(rt).toMatchObject({
       count: 0,
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-      allocationStartWeek: 0,
-      allocationEndWeek: 8,
     })
   })
 })
@@ -1450,7 +1372,6 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
       rtId,
       'nr-race-10-concurrent',
       'Concurrent Engineer',
-      { allocationMode: 'CAPACITY_PLAN' },
     )
 
     // Create an older snapshot that must survive the race
@@ -1504,10 +1425,9 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
     expect(allSnapshots).toHaveLength(1)
     expect(allSnapshots[0].id).toBe(olderSnapshotId)
 
-    // ── Resource type allocation mode unchanged ───────────────────
+    // ── Resource type metadata unchanged ────────────────────────────
     const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
     expect(rt).not.toBeNull()
-    expect(rt!.allocationMode).toBe('TIMELINE')
   })
 
   it('detects a committed concurrent explicit owner before transaction revalidation', async () => {
@@ -1584,15 +1504,10 @@ describeIf('Scenario 10 — Preflight-to-transaction race regression', () => {
       where: { capacityProfile: { projectId } },
     })).toBe(0)
     expect(await prisma.resourceType.findUnique({ where: { id: rtId } }))
-      .toMatchObject({ allocationMode: 'TIMELINE' })
+      .toMatchObject({ name: 'Engineer' })
     expect(await prisma.namedResource.findUnique({
       where: { id: concurrentNamedResourceId },
-    })).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-    })
+    })).not.toBeNull()
   })
 
   it('preflight returns 409 when a conflicting profile exists before apply', async () => {
@@ -1675,9 +1590,7 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     await createEpicBacklog(projectId, rtId)
 
     // Create an explicit named resource with MANUAL NAMED_PERSON profile on secondary RT
-    explicitNrId = await createNamedResource(projectId, explicitRtId, 'nr-designer-1', 'Alice Designer', {
-      allocationMode: 'EFFORT',
-    })
+    explicitNrId = await createNamedResource(projectId, explicitRtId, 'nr-designer-1', 'Alice Designer')
     await createProfile(
       projectId,
       'cp-explicit-designer',
@@ -2040,23 +1953,12 @@ describeIf('Scenario 15 — Unrelated CAPACITY_PLAN resource preserved', () => {
     const projectId = await createProject()
     const rtActive = await createResourceType(projectId, 'rt-active-15', 'Active')
     const rtUnrelated = await createResourceType(projectId, 'rt-unrelated-15', 'Unrelated', {
-      allocationMode: 'CAPACITY_PLAN',
       count: 2,
     })
-    await prisma.resourceType.update({
-      where: { id: rtUnrelated },
-      data: { allocationPercent: 50, allocationStartWeek: 0, allocationEndWeek: 10 },
-    })
 
-    // Create a named resource with CAPACITY_PLAN on the unrelated RT
+    // Create a named resource on the unrelated RT
     const unrelatedNrId = await createNamedResource(
       projectId, rtUnrelated, 'nr-unrelated-15', 'Unrelated Resource',
-      {
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: 100,
-        startWeek: 0,
-        endWeek: 10,
-      },
     )
 
     // Apply plan covering only rtActive (not rtUnrelated)
@@ -2072,16 +1974,12 @@ describeIf('Scenario 15 — Unrelated CAPACITY_PLAN resource preserved', () => {
     // Verify unrelated RT unchanged
     const unrelatedRT = await prisma.resourceType.findUnique({ where: { id: rtUnrelated } })
     expect(unrelatedRT).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
       count: 2,
     })
 
     // Verify unrelated named resource unchanged
     const unrelatedNR = await prisma.namedResource.findUnique({ where: { id: unrelatedNrId } })
-    expect(unrelatedNR).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-    })
+    expect(unrelatedNR).not.toBeNull()
   })
 })
 
@@ -2102,7 +2000,6 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
 
     // RT that will be in the prior active plan but omitted from the replacement
     const rtOmitted = await createResourceType(projectId, 'rt-omitted-16', 'OmittedLegacy', {
-      allocationMode: 'CAPACITY_PLAN',
       count: 3,
     })
     // RT that stays active in both plans
@@ -2162,13 +2059,9 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
 
     const nrListBefore = await prisma.namedResource.findMany({
       where: { resourceTypeId: rtOmitted },
-      select: { id: true, allocationPercent: true, allocationPct: true },
+      select: { id: true },
     })
     expect(nrListBefore.length).toBeGreaterThan(0)
-    for (const nr of nrListBefore) {
-      expect(nr.allocationPercent).toBeGreaterThan(0)
-      expect(nr.allocationPct).toBeGreaterThan(0)
-    }
 
     // ── Independently capture the expected NR identity before omission ──
     const omittedRtNRsBefore = await prisma.namedResource.findMany({
@@ -2192,16 +2085,10 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     const firstPlanAfter = await prisma.capacityPlan.findUnique({ where: { id: firstPlanId! } })
     expect(firstPlanAfter?.isActive).toBe(false)
 
-    // ── Assert omitted RT: planner-managed count zeroed, compatibility
-    //    allocation fields frozen (issue #418: the zero capacity is
-    //    expressed exclusively through the zero profiles below) ──
+    // ── Assert omitted RT: planner-managed count zeroed ──────────
     const rtAfter = await prisma.resourceType.findUnique({ where: { id: rtOmitted } })
     expect(rtAfter).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
       count: 0,
-      allocationPercent: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
     })
 
     // ── Assert exact NamedResource identity unchanged ─────────────────
@@ -2212,17 +2099,9 @@ describeIf('Scenario 16 — Prior-plan-only authority clears legacy for omitted 
     })
     expect(omittedRtNRsAfter.length).toBe(1) // unchanged from pre-capture
     expect(omittedRtNRsAfter[0].id).toBe(expectedOmittedNRId)
-    // Candidate columns stay frozen at schema defaults (issue #418 — zero
-    // capacity is expressed exclusively through the PLANNED_RESOURCE profile)
-    expect(omittedRtNRsAfter[0]).toMatchObject({
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
-      allocationPct: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-      startWeek: null,
-      endWeek: null,
-    })
+    // The zero capacity is expressed exclusively through the
+    // PLANNED_RESOURCE profile (issue #418).
+
     // ── New active plan ──────────────────────────────────────────────
     const secondPlanId = await fetchActivePlanId(projectId)
     expect(secondPlanId).not.toBeNull()
@@ -2408,57 +2287,41 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     if (!runIntegration) return
     const projectId = await createProject()
     const rtId = await createResourceType(projectId, 'rt-cap-plan-19', 'CapacityPlanRole', {
-      allocationMode: 'CAPACITY_PLAN',
       count: 2,
-    })
-    await prisma.resourceType.update({
-      where: { id: rtId },
-      data: { allocationPercent: 100, allocationStartWeek: 0, allocationEndWeek: 10 },
     })
 
     await createEpicBacklog(projectId, rtId)
 
-    // ── Run the production mapper/sync path (same sync called on project/resource creation) ──
-    const syncResult = await syncCapacityProfilesForProject(prisma, projectId)
-    expect(syncResult.profilesCreated).toBeGreaterThanOrEqual(1)
-
-    // ── Assert mapper produced the expected ROLE profile ──────────────
-    const profilesBefore = await fetchProfiles(projectId)
-    const mapperRole = profilesBefore.find(
-      p => p.ownerKind === 'ROLE' && p.resourceTypeId === rtId && p.namedResourceId === null,
-    )
-    expect(mapperRole).toBeDefined()
-    const mapperRoleId = mapperRole!.id
-
-    // Check source/basis
-    expect(mapperRole!.source).toBe('LEGACY')
-    expect(mapperRole!.planningBasis).toBe('CAPACITY_PROFILE')
-
-    // Check legacy payload has all 7 keys
-    const mapperRoleAny = mapperRole as unknown as Record<string, unknown>
-    const legacy = mapperRoleAny.legacy as Record<string, unknown> | null
-    expect(legacy).not.toBeNull()
-    expect(typeof legacy).toBe('object')
-    expect(legacy!.allocationMode).toBe('CAPACITY_PLAN')
-    expect(legacy!.allocationPercent).toBe(100)
-    expect(legacy!.allocationStartWeek).toBe(0)
-    expect(legacy!.allocationEndWeek).toBe(10)
-    // ROLE-only fields must be null
-    expect(legacy!.allocationPct).toBeNull()
-    expect(legacy!.startWeek).toBeNull()
-    expect(legacy!.endWeek).toBeNull()
-
-    // Profile-level fields must match legacy
-    expect(mapperRole!.defaultPercent).toBe(100)
-    expect(mapperRole!.startWeek).toBe(0)
-    // endWeek matches the allocationEndWeek set on the ResourceType
-    expect(mapperRole!.endWeek).toBe(10)
-
-    // No segments for CAPACITY_PLAN without active slots
-    const mapperSegments = await prisma.capacitySegment.findMany({
-      where: { capacityProfileId: mapperRoleId },
+    // Issue #418: the legacy columns no longer exist, so the production
+    // mapper can no longer emit a LEGACY/CAPACITY_PROFILE ROLE profile from
+    // column evidence. Seed the authoritative ROLE profile directly with the
+    // exact mapper-shaped legacy provenance payload (all 7 keys, matching
+    // isValidMapperProvenance) and exercise the first-apply adoption path.
+    const mapperRole = await prisma.capacityProfile.create({
+      data: {
+        id: 'cp-mapper-19',
+        projectId,
+        ownerKind: 'ROLE',
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        source: 'LEGACY',
+        planningBasis: 'CAPACITY_PROFILE',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        legacy: {
+          version: 1,
+          allocationMode: 'CAPACITY_PLAN',
+          allocationPercent: 100,
+          allocationPct: null,
+          allocationStartWeek: 0,
+          allocationEndWeek: 10,
+          startWeek: null,
+          endWeek: null,
+        },
+      },
     })
-    expect(mapperSegments.length).toBe(0)
+    const mapperRoleId = mapperRole.id
 
     // ── Apply a plan covering this RT ─────────────────────────────────
     const applyRes = await request(app)
@@ -2526,10 +2389,8 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
     // headcount=1 for 1 period → 1 NamedResource
     expect(nrsAfter.length).toBe(1)
     const nrAfter = nrsAfter[0]
-    // Candidate columns stay frozen at schema defaults (issue #418) — the
-    // CAPACITY_PLAN capacity lives in the PLANNED_RESOURCE profile below.
-    expect(nrAfter.allocationMode).toBe('EFFORT')
-    expect(nrAfter.allocationPercent).toBe(100)
+    // Capacity is expressed exclusively through the PLANNED_RESOURCE profile
+    // below (issue #418 — the legacy columns no longer exist).
  
     // ── Assert PLANNED_RESOURCE profiles ──────────────────────────────
     const plannedAfter = await prisma.capacityProfile.findMany({
@@ -2665,9 +2526,7 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
   it('returns 409 with exact state preservation for null-vs-non-null consistency violation', async () => {
     if (!runIntegration) return
     const projectId = await createProject()
-    const rtId = await createResourceType(projectId, 'rt-malformed-20', 'MalformedRole', {
-      allocationMode: 'CAPACITY_PLAN',
-    })
+    const rtId = await createResourceType(projectId, 'rt-malformed-20', 'MalformedRole')
     await createEpicBacklog(projectId, rtId)
  
     // Create a profile with source/basis matching LEGACY/CAPACITY_PROFILE
@@ -2903,14 +2762,10 @@ describeIf('Scenario 17 — Explicit ROLE pair rejection', () => {
       ownerKind: 'ROLE',
     })
 
-    // ── Compatibility fields unchanged (defaults untouched) ─────
+    // ── Resource type metadata unchanged ─────────────────────────
     const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
     expect(rt).toMatchObject({
-      allocationMode: 'TIMELINE',
       count: 2,
-      allocationPercent: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
       proposedName: null,
     })
   })
@@ -2963,14 +2818,10 @@ describeIf('Scenario 17 — Explicit ROLE pair rejection', () => {
       ownerKind: 'ROLE',
     })
 
-    // ── Compatibility fields unchanged ───────────────────────────
+    // ── Resource type metadata unchanged ─────────────────────────
     const rt = await prisma.resourceType.findUnique({ where: { id: rtId } })
     expect(rt).toMatchObject({
-      allocationMode: 'TIMELINE',
       count: 2,
-      allocationPercent: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
       proposedName: null,
     })
   })
@@ -3006,13 +2857,10 @@ describeIf('Scenario 18 — LEGACY/DEMAND_FOLLOWING ROLE adoption with prior pla
     )
 
     // ══ Establish prior planner evidence ══════════════════════════════
-    // A named resource with CAPACITY_PLAN allocation mode + a SQUAD_PLANNER
-    // NAMED_PERSON profile constitutes the planner-owned evidence that
-    // enables LEGACY/DEMAND_FOLLOWING ROLE adoption under the
-    // evidence-backed policy.
-    await createNamedResource(projectId, rtId, 'nr-legacy-role-18', 'Legacy Role Engineer 1', {
-      allocationMode: 'CAPACITY_PLAN',
-    })
+    // A named resource with a SQUAD_PLANNER NAMED_PERSON profile constitutes
+    // the planner-owned evidence that enables LEGACY/DEMAND_FOLLOWING ROLE
+    // adoption under the evidence-backed policy.
+    await createNamedResource(projectId, rtId, 'nr-legacy-role-18', 'Legacy Role Engineer 1')
     await createProfile(
       projectId,
       'cp-legacy-person-18',
@@ -3022,15 +2870,7 @@ describeIf('Scenario 18 — LEGACY/DEMAND_FOLLOWING ROLE adoption with prior pla
       { source: 'SQUAD_PLANNER', planningBasis: 'CAPACITY_PROFILE' },
     )
 
-    // Document the evidence state before apply (planner-owned named-resource marker)
-    const evidenceNr = await prisma.namedResource.findUnique({
-      where: { id: 'nr-legacy-role-18' },
-      select: { allocationMode: true, allocationPercent: true },
-    })
-    expect(evidenceNr).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-    })
+    // Document the evidence state before apply (planner-owned profile marker)
     const evidenceProfile = await prisma.capacityProfile.findUnique({
       where: { id: 'cp-legacy-person-18' },
       select: { source: true, planningBasis: true, ownerKind: true },
@@ -3084,16 +2924,6 @@ describeIf('Scenario 18 — LEGACY/DEMAND_FOLLOWING ROLE adoption with prior pla
     // The active plan proves planner authority was captured before adoption
     const activePlanId = await fetchActivePlanId(projectId)
     expect(activePlanId).not.toBeNull()
-
-    // The named resource preserves its planner-owned CAPACITY_PLAN marker
-    const nr = await prisma.namedResource.findUnique({
-      where: { id: 'nr-legacy-role-18' },
-      select: { allocationMode: true, allocationPercent: true },
-    })
-    expect(nr).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-    })
 
     // The converted ROLE profile now carries SQUAD_PLANNER source,
     // proving the evidence path was applied correctly
