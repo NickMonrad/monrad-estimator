@@ -25,10 +25,6 @@ import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegac
 
 export interface ResourceTypeRecord {
   id: string
-  allocationMode: string | null
-  allocationPercent: number | null
-  allocationStartWeek: number | null
-  allocationEndWeek: number | null
 }
 
 export interface NamedResourceRecord {

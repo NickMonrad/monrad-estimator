@@ -117,10 +117,6 @@ model ResourceType {
   count         Int                 @default(1)
   hoursPerDay   Float?
   dayRate              Float?
-  allocationMode       AllocationMode  @default(TIMELINE)
-  allocationPercent    Float           @default(100)
-  allocationStartWeek  Float?
-  allocationEndWeek    Float?
   proposedName  String?
   globalType    GlobalResourceType? @relation(fields: [globalTypeId], references: [id])
   globalTypeId  String?
@@ -395,13 +391,6 @@ model NamedResource {
   resourceTypeId String
   resourceType   ResourceType @relation(fields: [resourceTypeId], references: [id], onDelete: Cascade)
   name           String
-  startWeek      Int?
-  endWeek        Int?
-  allocationPct  Int          @default(100)
-  allocationMode    AllocationMode  @default(EFFORT)
-  allocationPercent Float           @default(100)
-  allocationStartWeek Float?
-  allocationEndWeek   Float?
   pricingModel   String       @default("ACTUAL_DAYS")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt

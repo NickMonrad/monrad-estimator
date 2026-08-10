@@ -298,10 +298,8 @@ describeIf('legacy capacity alias removal (#403)', () => {
         { capacityProfileId: nrProfile.id, startWeek: 4, endWeek: 7, capacityPercent: 40, source: 'SQUAD_PLANNER' },
       ],
     })
-    await prisma.resourceType.update({
-      where: { id: rt.id },
-      data: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 60 },
-    })
+    // Planner ownership is expressed exclusively through the SQUAD_PLANNER
+    // profiles above (issue #418); the legacy columns no longer exist.
     await seedDistinctCache()
     const before = await snapshotRoleState(rt.id)
 

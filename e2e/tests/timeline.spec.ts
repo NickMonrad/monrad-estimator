@@ -494,18 +494,10 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       await expect(page.getByRole('button', { name: /sequential|parallel/i }).first()).toBeVisible({ timeout: 15_000 })
 
       // ── 3. Capture pre-apply state (after feature delay, before optimiser) ─
-      // 3a. SQL: candidate compatibility columns are frozen historical data —
-      // runtime no longer writes them, so they retain the schema defaults.
+      // 3a. SQL: the legacy candidate columns no longer exist — the
+      // mapper-derived profile below is the sole capacity authority.
       const preNrSql = await db.query(`SELECT * FROM "NamedResource" WHERE "id" = $1`, [nrResult.nrId])
       expect(preNrSql.rows).toHaveLength(1)
-      const preNr = preNrSql.rows[0]
-      expect(preNr.allocationMode).toBe('EFFORT') // schema default — no projection write
-      expect(preNr.allocationPercent).toBe(100)
-      expect(preNr.allocationPct).toBe(100)
-      expect(preNr.allocationStartWeek).toBeNull()
-      expect(preNr.allocationEndWeek).toBeNull()
-      expect(preNr.startWeek).toBeNull()
-      expect(preNr.endWeek).toBeNull()
 
       // 3b. SQL: the mapper-derived scalar profile (one profile, zero segments)
       const preCpRows = await db.query(`SELECT * FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
@@ -640,17 +632,10 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       const postSegRows = await db.query(`SELECT * FROM "CapacitySegment" WHERE "capacityProfileId" = $1`, [postCp.id])
       expect(postSegRows.rows).toHaveLength(0)
 
-      // 7c. Candidate compatibility columns stay frozen (no projection writes)
+      // 7c. The legacy candidate columns no longer exist — the optimiser
+      // profile above is the sole capacity authority.
       const postNrSql = await db.query(`SELECT * FROM "NamedResource" WHERE "id" = $1`, [nrResult.nrId])
       expect(postNrSql.rows).toHaveLength(1)
-      const postNr = postNrSql.rows[0]
-      expect(postNr.allocationMode).toBe('EFFORT') // unchanged schema default
-      expect(postNr.allocationPercent).toBe(100)
-      expect(postNr.allocationPct).toBe(100)
-      expect(postNr.allocationStartWeek).toBeNull()
-      expect(postNr.allocationEndWeek).toBeNull()
-      expect(postNr.startWeek).toBeNull()
-      expect(postNr.endWeek).toBeNull()
       const postRp = await page.evaluate(async ({ id, nrId }) => {
         const token = localStorage.getItem('token')
         const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
@@ -733,17 +718,10 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       )
       expect(restSegRows.rows).toHaveLength(0)
 
-      // 11b. SQL: NamedResource compatibility fields restored exactly
+      // 11b. The legacy candidate columns no longer exist — the restored
+      // profile above is the sole capacity authority.
       const restNrSql = await db.query(`SELECT * FROM "NamedResource" WHERE "id" = $1`, [nrResult.nrId])
       expect(restNrSql.rows).toHaveLength(1)
-      const restNr = restNrSql.rows[0]
-      expect(restNr.allocationMode).toBe(preNr.allocationMode)
-      expect(restNr.allocationPercent).toBe(preNr.allocationPercent)
-      expect(restNr.allocationPct).toBe(preNr.allocationPct)
-      expect(restNr.allocationStartWeek).toBe(preNr.allocationStartWeek)
-      expect(restNr.allocationEndWeek).toBe(preNr.allocationEndWeek)
-      expect(restNr.startWeek).toBe(preNr.startWeek)
-      expect(restNr.endWeek).toBe(preNr.endWeek)
 
       // 11c. Resource Profile restoration — all relevant fields including metadata
       const restRp = await page.evaluate(async ({ id, nrId }) => {

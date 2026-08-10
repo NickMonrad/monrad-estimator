@@ -139,10 +139,6 @@ async function createResourceType(
     count: number
     hoursPerDay: number | null
     dayRate: number | null
-    allocationMode: $Enums.AllocationMode
-    allocationPercent: number
-    allocationStartWeek: number | null
-    allocationEndWeek: number | null
   }> = {},
 ): Promise<string> {
   await prisma.resourceType.create({
@@ -154,10 +150,6 @@ async function createResourceType(
       count: overrides.count ?? 2,
       hoursPerDay: overrides.hoursPerDay ?? null,
       dayRate: overrides.dayRate ?? null,
-      allocationMode: overrides.allocationMode ?? 'TIMELINE',
-      allocationPercent: overrides.allocationPercent ?? 100,
-      allocationStartWeek: overrides.allocationStartWeek ?? null,
-      allocationEndWeek: overrides.allocationEndWeek ?? null,
     },
   })
   return id
@@ -169,13 +161,6 @@ async function createNamedResource(
   id: string,
   name: string,
   overrides: Partial<{
-    startWeek: number | null
-    endWeek: number | null
-    allocationPct: number
-    allocationMode: $Enums.AllocationMode
-    allocationPercent: number
-    allocationStartWeek: number | null
-    allocationEndWeek: number | null
     pricingModel: string
   }> = {},
 ): Promise<string> {
@@ -184,13 +169,6 @@ async function createNamedResource(
       id,
       resourceTypeId,
       name,
-      startWeek: overrides.startWeek ?? null,
-      endWeek: overrides.endWeek ?? null,
-      allocationPct: overrides.allocationPct ?? 100,
-      allocationMode: overrides.allocationMode ?? 'EFFORT',
-      allocationPercent: overrides.allocationPercent ?? 100,
-      allocationStartWeek: overrides.allocationStartWeek ?? null,
-      allocationEndWeek: overrides.allocationEndWeek ?? null,
       pricingModel: overrides.pricingModel ?? 'ACTUAL_DAYS',
     },
   })
@@ -337,9 +315,9 @@ interface CanonicalProfileRow {
 
 
 interface CanonicalProjectState {
-  resourceTypes: Array<{ id: string; name: string; category: string; count: number; hoursPerDay: number | null; dayRate: number | null; globalTypeId: string | null; allocationMode: string; allocationPercent: number; allocationStartWeek: number | null; allocationEndWeek: number | null }>
-  // Issue #418: candidate legacy capacity columns are excluded from canonical
-  // comparisons — restore never writes them.
+  resourceTypes: Array<{ id: string; name: string; category: string; count: number; hoursPerDay: number | null; dayRate: number | null; globalTypeId: string | null }>
+  // Issue #418: candidate legacy capacity columns no longer exist — restore
+  // never writes them, so canonical comparisons exclude them.
   namedResources: Array<{ id: string; resourceTypeId: string; name: string; pricingModel: string }>
   capacityProfiles: CanonicalProfileRow[]
   timelineEntries: Array<{ startWeek: number; durationWeeks: number; isManual: boolean }>
@@ -373,11 +351,10 @@ async function captureCanonicalState(projectId: string): Promise<CanonicalProjec
   const dbNullIds = Array.from(await detectDbNullProfileIds(projectId))
   return {
     resourceTypes,
-    // Issue #418: the candidate legacy capacity columns are frozen historical
-    // data — restore never writes them, so canonical comparisons exclude them.
+    // Issue #418: the candidate legacy capacity columns no longer exist —
+    // restore never writes them, so canonical comparisons exclude them.
     namedResources: namedResources.map(nr => {
-      const { allocationMode: _am, allocationPercent: _ap, allocationPct: _apct, allocationStartWeek: _asw, allocationEndWeek: _aew, startWeek: _sw, endWeek: _ew, ...rest } = stripTimestamps(nr)
-      void _am; void _ap; void _apct; void _asw; void _aew; void _sw; void _ew
+      const { ...rest } = stripTimestamps(nr)
       return { id: rest.id, resourceTypeId: rest.resourceTypeId, name: rest.name, pricingModel: rest.pricingModel }
     }),
     capacityProfiles: capacityProfiles.map(p => ({
@@ -515,25 +492,19 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     // ── 2 resource types with exact IDs ───────────────────────────
     rtDevId = await createResourceType(projectId, 'rt-dev', 'Developer', {
       dayRate: 500,
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
     })
     rtDesId = await createResourceType(projectId, 'rt-des', 'Designer', {
       dayRate: 450,
-      allocationMode: 'EFFORT',
-      allocationPercent: 80,
-      allocationStartWeek: 0,
-      allocationEndWeek: 12,
     })
 
     // ── 2 named resources with exact IDs ──────────────────────────
     nrAliceId = await createNamedResource(
       projectId, rtDevId, 'nr-alice', 'Alice',
-      { allocationMode: 'EFFORT', allocationPercent: 80, pricingModel: 'ACTUAL_DAYS' },
+      { pricingModel: 'ACTUAL_DAYS' },
     )
     await createNamedResource(
       projectId, rtDesId, 'nr-bob', 'Bob',
-      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+      { pricingModel: 'FIXED_PRICE' },
     )
     // Profile-first (issue #418): every named resource must carry a profile —
     // missing owner state fails closed, so Bob gets a legacy-shaped profile.
@@ -551,12 +522,12 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     // ── 3rd named resource for PLANNED_RESOURCE ownership ──────────
     nrCharlieId = await createNamedResource(
       projectId, rtDevId, 'nr-charlie', 'Charlie',
-      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+      { pricingModel: 'FIXED_PRICE' },
     )
     // ── 4th named resource for synthetic PLANNED_RESOURCE ownership ──
     nrDaveId = await createNamedResource(
       projectId, rtDevId, 'nr-dave', 'Dave',
-      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+      { pricingModel: 'FIXED_PRICE' },
     )
 
     // ── ROLE profile for Developer — DB_NULL legacy ───────────────
@@ -636,19 +607,19 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     // ── 4 more named resources for new profiles ───────────────────
     nrEveId = await createNamedResource(
       projectId, rtDevId, 'nr-eve', 'Eve',
-      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+      { pricingModel: 'FIXED_PRICE' },
     )
     nrFrankId = await createNamedResource(
       projectId, rtDevId, 'nr-frank', 'Frank',
-      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+      { pricingModel: 'FIXED_PRICE' },
     )
     nrGraceId = await createNamedResource(
       projectId, rtDevId, 'nr-grace', 'Grace',
-      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+      { pricingModel: 'FIXED_PRICE' },
     )
     nrHeidiId = await createNamedResource(
       projectId, rtDevId, 'nr-heidi', 'Heidi',
-      { allocationMode: 'TIMELINE', allocationPercent: 100, pricingModel: 'FIXED_PRICE' },
+      { pricingModel: 'FIXED_PRICE' },
     )
 
     // ── (1) ROLE for Designer — JSON_NULL legacy ──────────────────
@@ -961,17 +932,8 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       count: 1,
       hoursPerDay: 8,
       dayRate: 700,
-      allocationMode: 'TIMELINE',
-      allocationPercent: 45,
-      allocationStartWeek: 2,
-      allocationEndWeek: 7,
     })
-    extraNrId = await createNamedResource(projectId, extraRtId, 'nr-extra', 'Post-snapshot person', {
-      allocationMode: 'TIMELINE',
-      allocationPercent: 45,
-      allocationStartWeek: 2,
-      allocationEndWeek: 7,
-    })
+    extraNrId = await createNamedResource(projectId, extraRtId, 'nr-extra', 'Post-snapshot person', {})
     // Profile-first (issue #418): every owner must carry a profile.
     await createProfile(
       projectId, 'prof-extra-nr', 'NAMED_PERSON', null, 'nr-extra',
@@ -1095,23 +1057,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       data: { name: 'Dev Mutated' },
     })
 
-    // ── Mutate Alice's candidate compatibility columns for B-state ──
-    // PR 1 retired normal runtime reads of these columns: reads derive from
-    // the persisted CAPACITY_PROFILE, so this mutation must be invisible to
-    // the Resource Profile / Timeline responses captured afterwards. The
-    // profile mutation below (defaultPercent 50, window 1-6, segment 1-6@50)
-    // is what the captured responses must reflect.
-    await prisma.namedResource.update({
-      where: { id: nrAliceId },
-      data: {
-        allocationMode: 'TIMELINE',
-        allocationPercent: 50,
-        allocationStartWeek: 1,
-        allocationEndWeek: 6,
-      },
-    })
-
-    // ── Mutate new capacity profiles for B-state ─────────────────
+    // ── Mutate capacity profiles for B-state ────────────────────────
 
     // JSON_NULL profile: change segments and field values
     await prisma.capacitySegment.deleteMany({
@@ -1290,10 +1236,6 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
       count: 1,
       hoursPerDay: 8,
       dayRate: 700,
-      allocationMode: 'TIMELINE',
-      allocationPercent: 45,
-      allocationStartWeek: 2,
-      allocationEndWeek: 7,
     })
     const nrs = await prisma.namedResource.findMany({
       where: { resourceType: { projectId } },
@@ -1565,9 +1507,6 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(canonicalAfter.resourceTypes.find(r => r.id === extraRtId)).toMatchObject({
       name: 'Post-snapshot role',
       dayRate: 700,
-      allocationPercent: 45,
-      allocationStartWeek: 2,
-      allocationEndWeek: 7,
     })
     expect(canonicalAfter.capacityProfiles.filter(p => p.resourceTypeId !== extraRtId))
       .toEqual(canonicalBefore.capacityProfiles)
@@ -2337,20 +2276,10 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
     projectId = await createProject()
 
     // Create RT with TIMELINE mode at 60%
-    rtId = await createResourceType(projectId, 'rt-e-dev', 'Engineer', {
-      allocationMode: 'TIMELINE',
-      allocationPercent: 60,
-      allocationStartWeek: 0,
-      allocationEndWeek: 10,
-    })
+    rtId = await createResourceType(projectId, 'rt-e-dev', 'Engineer', {})
 
     // Create NR inheriting TIMELINE mode at 60%
-    nrId = await createNamedResource(projectId, rtId, 'nr-eve-scenario-e', 'Eve', {
-      allocationMode: 'TIMELINE',
-      allocationPercent: 60,
-      startWeek: 2,
-      endWeek: 6,
-    })
+    nrId = await createNamedResource(projectId, rtId, 'nr-eve-scenario-e', 'Eve', {})
     // Include effort so the Resource Profile DTO has a row for this RT.
     await createEpicBacklog(projectId, rtId, null)
 
@@ -2471,18 +2400,8 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
   beforeAll(async () => {
     if (!runIntegration) return
     projectId = await createProject()
-    rtId = await createResourceType(projectId, 'rt-g-plan', 'Planned Role', {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-      allocationStartWeek: 0,
-      allocationEndWeek: 10,
-    })
-    nrId = await createNamedResource(projectId, rtId, 'nr-g-plan', 'Planned Person', {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-      startWeek: 2,
-      endWeek: 8,
-    })
+    rtId = await createResourceType(projectId, 'rt-g-plan', 'Planned Role', {})
+    nrId = await createNamedResource(projectId, rtId, 'nr-g-plan', 'Planned Person', {})
     await createEpicBacklog(projectId, rtId, null)
 
     // Stale persisted profiles that DIFFER from v2-derived state
@@ -2573,18 +2492,8 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
 
   it('the exact all-windowless-100% Class A snapshot is refused pre-write with the retirement reason (issue #444)', async () => {
     const projectId2 = await createProject()
-    const rtId2 = await createResourceType(projectId2, 'rt-g-bad', 'Bad Plan', {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-    })
-    await createNamedResource(projectId2, rtId2, 'nr-g-bad', 'Bad Person', {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-      startWeek: null,
-      endWeek: null,
-    })
+    const rtId2 = await createResourceType(projectId2, 'rt-g-bad', 'Bad Plan', {})
+    await createNamedResource(projectId2, rtId2, 'nr-g-bad', 'Bad Person', {})
     await createEpicBacklog(projectId2, rtId2, null)
     await createProfile(
       projectId2, 'prof-g-bad-role', 'ROLE', rtId2, null,
@@ -2655,12 +2564,7 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     // approved all-windowless-100% shape, so the snapshot stays quarantined
     // and rollback is refused pre-write with the stable reason.
     const projectId2 = await createProject()
-    const rtId2 = await createResourceType(projectId2, 'rt-g-p80', 'Plan 80', {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 80,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-    })
+    const rtId2 = await createResourceType(projectId2, 'rt-g-p80', 'Plan 80', {})
     await createEpicBacklog(projectId2, rtId2, null)
     await createProfile(
       projectId2, 'prof-g-p80-role', 'ROLE', rtId2, null,
@@ -2725,12 +2629,7 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
 
   it('rejects quarantined CAPACITY_PLAN with a single -1 edge before any write', async () => {
     const projectId2 = await createProject()
-    const rtId2 = await createResourceType(projectId2, 'rt-g-min1', 'Minus One Plan', {
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-      allocationStartWeek: -1,
-      allocationEndWeek: 5,
-    })
+    const rtId2 = await createResourceType(projectId2, 'rt-g-min1', 'Minus One Plan', {})
     await createEpicBacklog(projectId2, rtId2, null)
     await createProfile(
       projectId2, 'prof-g-min1-role', 'ROLE', rtId2, null,
@@ -2808,30 +2707,10 @@ describeIf('Scenario H — v2 EFFORT/FULL_PROJECT discard stale windows', () => 
   beforeAll(async () => {
     if (!runIntegration) return
     projectId = await createProject()
-    effortRtId = await createResourceType(projectId, 'rt-h-effort', 'Effort Role', {
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
-      allocationStartWeek: 2,
-      allocationEndWeek: 9,
-    })
-    fullRtId = await createResourceType(projectId, 'rt-h-full', 'Full Role', {
-      allocationMode: 'FULL_PROJECT',
-      allocationPercent: 80,
-      allocationStartWeek: 1,
-      allocationEndWeek: 7,
-    })
-    effortNrId = await createNamedResource(projectId, effortRtId, 'nr-h-effort', 'Effort Person', {
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
-      startWeek: 3,
-      endWeek: 8,
-    })
-    fullNrId = await createNamedResource(projectId, fullRtId, 'nr-h-full', 'Full Person', {
-      allocationMode: 'FULL_PROJECT',
-      allocationPercent: 80,
-      startWeek: 1,
-      endWeek: 5,
-    })
+    effortRtId = await createResourceType(projectId, 'rt-h-effort', 'Effort Role', {})
+    fullRtId = await createResourceType(projectId, 'rt-h-full', 'Full Role', {})
+    effortNrId = await createNamedResource(projectId, effortRtId, 'nr-h-effort', 'Effort Person', {})
+    fullNrId = await createNamedResource(projectId, fullRtId, 'nr-h-full', 'Full Person', {})
     await createEpicBacklog(projectId, effortRtId, null)
 
     // Stale persisted profiles that DIFFER from v2-derived state
@@ -2925,10 +2804,7 @@ describeIf('Scenario I — orphan v2 owner rejection and fail-closed reads', () 
   it('rejects orphan v2 NamedResource before any write', async () => {
     if (!runIntegration) return
     const projectId = await createProject()
-    const rtId = await createResourceType(projectId, 'rt-i-present', 'Present Role', {
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
-    })
+    const rtId = await createResourceType(projectId, 'rt-i-present', 'Present Role', {})
     await createNamedResource(projectId, rtId, 'nr-i-present', 'Present Person')
     await createEpicBacklog(projectId, rtId, null)
     await createProfile(
@@ -3016,10 +2892,7 @@ describeIf('Scenario I — orphan v2 owner rejection and fail-closed reads', () 
   it('malformed persisted profiles fail closed through Resource Profile, Timeline and scheduler', async () => {
     if (!runIntegration) return
     const projectId = await createProject()
-    const rtId = await createResourceType(projectId, 'rt-i-bad', 'Bad Role', {
-      allocationMode: 'EFFORT',
-      allocationPercent: 100,
-    })
+    const rtId = await createResourceType(projectId, 'rt-i-bad', 'Bad Role', {})
     await createNamedResource(projectId, rtId, 'nr-i-bad', 'Bad Person')
     await createEpicBacklog(projectId, rtId, null)
     const badProfileId = await createProfile(
@@ -3269,12 +3142,7 @@ describeIf('Scenario K — V4 restores scope and scheduling fields', () => {
   beforeAll(async () => {
     if (!runIntegration) return
     projectId = await createProject()
-    const rtId = await createResourceType(projectId, 'rt-g-dev', 'Developer', {
-      allocationMode: 'TIMELINE',
-      allocationPercent: 60,
-      allocationStartWeek: 2,
-      allocationEndWeek: 6,
-    })
+    const rtId = await createResourceType(projectId, 'rt-g-dev', 'Developer', {})
     // Profile-first (issue #418): the role needs an authoritative ROLE profile.
     await createProfile(
       projectId, 'prof-g-role', 'ROLE', rtId, null,

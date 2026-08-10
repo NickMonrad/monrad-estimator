@@ -19,8 +19,6 @@ try {
       'test:runtime-cutover-integration',
       'test:transfer-integration',
       'test:legacy-alias-removal-integration',
-      'test:remediation-integration',
-      'test:snapshot-evidence-integration',
       'test:purge-pre-v4-integration',
       'test:planning-reset-integration',
     ]) {

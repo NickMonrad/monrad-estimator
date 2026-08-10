@@ -82,8 +82,6 @@ async function createScenario(
       category: 'ENGINEERING',
       count: options.count ?? 2,
       hoursPerDay: 7.6,
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
     },
   })
   const startWeek = options.startWeek ?? 1
@@ -93,13 +91,6 @@ async function createScenario(
     data: {
       resourceTypeId: resourceType.id,
       name: `${label} Alice`,
-      startWeek,
-      endWeek,
-      allocationPct: allocationPercent,
-      allocationMode: options.allocationMode ?? 'TIMELINE',
-      allocationPercent,
-      allocationStartWeek: startWeek,
-      allocationEndWeek: endWeek,
       pricingModel: 'ACTUAL_DAYS',
     },
   })
@@ -229,17 +220,9 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
       legacy: RESOURCE_OPTIMISER_PROFILE_PROVENANCE,
       segments: [],
     })
-    // Issue #418: the optimiser writes the profile only — candidate legacy
-    // columns on the NamedResource are never modified.
-    expect(namedResource).toMatchObject({
-      startWeek: 1,
-      endWeek: 12,
-      allocationPct: 80,
-      allocationMode: 'TIMELINE',
-      allocationPercent: 80,
-      allocationStartWeek: 1,
-      allocationEndWeek: 12,
-    })
+    // Issue #418: the optimiser writes the profile only — the legacy
+    // columns no longer exist.
+    expect(namedResource).not.toBeNull()
     expect(project.weeklyDemandCache).toEqual({})
 
     const snapshotData = snapshot.snapshot as Record<string, unknown>
@@ -451,11 +434,7 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     ])
 
     expect(resourceType.count).toBe(2)
-    expect(namedResource).toMatchObject({
-      startWeek: 1,
-      allocationStartWeek: 1,
-      allocationPercent: 80,
-    })
+    expect(namedResource).not.toBeNull()
     // The mapper-provenance profile is untouched by the rolled-back apply.
     expect(profiles).toHaveLength(1)
     expect(profiles[0]).toMatchObject({

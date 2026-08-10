@@ -91,8 +91,6 @@ beforeAll(async () => {
       name: 'Engineer',
       category: 'ENGINEERING',
       count: 1,
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
       hoursPerDay: 7.6,
       dayRate: 1200,
     },
@@ -104,8 +102,6 @@ beforeAll(async () => {
       name: 'Default Engineer',
       category: 'ENGINEERING',
       count: 1,
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
       hoursPerDay: 7.6,
       dayRate: 1000,
     },
@@ -153,13 +149,6 @@ beforeAll(async () => {
     data: {
       resourceTypeId: rtId,
       name: 'Segmented Alice',
-      startWeek: 0,
-      endWeek: 9,
-      allocationPct: 75,
-      allocationMode: 'TIMELINE',
-      allocationPercent: 75,
-      allocationStartWeek: 0,
-      allocationEndWeek: 9,
       pricingModel: 'ACTUAL_DAYS',
     },
   })
@@ -204,13 +193,6 @@ beforeAll(async () => {
     data: {
       resourceTypeId: defaultRtId,
       name: 'CapProfile Bob',
-      startWeek: null,
-      endWeek: null,
-      allocationPct: 100,
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 100,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
       pricingModel: 'ACTUAL_DAYS',
     },
   })
@@ -235,13 +217,6 @@ beforeAll(async () => {
     data: {
       resourceTypeId: rtId,
       name: 'Scalar Charlie',
-      startWeek: null,
-      endWeek: null,
-      allocationPct: 50,
-      allocationMode: 'TIMELINE',
-      allocationPercent: 50,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
       pricingModel: 'ACTUAL_DAYS',
     },
   })
@@ -520,14 +495,9 @@ describeIf('Named-resource guard (real PostgreSQL)', () => {
     expect(res.status).toBe(200)
 
     const after = await readCanonicalState(scalarNrId, scalarProfileId)
-    // Issue #418: candidate columns are never written by profile endpoints —
-    // they stay frozen at schema defaults. The capacity lives in the profile.
-    expect(after.nr?.allocationStartWeek).toBeNull()
-    expect(after.nr?.allocationEndWeek).toBeNull()
-    expect(after.nr?.startWeek).toBeNull()
-    expect(after.nr?.endWeek).toBeNull()
-    expect(after.nr?.allocationPercent).toBe(50) // frozen at seeded value
-    expect(after.nr?.allocationPct).toBe(50)
+    // Issue #418: the legacy columns no longer exist; the capacity lives in
+    // the profile, asserted below.
+    expect(after.nr).toBeDefined()
     expect(after.profile?.planningBasis).toBe('AVAILABILITY_WINDOW')
     expect(after.profile?.defaultPercent).toBe(70)
     expect(after.profile?.startWeek).toBe(4)
