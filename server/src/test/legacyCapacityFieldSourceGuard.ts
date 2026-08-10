@@ -58,8 +58,6 @@ export const GUARD_ALLOWLIST = [
   'src/lib/capacityProfileMapping.ts',
   'src/lib/syncCapacityProfiles.ts',
   'src/lib/reconcileCapacityProfiles.ts',
-  'src/lib/productionRemediationPlan.ts',
-  'src/lib/productionRemediationApply.ts',
 ] as const
 
 export interface GuardFinding {

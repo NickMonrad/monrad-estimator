@@ -927,7 +927,7 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
   const { dryRun } = req.body as { dryRun?: boolean }
 
   // ── 1. Load scheduler input (same pattern as POST /schedule) ─────────────
-  const [allEpics, resourceTypes, manualFeatures, manualStories, epicDeps] = await Promise.all([
+  const [allEpics, manualFeatures, manualStories, epicDeps] = await Promise.all([
     prisma.epic.findMany({
       where: { projectId },
       orderBy: { order: 'asc' },
@@ -947,7 +947,6 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
         },
       },
     }),
-    prisma.resourceType.findMany({ where: { projectId }, include: { namedResources: true } }),
     prisma.timelineEntry.findMany({ where: { projectId, isManual: true } }),
     prisma.storyTimelineEntry.findMany({ where: { projectId, isManual: true } }),
     prisma.epicDependency.findMany({
@@ -955,6 +954,9 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
       select: { epicId: true, dependsOnId: true },
     }),
   ])
+  // Profile-derived scheduler DTOs are authoritative (issue #418); the raw
+  // ResourceType/NamedResource rows no longer carry legacy capacity columns.
+  const resolvedCapacity = await resolveSchedulerCapacity(prisma, projectId)
 
   const activeEpics = allEpics
     .filter(e => e.isActive !== false)
@@ -963,7 +965,7 @@ router.post('/level', asyncHandler(async (req: AuthRequest, res: Response) => {
   const schedulerInput: SchedulerInput = {
     project: { hoursPerDay: project.hoursPerDay },
     epics: activeEpics,
-    resourceTypes: resourceTypes as SchedulerResourceType[],
+    resourceTypes: resolvedCapacity.resourceTypes,
     epicDeps,
     manualFeatureEntries: manualFeatures.map(e => ({
       featureId: e.featureId,

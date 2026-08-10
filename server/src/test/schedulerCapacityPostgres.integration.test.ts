@@ -62,7 +62,7 @@ beforeAll(async () => {
 
   // ── Role-only resource type (count=2, demand-following ROLE profile) ──
   const rtLegacy = await prisma.resourceType.create({
-    data: { name: 'LegacyRole', category: 'ENGINEERING', count: 2, hoursPerDay: 8, allocationMode: 'EFFORT', projectId },
+    data: { name: 'LegacyRole', category: 'ENGINEERING', count: 2, hoursPerDay: 8, projectId },
   })
   rtLegacyId = rtLegacy.id
   // Profile-first (issue #418): a role without a persisted profile fails
@@ -73,11 +73,11 @@ beforeAll(async () => {
 
   // ── Profile-backed fixed NR with stale legacy window ──────────────────
   const rtFixed = await prisma.resourceType.create({
-    data: { name: 'ProfileFixed', category: 'ENGINEERING', count: 1, hoursPerDay: 8, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: 5, allocationEndWeek: 10, projectId },
+    data: { name: 'ProfileFixed', category: 'ENGINEERING', count: 1, hoursPerDay: 8, projectId },
   })
   rtProfileFixedId = rtFixed.id
   const nrStale = await prisma.namedResource.create({
-    data: { resourceTypeId: rtFixed.id, name: 'StaleLegacy', startWeek: 5, endWeek: 10, allocationPct: 100, allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationStartWeek: 5, allocationEndWeek: 10 },
+    data: { resourceTypeId: rtFixed.id, name: 'StaleLegacy' },
   })
   await prisma.capacityProfile.create({
     data: { projectId, resourceTypeId: null, namedResourceId: nrStale.id, ownerKind: 'NAMED_PERSON', planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'FIXED', defaultPercent: 100 },
@@ -85,11 +85,11 @@ beforeAll(async () => {
 
   // ── Profile-backed segmented NR ───────────────────────────────────────
   const rtSeg = await prisma.resourceType.create({
-    data: { name: 'ProfileSegmented', category: 'ENGINEERING', count: 1, hoursPerDay: 8, allocationMode: 'EFFORT', projectId },
+    data: { name: 'ProfileSegmented', category: 'ENGINEERING', count: 1, hoursPerDay: 8, projectId },
   })
   rtProfileSegmentedId = rtSeg.id
   const nrSeg = await prisma.namedResource.create({
-    data: { resourceTypeId: rtSeg.id, name: 'SegmentedNR', allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 100 },
+    data: { resourceTypeId: rtSeg.id, name: 'SegmentedNR' },
   })
   await prisma.capacityProfile.create({
     data: { projectId, resourceTypeId: null, namedResourceId: nrSeg.id, ownerKind: 'NAMED_PERSON', planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL', segments: { create: [{ startWeek: 0, endWeek: 2, capacityPercent: 100, source: 'MANUAL' }, { startWeek: 5, endWeek: 7, capacityPercent: 50, source: 'MANUAL' }] } },
@@ -97,7 +97,7 @@ beforeAll(async () => {
 
   // ── Role-level profile (count=3, profile says 50% weeks 2-6) ──────────
   const rtRole = await prisma.resourceType.create({
-    data: { name: 'RoleProfile', category: 'ENGINEERING', count: 3, hoursPerDay: 8, allocationMode: 'EFFORT', projectId },
+    data: { name: 'RoleProfile', category: 'ENGINEERING', count: 3, hoursPerDay: 8, projectId },
   })
   rtRoleId = rtRole.id
   await prisma.capacityProfile.create({
@@ -106,11 +106,11 @@ beforeAll(async () => {
 
   // ── CAPACITY_PLAN RT with profile + conflicting active plan ───────────
   const rtCapPlan = await prisma.resourceType.create({
-    data: { name: 'CapPlanWithProfile', category: 'ENGINEERING', count: 5, hoursPerDay: 8, allocationMode: 'CAPACITY_PLAN', projectId },
+    data: { name: 'CapPlanWithProfile', category: 'ENGINEERING', count: 5, hoursPerDay: 8, projectId },
   })
   rtCapPlanWithProfileId = rtCapPlan.id
   const nrCapPlan = await prisma.namedResource.create({
-    data: { resourceTypeId: rtCapPlan.id, name: 'CapPlanNR', allocationPct: 100, allocationMode: 'CAPACITY_PLAN', allocationPercent: 100 },
+    data: { resourceTypeId: rtCapPlan.id, name: 'CapPlanNR' },
   })
   await prisma.capacityProfile.create({
     data: { projectId, resourceTypeId: null, namedResourceId: nrCapPlan.id, ownerKind: 'NAMED_PERSON', planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'FIXED', defaultPercent: 25 },
@@ -121,7 +121,7 @@ beforeAll(async () => {
 
   // ── CAPACITY_PLAN RT with a ROLE profile (plan fallback removed, #418) ──
   const rtCapPlanOnly = await prisma.resourceType.create({
-    data: { name: 'CapPlanOnly', category: 'ENGINEERING', count: 1, hoursPerDay: 8, allocationMode: 'CAPACITY_PLAN', projectId },
+    data: { name: 'CapPlanOnly', category: 'ENGINEERING', count: 1, hoursPerDay: 8, projectId },
   })
   rtCapPlanOnlyId = rtCapPlanOnly.id
   await prisma.capacityProfile.create({
@@ -130,15 +130,15 @@ beforeAll(async () => {
 
   // ── Squad Planner composition fixture ────────────────────────────
   const rtSquad = await prisma.resourceType.create({
-    data: { name: 'SquadPlannerRole', category: 'ENGINEERING', count: 3, hoursPerDay: 8, allocationMode: 'EFFORT', projectId },
+    data: { name: 'SquadPlannerRole', category: 'ENGINEERING', count: 3, hoursPerDay: 8, projectId },
   })
   rtSquadPlannerId = rtSquad.id
   // Two planned-resource NRs
   const nrSP1 = await prisma.namedResource.create({
-    data: { resourceTypeId: rtSquad.id, name: 'SP Planned 1', allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 100 },
+    data: { resourceTypeId: rtSquad.id, name: 'SP Planned 1' },
   })
   const nrSP2 = await prisma.namedResource.create({
-    data: { resourceTypeId: rtSquad.id, name: 'SP Planned 2', allocationPct: 100, allocationMode: 'EFFORT', allocationPercent: 50 },
+    data: { resourceTypeId: rtSquad.id, name: 'SP Planned 2' },
   })
   // Aggregate ROLE profile (SQUAD_PLANNER source). Segmentless CAPACITY_PROFILE
   // ROLE is invalid under the single structural rule set, so the 150% profile

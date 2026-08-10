@@ -11,6 +11,7 @@ import { buildResourceCapacityProfileMap } from '../lib/capacityProfileResourceA
 import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
 import { deriveNamedResourceAssignments, type WeeklyDemandLike } from '../lib/namedResourceAssignments.js'
 import { buildFallbackWeeklyDemand, mergeWeeklyDemand, computePlanningWindow, convertWeeklyDemandCache } from '../lib/projectPlanningModel.js'
+import type { SchedulerNamedResource } from '../lib/scheduler.js'
 import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
@@ -444,9 +445,17 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   }
 
+  // Profile-derived scheduler DTOs are authoritative (issue #418): the
+  // fallback demand builder consumes the projected compatibility fields
+  // (allocationMode etc.) from the resolved capacity model, never the removed
+  // legacy ResourceType/NamedResource columns.
   const fallbackDemand = buildFallbackWeeklyDemand(
-    fallbackEntries as any[],
-    project.resourceTypes,
+    fallbackEntries,
+    resolvedCapacity.resourceTypes as Array<{
+      name: string; id: string; hoursPerDay: number | null;
+      allocationMode: string | null; count: number;
+      namedResources: SchedulerNamedResource[]
+    }>,
     capacityPlanByRt,
     project.hoursPerDay,
   )

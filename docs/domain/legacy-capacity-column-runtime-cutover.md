@@ -262,3 +262,9 @@ supersedes the historical v2 snapshot policy sections of that document:
 pre-V4 snapshots are deliberately purged (see above) instead of being
 remediated, rewritten or translated. PR 2 remains blocked until #404
 executes the revised procedure and records both gates.
+
+> **Superseded by PR 2 (issue #418):** issue #421 was closed as not planned
+> and the #449 planning reset/replan workflow replaced preservation
+> remediation. PR 2 (`20260810072212_drop_legacy_capacity_columns`) removes
+> the remediation tooling together with the candidate columns; see
+> [`docs/domain/legacy-capacity-column-migration.md`](legacy-capacity-column-migration.md).

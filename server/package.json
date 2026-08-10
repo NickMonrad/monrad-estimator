@@ -26,8 +26,6 @@
     "capacity-profiles:audit:repair": "tsx src/scripts/auditCapacityProfileOwnership.ts --repair-identical",
     "capacity-profiles:audit:repair:json": "tsx src/scripts/auditCapacityProfileOwnership.ts --repair-identical --json",
     "capacity-profiles:readiness": "tsx src/scripts/checkProductionMigrationReadiness.ts",
-    "capacity-profiles:remediate-readiness": "tsx src/scripts/remediateProductionReadiness.ts",
-    "capacity-profiles:snapshot-evidence": "tsx src/scripts/generateSnapshotEvidence.ts",
     "capacity-profiles:purge-pre-v4-snapshots": "tsx src/scripts/purgePreV4Snapshots.ts",
     "capacity-profiles:classify-needs-replan": "tsx src/scripts/classifyNeedsReplan.ts",
     "test:ownership-invariants-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileOwnershipInvariants.integration.test.ts",
@@ -35,8 +33,6 @@
     "test:transfer-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileTransfer.integration.test.ts",
     "postinstall": "prisma generate",
     "test:legacy-alias-removal-integration": "vitest run --config vitest.integration.config.ts src/test/legacyCapacityAliasRemoval.integration.test.ts",
-    "test:remediation-integration": "vitest run --config vitest.integration.config.ts src/test/productionRemediation.integration.test.ts",
-    "test:snapshot-evidence-integration": "vitest run --config vitest.integration.config.ts src/test/snapshotEvidence.integration.test.ts",
     "test:purge-pre-v4-integration": "vitest run --config vitest.integration.config.ts src/test/purgePreV4Snapshots.integration.test.ts",
     "test:planning-reset-integration": "vitest run --config vitest.integration.config.ts src/test/planningReset.integration.test.ts"
   },
