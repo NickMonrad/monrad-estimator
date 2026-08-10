@@ -238,13 +238,6 @@ type NamedPersonCanonicalState = {
     id: string
     name: string
     pricingModel: string
-    allocationMode: string
-    allocationPercent: number
-    allocationPct: number
-    allocationStartWeek: number | null
-    allocationEndWeek: number | null
-    startWeek: number | null
-    endWeek: number | null
   }
   profile: {
     id: string
@@ -271,7 +264,7 @@ async function readNamedPersonCanonicalState(nrId: string, profileId: string): P
   await client.connect()
   try {
     const nrResult = await client.query(
-      'SELECT id, name, "pricingModel", "allocationMode", "allocationPercent", "allocationPct", "allocationStartWeek", "allocationEndWeek", "startWeek", "endWeek" FROM "NamedResource" WHERE id = $1',
+      'SELECT id, name, "pricingModel" FROM "NamedResource" WHERE id = $1',
       [nrId],
     )
     const profileResult = await client.query(
@@ -307,11 +300,11 @@ async function seedSegmentedNamedPerson(page: Page, projectId: string, rtId: str
   const client = new Client({ connectionString: DATABASE_URL })
   await client.connect()
   try {
-    // Stale NamedResource scalar compatibility values — different from profile defaults
-    // to prove UI displays authoritative profile values, not these stale legacy fields
+    // Issue #418: the legacy capacity columns no longer exist — the profile
+    // below is the sole capacity authority.
     await client.query(
-      'INSERT INTO "NamedResource" (id, "resourceTypeId", name, "startWeek", "endWeek", "allocationPct", "allocationMode", "allocationPercent", "allocationStartWeek", "allocationEndWeek", "pricingModel", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
-      [nrId, rtId, nrName, 0, 9, 75, 'TIMELINE', 75, 0, 9, 'ACTUAL_DAYS', now, now],
+      'INSERT INTO "NamedResource" (id, "resourceTypeId", name, "pricingModel", "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [nrId, rtId, nrName, 'ACTUAL_DAYS', now, now],
     )
 
     // CapacityProfile with NAMED_PERSON owner, scalar planning basis, non-planner source
@@ -1077,15 +1070,6 @@ test.describe('Segmented NAMED_PERSON protection', () => {
 
     // Pricing changed
     expect(after.namedResource.pricingModel).toBe('PRO_RATA')
-
-    // All compatibility capacity fields unchanged (stale, as intended)
-    expect(after.namedResource.allocationMode).toBe(before.namedResource.allocationMode)
-    expect(after.namedResource.allocationPercent).toBe(before.namedResource.allocationPercent)
-    expect(after.namedResource.allocationPct).toBe(before.namedResource.allocationPct)
-    expect(after.namedResource.allocationStartWeek).toBe(before.namedResource.allocationStartWeek)
-    expect(after.namedResource.allocationEndWeek).toBe(before.namedResource.allocationEndWeek)
-    expect(after.namedResource.startWeek).toBe(before.namedResource.startWeek)
-    expect(after.namedResource.endWeek).toBe(before.namedResource.endWeek)
 
     // Profile identity unchanged
     expect(after.profile.id).toBe(before.profile.id)

@@ -290,6 +290,20 @@ test.before(async () => {
   containerName = started.name
   dockerEnvironment = started.dockerEnv
   maintenanceUrl = started.databaseUrl
+  // The container may still be initialising; poll until it accepts queries
+  // (bounded, so a broken container fails fast instead of racing the suites).
+  let lastError
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    try {
+      await query(maintenanceUrl, 'SELECT 1')
+      return
+    } catch (error) {
+      lastError = error
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+  }
+  throw new Error(`PostgreSQL container did not become ready: ${lastError?.message ?? 'unknown error'}`)
 })
 
 test.after(async () => {
