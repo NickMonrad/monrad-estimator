@@ -12,17 +12,6 @@ import jwt from 'jsonwebtoken'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
 
-vi.mock('../lib/syncCapacityProfiles.js', () => ({
-  syncCapacityProfilesForProject: vi.fn().mockResolvedValue({
-    profilesCreated: 0,
-    profilesUpdated: 0,
-    profilesDeleted: 0,
-    segmentsCreated: 0,
-    segmentsDeleted: 0,
-  }),
-}))
-
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'
@@ -93,7 +82,6 @@ describe('named-resource capacity profile write', () => {
     expect(tx.namedResource.update).not.toHaveBeenCalled()
     expect(tx.project.update).not.toHaveBeenCalled()
     // Sync is NOT called after #364 cutover
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
   it('PATCH named-resource route is rejection-only — structured 400 for capacity fields, 405 otherwise', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: 'proj-1', ownerId: userId } as never)
@@ -133,7 +121,6 @@ describe('named-resource capacity profile write', () => {
     expect(tx.namedResource.update).not.toHaveBeenCalled()
     expect(prisma.$transaction).not.toHaveBeenCalled()
     // Sync is NOT called after #364
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
 
     // No legacy field → method/contract error, still no mutation path
     const noField = await request(app)
@@ -171,7 +158,6 @@ describe('named-resource capacity profile write', () => {
     // Non-capacity update writes name directly
     expect(tx.namedResource.update).toHaveBeenCalled()
     // Sync is NOT called after #364
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
 
   it('DELETE succeeds without sync (cascade handles profile cleanup)', async () => {
@@ -229,7 +215,6 @@ describe('named-resource capacity profile write', () => {
 
     console.log('DELETE status:', res.status, 'body:', JSON.stringify(res.body))
     expect(res.status).toBe(204)
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
     expect(deleteFn).toHaveBeenCalled()
     expect(countFn).toHaveBeenCalled()
     expect(updateFn).toHaveBeenCalled()

@@ -47,17 +47,9 @@ const MODEL_RE = /\.(resourceType|namedResource)\.([A-Za-z]+)\(/g
 /**
  * Files whose candidate-field access is explicitly permitted:
  *  - projectSnapshotTypes.ts — historical snapshot input types (v1/v2/v3).
- *  - capacityProfileMapping.ts — the legacy→profile mapper, consumed only by
- *    explicit backfill/reconcile/sync tooling after the runtime cutover.
- *  - syncCapacityProfiles.ts / reconcileCapacityProfiles.ts — explicit
- *    tooling, never invoked by normal runtime routes (guarded by
- *    runtimeSyncBoundary.test.ts).
  */
 export const GUARD_ALLOWLIST = [
   'src/lib/projectSnapshotTypes.ts',
-  'src/lib/capacityProfileMapping.ts',
-  'src/lib/syncCapacityProfiles.ts',
-  'src/lib/reconcileCapacityProfiles.ts',
 ] as const
 
 export interface GuardFinding {

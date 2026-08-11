@@ -788,8 +788,7 @@ Tracked separately by #342.
 
 | Test | What to assert |
 |------|----------------|
-| Backfill passes | `npm run capacity-profiles:backfill` exits 0 |
-| Reconciliation passes | `npm run capacity-profiles:reconcile` exits 0 |
+| Backfill/reconcile retired | Temporary backfill/reconcile commands removed with the legacy columns (PR 3) |
 | Source-of-truth writes are transactional | Partial write failure rolls back both profile and legacy fields |
 | Stale profile deletion is safe | Deleting a capacity profile with no legacy counterpart does nothing harmful |
 
@@ -1084,21 +1083,22 @@ To restore data after repair:
   them as errors (#361), and the migration preflight counts them toward the
   failure threshold so they halt deployment until resolved.
 - Existing runtime duplicate and malformed-state validation in
-  `persistedCapacityProfileValidation.ts` and `syncCapacityProfiles.ts`
-  remains as defence in depth. It is not removed by this migration.
+  `persistedCapacityProfileValidation.ts` remains as defence in depth. The
+  temporary sync helper was removed in issue #418 PR 3 once the legacy
+  columns were dropped in production.
 
 ---
 
 ## #364 — Runtime cutover: profile-first authority in normal writes
 
-### Operational-only sync boundary
+### Operational-only sync boundary — completed
 
-`syncCapacityProfilesForProject` is now an **operational-only** helper available only through:
-
-- `server/src/lib/backfillCapacityProfiles.ts` — explicit backfill/repair command
-- `server/src/test/` — focused unit and integration tests for the sync logic
-
-Normal HTTP routes (`projects.ts`, `resourceTypes.ts`, `namedResources.ts`) no longer import or call `syncCapacityProfilesForProject`. An automated boundary test in `server/src/test/` verifies this.
+The pre-#364 `syncCapacityProfilesForProject` helper became operational-only
+(available only through the backfill/repair command and focused tests) and
+was removed entirely in issue #418 PR 3 together with the backfill tooling.
+Normal HTTP routes (`projects.ts`, `resourceTypes.ts`, `namedResources.ts`)
+no longer import or call it — they persist `CapacityProfile`/`CapacitySegment`
+rows directly.
 
 ### Direct authoritative writes
 
@@ -1146,10 +1146,14 @@ The following consumers still read legacy allocation fields (`allocationMode`, `
 1. **Database backup** — `npm run db:backup`
 2. **Ownership audit** — `npm run capacity-profiles:audit` (exit 0 = clean)
 3. **Resolution** — Fix any invalid, conflicting or missing profile state identified by the audit
-4. **Backfill repair** — `npm run capacity-profiles:backfill` to ensure all owners have valid profiles
-5. **Clean audit confirmation** — Re-run audit to confirm clean state
-6. **Application deployment** — Deploy the runtime cutover
-7. **Post-deployment validation** — Run focused smoke tests on project/resource creation, updates, count changes, and deletes
+4. **Clean audit confirmation** — Re-run audit to confirm clean state
+5. **Application deployment** — Deploy the runtime cutover
+6. **Post-deployment validation** — Run focused smoke tests on project/resource creation, updates, count changes, and deletes
+
+> **Backfill repair completed (issue #418).** The temporary
+> `npm run capacity-profiles:backfill` repair step was retired in PR 3 after
+> the legacy columns were dropped in production; profiles are the sole
+> capacity source and no backfill is required.
 
 ### Rollback
 

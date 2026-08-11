@@ -19,7 +19,6 @@ try {
       'test:runtime-cutover-integration',
       'test:transfer-integration',
       'test:legacy-alias-removal-integration',
-      'test:purge-pre-v4-integration',
       'test:planning-reset-integration',
     ]) {
       if (guard.triggered) break

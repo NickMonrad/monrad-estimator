@@ -3,17 +3,7 @@ import request from 'supertest'
 import jwt from 'jsonwebtoken'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
 
-vi.mock('../lib/syncCapacityProfiles.js', () => ({
-  syncCapacityProfilesForProject: vi.fn().mockResolvedValue({
-    profilesCreated: 0,
-    profilesUpdated: 0,
-    profilesDeleted: 0,
-    segmentsCreated: 0,
-    segmentsDeleted: 0,
-  }),
-}))
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'
@@ -856,7 +846,6 @@ describe('capacity profile profile-first writes (no sync)', () => {
     expect(tx.capacityProfile.update).not.toHaveBeenCalled()
     expect(tx.resourceType.update).not.toHaveBeenCalled()
     // Sync is NOT called after #364
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
 
 
@@ -887,7 +876,6 @@ describe('capacity profile profile-first writes (no sync)', () => {
     expect(tx.namedResource.create).toHaveBeenCalled()
     expect(tx.resourceType.update).toHaveBeenCalledWith(expect.objectContaining({ data: { count: 2 } }))
     // Sync is NOT called after #364
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
 
   it('PATCH count increase clones the role profile with generation provenance', async () => {
@@ -1021,7 +1009,6 @@ describe('capacity profile profile-first writes (no sync)', () => {
       where: { id: 'rt-1', projectId: 'proj-1' },
     })
     // Sync is NOT called after #364
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
 
   it('PUT non-capacity fails closed when no profile exists', async () => {
@@ -1045,7 +1032,6 @@ describe('capacity profile profile-first writes (no sync)', () => {
 
     // Missing profile should fail closed → no resource type update
     expect(tx.resourceType.update).not.toHaveBeenCalled()
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
   })
 })
 describe('PATCH regression coverage', () => {
@@ -1099,7 +1085,6 @@ describe('PATCH regression coverage', () => {
       .set('Authorization', authHeader)
       .send({ count: 3 })
     // Sync is NOT called after #364
-    expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
     expect(tx.namedResource.create).toHaveBeenCalled()
     expect(tx.resourceType.update).toHaveBeenCalledWith(expect.objectContaining({ data: { count: 3 } }))
   })
