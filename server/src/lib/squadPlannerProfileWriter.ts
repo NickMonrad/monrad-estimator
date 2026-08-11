@@ -22,6 +22,7 @@ import {
   type CapacityPlanResourceTrajectory,
 } from './capacityPlanMaterialisation.js'
 import type { CapacityProfileSource } from '@prisma/client'
+import { isLegacyMapperProfile } from './capacityProfileProvenance.js'
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
@@ -69,13 +70,13 @@ interface PersistedProfileSummary {
   ownerKind: string
   source: string
   planningBasis?: string
-  /** Non-null when the profile was created by the mapper/backfill (legacy sync). */
-  legacy?: unknown
-  /** Profile-level default percent (legacy allocationPercent). */
+  /** Explicit behavioural provenance (issue #405); LEGACY_MAPPER for recognised mapper rows. */
+  provenance?: unknown
+  /** Profile-level default percent. */
   defaultPercent?: number | null
-  /** Profile-level start week (legacy allocationStartWeek). */
+  /** Profile-level start week. */
   startWeek?: number | null
-  /** Profile-level end week (legacy allocationEndWeek). */
+  /** Profile-level end week. */
   endWeek?: number | null
 }
 
@@ -88,145 +89,24 @@ const PROTECTED_PROFILE_SOURCES: Record<string, true> = {
 }
 
 /**
- * Allocation mode → mapper-produced (source, planningBasis) pair mapping.
- * These are the exact pairs the legacy mapper/backfill produces for ROLE-level
- * capacity profiles in capacityProfileMapping.ts (deriveSource + allocationModeToPlanningBasis).
- *
- * The mapper always populates the `legacy` JSON payload with allocationMode,
- * allocationPercent, allocationStartWeek, and allocationEndWeek for ROLE profiles.
- * Profile-first/explicit writes leave `legacy` as DB_NULL.
- *
- * Only validated mapper-provided profiles (checked via isValidMapperProvenance)
- * may be adopted by the Squad Planner. All other non-SQUAD_PLANNER ROLE profiles
- * represent explicit/manual ownership and must be rejected.
- */
-const ALLOCATION_MODE_TO_MAPPER_PAIR: Record<string, readonly [string, string]> = {
-  EFFORT: ['FIXED', 'DEMAND_FOLLOWING'],
-  TIMELINE: ['AVAILABILITY_WINDOW', 'AVAILABILITY_WINDOW'],
-  FULL_PROJECT: ['FIXED', 'WHOLE_PROJECT_ALLOCATION'],
-  // CAPACITY_PLAN without active slot materialisation: the mapper produces
-  //   source='LEGACY' (fallthrough in deriveSource for CAPACITY_PLAN with no slots)
-  //   planningBasis=capacityProfile ('capacityProfile' via allocationModeToPlanningBasis)
-  //   → Prisma enums: LEGACY, CAPACITY_PROFILE
-  CAPACITY_PLAN: ['LEGACY', 'CAPACITY_PROFILE'],
-  // Null/undefined allocationMode: the mapper defaults to
-  //   source='LEGACY' (deriveSource fallthrough)
-  //   planningBasis='demandFollowing' (allocationModeToPlanningBasis fallback)
-  //   → Prisma enums: LEGACY, DEMAND_FOLLOWING
-  //
-  // This pair is handled separately in isValidMapperProvenance via the
-  // allocationMode===null branch rather than being a named key here.
-}
-
-/**
  * Strictly validate that a ROLE-level capacity profile was produced by the
- * legacy mapper/backfill, using the populated `legacy` payload as independent
- * provenance evidence.
+ * legacy mapper/backfill (issue #405).
  *
- * The mapper always populates `legacy.allocationMode`, `legacy.allocationPercent`,
- * `legacy.allocationStartWeek`, and `legacy.allocationEndWeek` for ROLE profiles
- * (see capacityProfileMapping.ts buildLegacyFields).  Profile-first/explicit
- * writes leave `legacy` as DB_NULL, so a non-null legacy object with the expected
- * fields is independent mapper provenance.
+ * The recognised mapper provenance is now explicit: `provenance ===
+ * 'LEGACY_MAPPER'` (backfilled by the #405 migration only for rows that
+ * satisfied the complete strict legacy-payload contract). The authoritative
+ * (source, planningBasis) pair and owner/FK shape must still match the
+ * mapper contract so a user-edited or planner-transferred profile whose
+ * source changed is never treated as mapper-owned.
  *
- * A valid mapper-derived profile requires ALL of:
- * - ownerKind === 'ROLE'
- * - namedResourceId === null (aggregate role profile, not per-person)
- * - `legacy` is a non-null non-array object
- * - `legacy.allocationMode` is a string matching a known mapper mode
- * - The profile's (source, planningBasis) matches the mapper pair for that mode
- * - All expected mapper compatibility fields are present in the legacy payload
+ * Only validated mapper-provided profiles may be adopted by the Squad
+ * Planner. All other non-SQUAD_PLANNER ROLE profiles represent
+ * explicit/manual ownership and must be rejected.
  */
 export function isValidMapperProvenance(
-  profile: Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis' | 'legacy' | 'namedResourceId' | 'resourceTypeId' | 'defaultPercent' | 'startWeek' | 'endWeek'>,
+  profile: Pick<PersistedProfileSummary, 'ownerKind' | 'source' | 'planningBasis' | 'provenance' | 'namedResourceId' | 'resourceTypeId' | 'defaultPercent' | 'startWeek' | 'endWeek'>,
 ): boolean {
-  // Must be an aggregate ROLE profile (not a named-resource-level profile)
-  if (profile.ownerKind !== 'ROLE') return false
-  if (profile.namedResourceId !== null && profile.namedResourceId !== undefined) return false
-  if (profile.resourceTypeId === null || profile.resourceTypeId === undefined) return false
-
-  // Legacy payload must be a non-null object (mapper always populates it)
-  if (profile.legacy === null || profile.legacy === undefined) return false
-  if (typeof profile.legacy !== 'object' || Array.isArray(profile.legacy)) return false
-
-  const legacy = profile.legacy as Record<string, unknown>
-
-  // ── 1. allocationMode validation ──────────────────────────────────────
-  // The mapper always writes allocationMode.  For a recognised string mode,
-  // look up the expected (source, planningBasis) pair.  For null/undefined
-  // (mapper fallback for null mode), expect LEGACY/DEMAND_FOLLOWING.
-  const allocationMode = legacy.allocationMode
-
-  let expectedSource: string
-  let expectedBasis: string
-
-  if (allocationMode === null || allocationMode === undefined) {
-    // Mapper default pair for null/undefined allocationMode
-    expectedSource = 'LEGACY'
-    expectedBasis = 'DEMAND_FOLLOWING'
-  } else if (typeof allocationMode === 'string') {
-    const pair = ALLOCATION_MODE_TO_MAPPER_PAIR[allocationMode]
-    if (!pair) return false
-    expectedSource = pair[0]
-    expectedBasis = pair[1]
-  } else {
-    // allocationMode is a non-string, non-null value — invalid
-    return false
-  }
-
-  if (profile.source !== expectedSource) return false
-  if (profile.planningBasis !== expectedBasis) return false
-
-  // ── 2. All seven mapper keys must exist in the legacy payload ────
-  // The mapper's buildLegacyFields() always writes these seven keys:
-  //   allocationMode, allocationPercent, allocationPct,
-  //   allocationStartWeek, allocationEndWeek, startWeek, endWeek
-  // Absence of any key means the payload was constructed differently.
-  const mapperKeys: (keyof typeof legacy)[] = [
-    'allocationMode', 'allocationPercent', 'allocationPct',
-    'allocationStartWeek', 'allocationEndWeek', 'startWeek', 'endWeek',
-  ]
-  for (const key of mapperKeys) {
-    if (!(key in legacy)) return false
-  }
-
-  // ── 3. Type validation ─────────────────────────────────────────────
-  // Percentages: finite number or null (reject strings, objects, NaN)
-  if (!isValidNullableFinite(legacy.allocationPercent)) return false
-  if (!isValidNullableFinite(legacy.allocationPct)) return false
-
-  // Week fields: finite number or null
-  if (!isValidNullableFinite(legacy.allocationStartWeek)) return false
-  if (!isValidNullableFinite(legacy.allocationEndWeek)) return false
-  if (!isValidNullableFinite(legacy.startWeek)) return false
-  if (!isValidNullableFinite(legacy.endWeek)) return false
-
-  // ── 4. Internal consistency with the persisted ROLE profile ────────
-  // The mapper derives both profile-level and legacy-level fields from the
-  // same ResourceType fields, so they must agree exactly — including null.
-  // Normalise undefined to null since Prisma cannot persist undefined.
-  if ((profile.defaultPercent ?? null) !== legacy.allocationPercent) return false
-  if ((profile.startWeek ?? null) !== legacy.allocationStartWeek) return false
-  if ((profile.endWeek ?? null) !== legacy.allocationEndWeek) return false
-
-  // ── 5. ROLE-only legacy fields ────────────────────────────────────
-  // For aggregate ROLE profiles, the mapper never sources these fields
-  // from ResourceType fields (they are only populated for NamedResource-level
-  // profiles). They must be exactly null.
-  if (legacy.allocationPct !== null) return false
-  if (legacy.startWeek !== null) return false
-  if (legacy.endWeek !== null) return false
-
-  return true
-}
-
-/**
- * True when `value` is `null`, `undefined`, or a finite number.
- * Rejects NaN, Infinity, strings, objects, booleans and arrays.
- */
-function isValidNullableFinite(value: unknown): boolean {
-  if (value === null || value === undefined) return true
-  return typeof value === 'number' && Number.isFinite(value)
+  return isLegacyMapperProfile(profile)
 }
 
 /** Minimal NamedResource shape for deterministic ordering. */
@@ -690,7 +570,7 @@ export async function validatePlannerOwnerState(
       ownerKind: true,
       source: true,
       planningBasis: true,
-      legacy: true,
+      provenance: true,
       defaultPercent: true,
       startWeek: true,
       endWeek: true,
@@ -1311,7 +1191,6 @@ export async function clearOmittedPlannerCapacity(
           resourceTypeId: true,
           source: true,
           planningBasis: true,
-          legacy: true,
           defaultPercent: true,
           startWeek: true,
           endWeek: true,

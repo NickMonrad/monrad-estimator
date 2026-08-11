@@ -71,7 +71,7 @@ describe('PUT /api/projects/:projectId/capacity-profiles/:ownerKind/:ownerId', (
       startWeek: null,
       endWeek: null,
       segments: [],
-      legacy: null,
+      provenance: null,
     } as never)
   })
 
@@ -212,7 +212,7 @@ describe('PUT /api/projects/:projectId/capacity-profiles/:ownerKind/:ownerId', (
       startWeek: null,
       endWeek: null,
       segments: [],
-      legacy: null,
+      provenance: null,
     } as never)
     const res = await request(app)
       .put('/api/projects/proj-1/capacity-profiles/ROLE/rt-1')
@@ -238,7 +238,7 @@ describe('PUT /api/projects/:projectId/capacity-profiles/:ownerKind/:ownerId', (
       startWeek: 2,
       endWeek: 10,
       segments: [],
-      legacy: null,
+      provenance: null,
     } as never)
     const res = await request(app)
       .put('/api/projects/proj-1/capacity-profiles/NAMED_PERSON/nr-1')

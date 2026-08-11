@@ -202,16 +202,9 @@ beforeAll(async () => {
   })
   roleProfileId = roleProfile.id
 
-  // One segment on the role profile
-  await prisma.capacitySegment.create({
-    data: {
-      capacityProfileId: roleProfile.id,
-      startWeek: 0,
-      endWeek: 6,
-      capacityPercent: 75,
-      source: 'MANUAL',
-    },
-  })
+  // Issue #405/#419: AVAILABILITY_WINDOW profiles are scalar — no segments.
+  // (The pre-#419 fixture carried a redundant segment that the structural
+  // validator now correctly rejects.)
   const inheritedNr = await prisma.namedResource.create({
     data: {
       resourceTypeId: roleRt.id,
@@ -219,6 +212,25 @@ beforeAll(async () => {
     },
   })
   inheritedNrId = inheritedNr.id
+
+  // Profile-first fixture (issue #418/#405): every named resource of a role
+  // with an authoritative profile must itself have exactly one validated
+  // profile. The inherited NR carries the system-generated ROLE_DEFAULT clone
+  // that mirrors the role profile shape.
+  await prisma.capacityProfile.create({
+    data: {
+      projectId,
+      resourceTypeId: null,
+      namedResourceId: inheritedNr.id,
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'DERIVED',
+      defaultPercent: 75,
+      startWeek: 0,
+      endWeek: 6,
+      provenance: 'ROLE_DEFAULT',
+    },
+  })
 
   // ── Fixture 2: Named resource with initial profile ────────────────
   const nrRt = await prisma.resourceType.create({
@@ -253,16 +265,7 @@ beforeAll(async () => {
   })
   nrProfileId = nrProfile.id
 
-  // One segment on the NR profile
-  await prisma.capacitySegment.create({
-    data: {
-      capacityProfileId: nrProfile.id,
-      startWeek: 0,
-      endWeek: 4,
-      capacityPercent: 80,
-      source: 'MANUAL',
-    },
-  })
+  // Issue #405/#419: AVAILABILITY_WINDOW profiles are scalar — no segments.
 
   // ── Fixture 3: Second resource type (for cross-owner isolation checks) ──
   const otherRt = await prisma.resourceType.create({
@@ -275,6 +278,20 @@ beforeAll(async () => {
     },
   })
   otherRtId = otherRt.id
+  // Completeness rule (issue #418): every resource type needs either a ROLE
+  // profile or explicit NAMED_PERSON profiles for all of its named resources.
+  // OtherRole has no named resources, so it needs a ROLE profile.
+  await prisma.capacityProfile.create({
+    data: {
+      projectId,
+      resourceTypeId: otherRt.id,
+      namedResourceId: null,
+      ownerKind: 'ROLE',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'MANUAL',
+      defaultPercent: 100,
+    },
+  })
 
   // ── Fixture 4: Squad Planner-owned resource type (test 8) ─────────
   const squadRt = await prisma.resourceType.create({
@@ -297,6 +314,18 @@ beforeAll(async () => {
       planningBasis: 'CAPACITY_PROFILE',
       source: 'SQUAD_PLANNER',
       defaultPercent: 150,
+    },
+  })
+  await prisma.capacitySegment.create({
+    data: {
+      capacityProfileId: (await prisma.capacityProfile.findFirstOrThrow({
+        where: { projectId, resourceTypeId: squadRt.id, namedResourceId: null },
+        select: { id: true },
+      })).id,
+      startWeek: 0,
+      endWeek: 10,
+      capacityPercent: 150,
+      source: 'SQUAD_PLANNER',
     },
   })
 
@@ -503,14 +532,17 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
     const rt = resolved.resourceTypes.find(r => r.id === roleRtId)!
     expect(rt).toBeDefined()
 
-    // roleSegments-based capacity: (allocationPercent/100) × hoursPerDay × 5
-    // Segment 1: 100% × 8h × 5d = 40h (aggregate role segment, not per-person)
-    expect(getWeeklyCapacity(rt, 1, 8)).toBe(40)
+    // Profile-first capacity (issue #418/#405): roleSegments contribute
+    // (allocationPercent/100) × hoursPerDay × 5, and the inherited
+    // ROLE_DEFAULT clone mirrors the role segments, contributing the same
+    // again per named resource.
+    // Week 1: role 100% × 8h × 5d = 40h + inherited clone 40h = 80h
+    expect(getWeeklyCapacity(rt, 1, 8)).toBe(80)
     // Gap: 0h/week
     expect(getWeeklyCapacity(rt, 3, 8)).toBe(0)
     expect(getWeeklyCapacity(rt, 4, 8)).toBe(0)
-    // Segment 2: 50% × 8h × 5d = 20h
-    expect(getWeeklyCapacity(rt, 6, 8)).toBe(20)
+    // Week 6: role 50% × 8h × 5d = 20h + inherited clone 20h = 40h
+    expect(getWeeklyCapacity(rt, 6, 8)).toBe(40)
   })
 
   // ── Test 4: Overlapping segments rejected with no DB changes ───
@@ -573,13 +605,8 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
       where: { projectId, resourceTypeId: roleRtId, namedResourceId: null },
     })
     expect(roleProf).toBeDefined()
-    expect(roleProf!.legacy).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
-      allocationPercent: 64,
-      // Cap-window: start = min segment start, end = max segment end
-      allocationStartWeek: 0,
-      allocationEndWeek: 9,
-    })
+    // Issue #405: manual replace clears behavioural provenance (null).
+    expect(roleProf!.provenance).toBeNull()
 
     // Now replace a named-person profile
     const nrBody = {
@@ -602,13 +629,8 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
       where: { projectId, namedResourceId: nrId, resourceTypeId: null },
     })
     expect(nrProf).toBeDefined()
-    expect(nrProf!.legacy).toMatchObject({
-      allocationMode: 'CAPACITY_PLAN',
-      // DWA: (6*90 + 3*30)/9 = 70
-      allocationPercent: 70,
-      allocationStartWeek: 2,
-      allocationEndWeek: 10,
-    })
+    // Issue #405: manual replace clears behavioural provenance (null).
+    expect(nrProf!.provenance).toBeNull()
   })
 
   // ── Test 6: Owner uniqueness constraints remain satisfied ─────
@@ -840,15 +862,7 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
         defaultPercent: 60,
         startWeek: null,
         endWeek: null,
-        legacy: {
-          allocationMode: 'EFFORT',
-          allocationPercent: 60,
-          allocationPct: 60,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          startWeek: null,
-          endWeek: null,
-        },
+        provenance: null,
       },
     })
     await prisma.capacityProfile.create({
@@ -862,7 +876,7 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
         defaultPercent: 60,
         startWeek: null,
         endWeek: null,
-        legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+        provenance: 'ROLE_DEFAULT',
       },
     })
 
@@ -912,12 +926,8 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
       orderBy: { namedResourceId: 'asc' },
     }))
     const scalarProfile = beforeExplicitProfiles.find(profile => profile.namedResourceId === manualScalar.id)
-    expect(scalarProfile?.legacy).toMatchObject({
-      version: 1,
-      writer: 'manual-editor',
-      allocationMode: 'EFFORT',
-      allocationPercent: 60,
-    })
+    // Issue #405: an ordinary manual profile write carries no provenance.
+    expect(scalarProfile?.provenance).toBeNull()
 
     await prisma.project.update({
       where: { id: projectId },
@@ -930,11 +940,8 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
     expect(firstEdit.status).toBe(200)
     // Issue #418: the inherited NR's candidate columns are never written —
     // the ROLE_DEFAULT clone profile follows the role default in place.
-    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: inherited.id } })).toMatchObject({
-      allocationMode: 'EFFORT',
-      allocationPercent: 60,
-      allocationPct: 60,
-    })
+    // Issue #418/#452: the candidate columns were removed — assert absence.
+    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: inherited.id } })).not.toHaveProperty('allocationMode')
     const inheritedCloneAfterFirst = await prisma.capacityProfile.findFirstOrThrow({
       where: { projectId, namedResourceId: inherited.id },
     })
@@ -962,12 +969,8 @@ describeIf('Capacity profile replace (real PostgreSQL)', () => {
         endWeek: 8,
       })
     expect(secondEdit.status).toBe(200)
-    // Candidate columns remain untouched; the clone profile follows the role.
-    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: inherited.id } })).toMatchObject({
-      allocationMode: 'EFFORT',
-      allocationPercent: 60,
-      allocationPct: 60,
-    })
+    // The clone profile follows the role; candidate columns stay absent.
+    expect(await prisma.namedResource.findUniqueOrThrow({ where: { id: inherited.id } })).not.toHaveProperty('allocationMode')
     const inheritedCloneAfterSecond = await prisma.capacityProfile.findFirstOrThrow({
       where: { projectId, namedResourceId: inherited.id },
     })

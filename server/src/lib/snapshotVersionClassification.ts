@@ -21,6 +21,7 @@ import {
   isSnapshotV2,
   isSnapshotV3,
   isSnapshotV4,
+  isSnapshotV5,
   type SnapshotData,
 } from './projectSnapshotTypes.js'
 import { validateSnapshotV3 } from './projectSnapshotValidation.js'
@@ -30,6 +31,7 @@ export type SnapshotVersionClassification =
   | { kind: 'v2' }
   | { kind: 'v3' }
   | { kind: 'v4'; valid: boolean; reason?: string }
+  | { kind: 'v5'; valid: boolean; reason?: string }
   | { kind: 'malformed'; reason: string }
 
 /**
@@ -37,10 +39,13 @@ export type SnapshotVersionClassification =
  *
  * Outcomes:
  *   - `v1` / `v2` / `v3` — the payload parsed as that legacy version;
- *   - `v4` with `valid: true` — parsed and structurally validated;
- *   - `v4` with `valid: false` — schemaVersion 4 but the payload fails
- *     `validateSnapshotV3` (the authoritative structural rules shared by v4
- *     rollback); `reason` carries the validation failure;
+ *   - `v4` with `valid: true` — parsed and structurally validated
+ *     (pre-#405 legacy payload, restorable historical format);
+ *   - `v5` with `valid: true` — parsed and structurally validated
+ *     (current write format with explicit provenance, issue #405);
+ *   - `v4`/`v5` with `valid: false` — the schema version parsed but the
+ *     payload fails the authoritative structural rules; `reason` carries the
+ *     validation failure;
  *   - `malformed` — parse failure or an unsupported schema version;
  *     `reason` carries the parse failure.
  *
@@ -67,6 +72,18 @@ export function classifySnapshotVersion(raw: unknown): SnapshotVersionClassifica
     } catch (error) {
       return {
         kind: 'v4',
+        valid: false,
+        reason: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+  if (isSnapshotV5(parsed)) {
+    try {
+      validateSnapshotV3(parsed)
+      return { kind: 'v5', valid: true }
+    } catch (error) {
+      return {
+        kind: 'v5',
         valid: false,
         reason: error instanceof Error ? error.message : String(error),
       }

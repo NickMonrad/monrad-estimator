@@ -55,15 +55,6 @@ export type CapacityProfileDTO = {
   endWeek?: number | null
   segments: CapacitySegmentDTO[]
   source: CapacityProfileSource
-  legacy: {
-    allocationMode?: string | null
-    allocationPercent?: number | null
-    allocationPct?: number | null
-    allocationStartWeek?: number | null
-    allocationEndWeek?: number | null
-    startWeek?: number | null
-    endWeek?: number | null
-  }
 }
 
 // ─── Map persisted CapacityProfile rows to DTOs ────────────────────────────
@@ -157,15 +148,6 @@ export function mapPersistedProfilesToDTOs(
         capacityPercent: s.capacityPercent,
         source: toCamel(s.source) as CapacityProfileSource,
       })),
-      legacy: {
-        allocationMode: null,
-        allocationPercent: null,
-        allocationPct: null,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        startWeek: null,
-        endWeek: null,
-      },
     }
 
     dtos.push(dto)

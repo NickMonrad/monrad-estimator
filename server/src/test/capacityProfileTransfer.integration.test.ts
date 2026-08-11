@@ -658,6 +658,28 @@ describeIf('Scenario 2 — Protected named-person profiles unchanged', () => {
     const roleProfile = profiles.find(p => p.ownerKind === 'ROLE')
     expect(roleProfile).toBeDefined()
     expect(roleProfile!.source).toBe('MANUAL')
+
+    // Issue #405: only the transferred PLANNED_RESOURCE carries the explicit
+    // TRANSFERRED_FROM_SQUAD_PLANNER provenance; the manual ROLE profile and
+    // the protected NAMED_PERSON profile carry no redundant marker.
+    const plannedProfile = await prisma.capacityProfile.findUnique({
+      where: { id: 'cp-planned-s2' },
+      select: { provenance: true, ownerKind: true },
+    })
+    expect(plannedProfile).toEqual({
+      provenance: 'TRANSFERRED_FROM_SQUAD_PLANNER',
+      ownerKind: 'PLANNED_RESOURCE',
+    })
+    const roleRow = await prisma.capacityProfile.findUnique({
+      where: { id: 'cp-role-s2' },
+      select: { provenance: true },
+    })
+    expect(roleRow?.provenance).toBeNull()
+    const namedRow = await prisma.capacityProfile.findUnique({
+      where: { id: namedPersonProfileId },
+      select: { provenance: true },
+    })
+    expect(namedRow?.provenance).toBeNull()
   })
 })
 

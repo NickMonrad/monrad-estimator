@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  ROLE_DEFAULT_CLONE_LEGACY,
+  ROLE_DEFAULT_CLONE_PROVENANCE,
   isRoleDefaultClone,
   AggregateRoleCloneError,
   assertRoleProfileCloneableAsNamedPerson,
@@ -9,16 +9,18 @@ import { classifyNRsForRoleUpdate } from '../lib/classifyNRsForRoleUpdate.js'
 
 describe('roleProfileClonePolicy', () => {
   describe('isRoleDefaultClone', () => {
-    it('recognises the persisted ROLE_DEFAULT writer marker', () => {
-      expect(isRoleDefaultClone({ legacy: ROLE_DEFAULT_CLONE_LEGACY })).toBe(true)
+    it('recognises the explicit ROLE_DEFAULT provenance (issue #405)', () => {
+      expect(isRoleDefaultClone({ provenance: ROLE_DEFAULT_CLONE_PROVENANCE })).toBe(true)
     })
-    it('rejects empty, null, and absent legacy', () => {
-      expect(isRoleDefaultClone({ legacy: {} })).toBe(false)
-      expect(isRoleDefaultClone({ legacy: null })).toBe(false)
-      expect(isRoleDefaultClone({ legacy: undefined })).toBe(false)
+    it('rejects null, absent, and other provenance values', () => {
+      expect(isRoleDefaultClone({ provenance: null })).toBe(false)
+      expect(isRoleDefaultClone({ provenance: undefined })).toBe(false)
+      expect(isRoleDefaultClone({})).toBe(false)
     })
-    it('rejects other writers (e.g. optimiser-derived profiles)', () => {
-      expect(isRoleDefaultClone({ legacy: { version: 1, writer: 'RESOURCE_OPTIMISER' } })).toBe(false)
+    it('rejects other provenance values (e.g. optimiser-derived profiles)', () => {
+      expect(isRoleDefaultClone({ provenance: 'RESOURCE_OPTIMISER' })).toBe(false)
+      expect(isRoleDefaultClone({ provenance: 'LEGACY_MAPPER' })).toBe(false)
+      expect(isRoleDefaultClone({ provenance: 'TRANSFERRED_FROM_SQUAD_PLANNER' })).toBe(false)
     })
   })
 
@@ -81,7 +83,7 @@ describe('classifyNRsForRoleUpdate — generated segmented profiles (#403 findin
         namedResourceId: 'nr-1',
         ownerKind: 'NAMED_PERSON',
         source: 'DERIVED',
-        legacy: ROLE_DEFAULT_CLONE_LEGACY,
+        provenance: ROLE_DEFAULT_CLONE_PROVENANCE,
         planningBasis: 'AVAILABILITY_WINDOW',
         defaultPercent: 75,
         startWeek: 4,
@@ -101,7 +103,7 @@ describe('classifyNRsForRoleUpdate — generated segmented profiles (#403 findin
         namedResourceId: 'nr-1',
         ownerKind: 'NAMED_PERSON',
         source: 'MANUAL',
-        legacy: ROLE_DEFAULT_CLONE_LEGACY,
+        provenance: ROLE_DEFAULT_CLONE_PROVENANCE,
         planningBasis: 'AVAILABILITY_WINDOW',
         defaultPercent: 75,
         startWeek: 4,
@@ -121,7 +123,7 @@ describe('classifyNRsForRoleUpdate — generated segmented profiles (#403 findin
         namedResourceId: 'nr-1',
         ownerKind: 'NAMED_PERSON',
         source: 'DERIVED',
-        legacy: { version: 1, writer: 'RESOURCE_OPTIMISER' },
+        provenance: 'RESOURCE_OPTIMISER',
         planningBasis: 'AVAILABILITY_WINDOW',
         defaultPercent: 75,
         startWeek: 4,
@@ -136,9 +138,9 @@ describe('classifyNRsForRoleUpdate — generated segmented profiles (#403 findin
 
   it('still protects planner-owned and ambiguous profiles', () => {
     for (const profile of [
-      { namedResourceId: 'nr-1', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', legacy: {}, segments: [], planningBasis: 'CAPACITY_PROFILE' },
-      { namedResourceId: 'nr-1', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', legacy: {}, segments: [], planningBasis: 'CAPACITY_PROFILE' },
-      { namedResourceId: 'nr-1', ownerKind: 'NAMED_PERSON', source: 'DERIVED', legacy: null, segments: [], planningBasis: 'DEMAND_FOLLOWING' },
+      { namedResourceId: 'nr-1', ownerKind: 'PLANNED_RESOURCE', source: 'SQUAD_PLANNER', provenance: null, segments: [], planningBasis: 'CAPACITY_PROFILE' },
+      { namedResourceId: 'nr-1', ownerKind: 'NAMED_PERSON', source: 'SQUAD_PLANNER', provenance: null, segments: [], planningBasis: 'CAPACITY_PROFILE' },
+      { namedResourceId: 'nr-1', ownerKind: 'NAMED_PERSON', source: 'DERIVED', provenance: null, segments: [], planningBasis: 'DEMAND_FOLLOWING' },
     ]) {
       const result = classifyNRsForRoleUpdate(
         [{ id: 'nr-1' }],
@@ -161,7 +163,7 @@ describe('classifyNRsForRoleUpdate — generated segmented profiles (#403 findin
         namedResourceId: 'nr-1',
         ownerKind: 'NAMED_PERSON',
         source: 'DERIVED',
-        legacy: ROLE_DEFAULT_CLONE_LEGACY,
+        provenance: ROLE_DEFAULT_CLONE_PROVENANCE,
         planningBasis: 'AVAILABILITY_WINDOW',
         defaultPercent: 40,
         startWeek: 4,

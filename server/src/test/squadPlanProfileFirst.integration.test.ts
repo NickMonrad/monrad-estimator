@@ -1670,8 +1670,7 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     expect(explicitDto!.source).toBe('manual')
     expect(explicitDto!.defaultPercent).toBe(80)
 
-    // Legacy fields are null on persisted-authority path
-    expect(explicitDto!.legacy).toBeDefined()
+
   })
 
   it('fails closed when planner ROLE profile is removed', async () => {
@@ -1738,8 +1737,7 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     expect(roleDto).toBeDefined()
     expect(roleDto!.planningBasis).toBe('capacityProfile')
     expect(roleDto!.source).toBe('squadPlanner')
-    // Legacy fields are null on authority path
-    expect((roleDto!.legacy as Record<string, unknown>)?.allocationMode).toBeNull()
+
 
     // Planned resources should still be authoritative
     const plannedDtos = profiles.filter(
@@ -2309,16 +2307,7 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
         defaultPercent: 100,
         startWeek: 0,
         endWeek: 10,
-        legacy: {
-          version: 1,
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: 100,
-          allocationPct: null,
-          allocationStartWeek: 0,
-          allocationEndWeek: 10,
-          startWeek: null,
-          endWeek: null,
-        },
+        provenance: 'LEGACY_MAPPER',
       },
     })
     const mapperRoleId = mapperRole.id
@@ -2541,18 +2530,12 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
         namedResourceId: null,
         source: 'LEGACY',
         planningBasis: 'CAPACITY_PROFILE',
-        defaultPercent: null,            // ← profile defaultPercent is null
+        defaultPercent: null,            // ← diverged profile shape
         startWeek: 0,
         endWeek: 10,
-        legacy: {
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: 100,          // ← but legacy allocationPercent is 100
-          allocationPct: null,
-          allocationStartWeek: 0,
-          allocationEndWeek: 10,
-          startWeek: null,
-          endWeek: null,
-        },
+        // Issue #405: a row that failed the strict mapper contract migrates
+        // to provenance NULL and is not planner-adoptable (fail closed).
+        provenance: null,
       },
     })
  
@@ -2603,15 +2586,8 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
         defaultPercent: 100,
         startWeek: null,
         endWeek: null,
-        legacy: {
-          allocationMode: 'EFFORT',
-          allocationPercent: 100,
-          allocationPct: 50,    // ← ROLE should have null allocationPct
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          startWeek: null,
-          endWeek: null,
-        },
+        // Issue #405: no mapper provenance → not planner-adoptable (409).
+        provenance: null,
       },
     })
  
@@ -2648,17 +2624,10 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
         source: 'LEGACY',
         planningBasis: 'CAPACITY_PROFILE',
         defaultPercent: 100,
-        startWeek: null,              // ← profile startWeek is null
+        startWeek: null,              // ← diverged profile shape
         endWeek: 10,
-        legacy: {
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: 100,
-          allocationPct: null,
-          allocationStartWeek: 1,      // ← but legacy allocationStartWeek is 1 (non-null)
-          allocationEndWeek: 10,
-          startWeek: null,
-          endWeek: null,
-        },
+        // Issue #405: no mapper provenance → not planner-adoptable (409).
+        provenance: null,
       },
     })
  

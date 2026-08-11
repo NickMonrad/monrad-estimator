@@ -31,7 +31,6 @@
  * @module
  */
 
-import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import { validatePlannerOwnerState, capturePlannerAuthority, classifyNamedResource, plannerProvenanceFrom } from './squadPlannerProfileWriter.js'
 import { loadAndValidateOwnerProfile } from './ownerProfileLoader.js'
 import type { PrismaClient } from '@prisma/client'
@@ -80,9 +79,9 @@ function asTransferError(err: unknown): TransferError {
  * Transfer (atomic):
  * 1. Update ROLE profile source → MANUAL, update segment sources → MANUAL
  * 2. Update each planner-created profile source → MANUAL, update segment sources → MANUAL
- * 3. Update legacy compatibility projections
- * 4. Write legacy metadata
- * 5. Invalidate weekly demand cache
+ * 3. Write TRANSFERRED_FROM_SQUAD_PLANNER provenance on transferred
+ *    planned-resource profiles (issue #405)
+ * 4. Invalidate weekly demand cache
  */
 export async function transferToManualCapacity(
   tx: TxClient,
@@ -280,37 +279,23 @@ export async function transferToManualCapacity(
   // Issue #418: candidate ResourceType/NamedResource columns are never
   // written at runtime. Transferred profiles keep their authoritative
   // defaultPercent/segments; the scheduler authority rule (profile source
-  // MANUAL + planningBasis CAPACITY_PROFILE + transfer provenance marker)
-  // suppresses independent capacity contribution of transferred planned
-  // resources, so the manual ROLE profile is the sole authority.
-  const roleSegments = roleProfile.segments ?? []
-  const roleProjection = projectCapacityProfileToLegacyAllocation({
-    planningBasis: 'capacityProfile',
-    source: 'manual',
-    defaultPercent: roleProfile.defaultPercent,
-    startWeek: roleProfile.startWeek,
-    endWeek: roleProfile.endWeek,
-    segments: roleSegments.map(s => ({
-      startWeek: s.startWeek, endWeek: s.endWeek, capacityPercent: s.capacityPercent,
-    })),
-  })
+  // MANUAL + planningBasis CAPACITY_PROFILE + TRANSFERRED_FROM_SQUAD_PLANNER
+  // provenance) suppresses independent capacity contribution of transferred
+  // planned resources, so the manual ROLE profile is the sole authority.
 
-  // ── 7. Update legacy metadata on transferred profiles ────────────────
-  await writeTransferLegacyMetadata(tx, roleProfile, roleProjection, roleSegments)
+  // ── 7. Write explicit transfer provenance on transferred profiles ───
+  // Issue #405: only transferred PLANNED_RESOURCE profiles carry
+  // TRANSFERRED_FROM_SQUAD_PLANNER — the scheduler suppresses exactly those
+  // while the manual ROLE CAPACITY_PROFILE profile is authoritative. The
+  // manual ROLE profile and any legacy-planner NAMED_PERSON rows need no
+  // redundant marker; their scheduling authority comes from source/basis/
+  // ownerKind.
   for (const profile of plannerProfiles) {
-    if (!profile.namedResourceId) continue
-    const segs = profile.segments ?? []
-    const proj = projectCapacityProfileToLegacyAllocation({
-      planningBasis: 'capacityProfile',
-      source: 'manual',
-      defaultPercent: profile.defaultPercent,
-      startWeek: profile.startWeek,
-      endWeek: profile.endWeek,
-      segments: segs.map(s => ({
-        startWeek: s.startWeek, endWeek: s.endWeek, capacityPercent: s.capacityPercent,
-      })),
+    if (profile.ownerKind !== 'PLANNED_RESOURCE') continue
+    await tx.capacityProfile.update({
+      where: { id: profile.id },
+      data: { provenance: 'TRANSFERRED_FROM_SQUAD_PLANNER' },
     })
-    if (proj) await writeTransferLegacyMetadata(tx, profile, proj, segs)
   }
 
   // ── 8. Invalidate weekly demand cache ────────────────────────────────
@@ -356,27 +341,8 @@ function classifyTransferProfile(profile: {
   return 'protected'
 }
 
-// ─── Legacy metadata writer ─────────────────────────────────────────────────
+// ─── Transfer provenance ─────────────────────────────────────────────────────
 
-async function writeTransferLegacyMetadata(
-  tx: TxClient,
-  profile: { id: string; defaultPercent?: number | null; startWeek?: number | null; endWeek?: number | null },
-  projection: { allocationMode: string; allocationPercent: number | null; allocationStartWeek: number | null; allocationEndWeek: number | null; lossy: boolean; lossReason?: string } | null,
-  _segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>,
-): Promise<void> {
-  await tx.capacityProfile.update({
-    where: { id: profile.id },
-    data: {
-      legacy: {
-        version: 1,
-        writer: 'transfer-to-manual',
-        allocationMode: projection?.allocationMode ?? 'CAPACITY_PLAN',
-        allocationPercent: projection?.allocationPercent ?? profile.defaultPercent ?? 100,
-        allocationStartWeek: projection?.allocationStartWeek ?? profile.startWeek,
-        allocationEndWeek: projection?.allocationEndWeek ?? profile.endWeek,
-        lossy: projection?.lossy ?? false,
-        lossReason: projection?.lossReason ?? null,
-      } satisfies Record<string, unknown> as any,
-    },
-  })
-}
+// (issue #405) Transferred PLANNED_RESOURCE profiles are marked with the
+// explicit TRANSFERRED_FROM_SQUAD_PLANNER provenance in step 7 above; the
+// removed legacy JSON writer is obsolete.

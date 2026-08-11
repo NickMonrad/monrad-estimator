@@ -1,9 +1,11 @@
 /**
  * projectSnapshotValidation.ts — Snapshot payload validation for pre-rollback checks.
  *
- * Validates that a SnapshotV3/V4 payload is structurally sound before
+ * Validates that a SnapshotV3/V4/V5 payload is structurally sound before
  * committing destructive work (rollback).  Duplicate owners are preserved;
- * duplicate profile/segment IDs are rejected.
+ * duplicate profile/segment IDs are rejected. V3/V4 profiles carry the
+ * pre-#405 `legacy` payload; V5 profiles carry the explicit `provenance`
+ * (issue #405).
  *
  * @module projectSnapshotValidation
  */
@@ -11,12 +13,15 @@
 import type {
   SnapshotV3,
   SnapshotV4,
+  SnapshotV5,
   SnapshotCapacityProfile,
+  SnapshotCapacityProfileV5,
   SnapshotCapacitySegment,
   SnapshotJsonValue,
   CapacityProfileOwnerKindEnum,
   CapacityProfilePlanningBasisEnum,
   CapacityProfileSourceEnum,
+  CapacityProfileProvenanceEnum,
 } from './projectSnapshotTypes.js'
 
 // ─── Known enum value sets ───────────────────────────────────────────────────
@@ -42,6 +47,13 @@ const VALID_SOURCES: readonly CapacityProfileSourceEnum[] = [
   'IMPORTED',
   'DERIVED',
   'LEGACY',
+] as const
+
+const VALID_PROVENANCE: readonly CapacityProfileProvenanceEnum[] = [
+  'LEGACY_MAPPER',
+  'ROLE_DEFAULT',
+  'RESOURCE_OPTIMISER',
+  'TRANSFERRED_FROM_SQUAD_PLANNER',
 ] as const
 
 // ─── Error class ─────────────────────────────────────────────────────────────
@@ -169,7 +181,7 @@ export function validateSnapshotJsonValue(
  *
  * @throws SnapshotValidationError on first invalid value.
  */
-export function validateSnapshotV3(snapshot: SnapshotV3 | SnapshotV4): void {
+export function validateSnapshotV3(snapshot: SnapshotV3 | SnapshotV4 | SnapshotV5): void {
   const { capacityProfiles, resourceTypes, namedResources, overheadItems } = snapshot
 
   // ── resourceTypes structure ──────────────────────────────────────────────
@@ -301,7 +313,7 @@ export function validateSnapshotV3(snapshot: SnapshotV3 | SnapshotV4): void {
 }
 
 function validateProfile(
-  profile: SnapshotCapacityProfile,
+  profile: SnapshotCapacityProfile | SnapshotCapacityProfileV5,
   pfx: string,
   rtIds: Set<string>,
   nrIds: Set<string>,
@@ -393,8 +405,17 @@ function validateProfile(
     fail(pfx, `endWeek (${profile.endWeek}) must be >= startWeek (${profile.startWeek})`)
   }
 
-  // Legacy — SnapshotJsonValue discriminator
-  validateSnapshotJsonValue(profile.legacy, `${pfx}.legacy`)
+  // V3/V4 legacy payload — SnapshotJsonValue discriminator
+  if ('legacy' in profile) {
+    validateSnapshotJsonValue(profile.legacy, `${pfx}.legacy`)
+  }
+  // V5 explicit provenance (issue #405) — supported value or null
+  if ('provenance' in profile) {
+    const provenance = profile.provenance
+    if (provenance !== null && !VALID_PROVENANCE.includes(provenance as CapacityProfileProvenanceEnum)) {
+      fail(pfx, `unsupported provenance "${String(provenance)}"`)
+    }
+  }
 
   // Segments
   if (!Array.isArray(profile.segments)) {
@@ -461,9 +482,9 @@ function validateSegment(
  *
  * Does NOT mutate the input arrays.
  */
-export function sortSnapshotProfiles(
-  profiles: SnapshotCapacityProfile[],
-): SnapshotCapacityProfile[] {
+export function sortSnapshotProfiles<T extends SnapshotCapacityProfile | SnapshotCapacityProfileV5>(
+  profiles: readonly T[],
+): T[] {
   return [...profiles].sort((a, b) => {
     // 1. ownerKind
     const kindCmp = a.ownerKind.localeCompare(b.ownerKind)

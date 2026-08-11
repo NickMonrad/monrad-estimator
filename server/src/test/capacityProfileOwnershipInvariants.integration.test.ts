@@ -197,14 +197,14 @@ async function resetToPost361(): Promise<FreshIds & { roleProfileId: string; nrP
     data: {
       projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
       ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-      defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+      defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
     },
   }).then(p => p.id)
   const nrProfileId = await prisma.capacityProfile.create({
     data: {
       projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
       ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-      defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+      defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
     },
   }).then(p => p.id)
   deployFullMigrations()
@@ -267,14 +267,14 @@ describeIf('Pre-#361 ownership integrity tests', () => {
       data: {
         projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
         ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-        defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+        defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
       },
     }).then(p => p.id)
     nrProfileId = await prisma.capacityProfile.create({
       data: {
         projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
         ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-        defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+        defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
       },
     }).then(p => p.id)
   })
@@ -290,14 +290,14 @@ describeIf('Pre-#361 ownership integrity tests', () => {
       data: {
         projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
         ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-        defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+        defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
       },
     }).then(p => p.id)
     nrProfileId = await prisma.capacityProfile.create({
       data: {
         projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
         ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-        defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+        defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
       },
     }).then(p => p.id)
   }
@@ -321,7 +321,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -335,7 +335,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -357,7 +357,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -377,7 +377,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
           ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await prisma.capacitySegment.create({
@@ -406,12 +406,12 @@ describeIf('Pre-#361 ownership integrity tests', () => {
       expect(finalProfiles[0].segments[0].endWeek).toBe(4)
     })
 
-    it('does not treat SQL null and JSON null as equal', async () => {
+    it('different provenance values make duplicates conflicting (issue #405)', async () => {
       await prisma.capacityProfile.create({
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
           ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.JsonNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: 'LEGACY_MAPPER',
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -428,7 +428,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 50, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 50, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -441,7 +441,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -460,7 +460,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await prisma.capacitySegment.create({
@@ -483,7 +483,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'AVAILABILITY_WINDOW', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -503,7 +503,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: ids.nrId,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -516,7 +516,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -528,7 +528,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -547,7 +547,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: rt2.id, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -560,17 +560,17 @@ describeIf('Pre-#361 ownership integrity tests', () => {
           {
             projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: ids.nrId,
             ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-            defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+            defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
           },
           {
             projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
             ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-            defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+            defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
           },
           {
             projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
             ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-            defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+            defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
           },
         ],
       })
@@ -602,7 +602,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -621,14 +621,14 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
       expect(report.repairableGroups).toHaveLength(1)
       await prisma.capacityProfile.update({
         where: { id: roleProfileId },
-        data: { legacy: Prisma.JsonNull },
+        data: { provenance: 'LEGACY_MAPPER' },
       })
       await expect(repairIdenticalDuplicates(prisma, report)).rejects.toThrow(
         'no longer identical',
@@ -640,7 +640,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -661,7 +661,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -675,7 +675,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await expect(repairIdenticalDuplicates(prisma, report)).rejects.toThrow(
@@ -694,7 +694,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -842,7 +842,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const g1Seg1Orig = await prisma.capacitySegment.create({
@@ -875,7 +875,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
           ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
 
@@ -884,7 +884,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: rt2.id, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
 
@@ -908,7 +908,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         select: {
           id: true, projectId: true, resourceTypeId: true, namedResourceId: true,
           ownerKind: true, planningBasis: true, source: true,
-          defaultPercent: true, startWeek: true, endWeek: true, legacy: true,
+          defaultPercent: true, startWeek: true, endWeek: true, provenance: true,
         },
       })
       const beforeSegments = await prisma.capacitySegment.findMany({
@@ -928,7 +928,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         select: {
           id: true, projectId: true, resourceTypeId: true, namedResourceId: true,
           ownerKind: true, planningBasis: true, source: true,
-          defaultPercent: true, startWeek: true, endWeek: true, legacy: true,
+          defaultPercent: true, startWeek: true, endWeek: true, provenance: true,
         },
       })
       const afterSegments = await prisma.capacitySegment.findMany({
@@ -954,11 +954,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         expect(a.defaultPercent).toBe(b.defaultPercent)
         expect(a.startWeek).toBe(b.startWeek)
         expect(a.endWeek).toBe(b.endWeek)
-        const bLegacy = b.legacy instanceof Buffer
-          ? JSON.parse(b.legacy.toString()) : b.legacy
-        const aLegacy = a.legacy instanceof Buffer
-          ? JSON.parse(a.legacy.toString()) : a.legacy
-        expect(JSON.stringify(aLegacy)).toBe(JSON.stringify(bLegacy))
+        expect(a.provenance).toBe(b.provenance)
       }
 
       // PROVE: all segment rows unchanged (count + every field)
@@ -1018,7 +1014,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await prisma.capacitySegment.create({
@@ -1051,7 +1047,7 @@ describeIf('Pre-#361 ownership integrity tests', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       const report = await runOwnershipAudit(prisma)
@@ -1092,7 +1088,7 @@ describeIf('Migration and constraint enforcement', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: ids.nrId,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await expect(deployFullMigrations()).rejects.toThrow()
@@ -1104,7 +1100,7 @@ describeIf('Migration and constraint enforcement', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await expect(deployFullMigrations()).rejects.toThrow()
@@ -1116,7 +1112,7 @@ describeIf('Migration and constraint enforcement', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await expect(deployFullMigrations()).rejects.toThrow()
@@ -1128,14 +1124,14 @@ describeIf('Migration and constraint enforcement', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await prisma.capacityProfile.create({
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await expect(deployFullMigrations()).rejects.toThrow()
@@ -1147,14 +1143,14 @@ describeIf('Migration and constraint enforcement', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
           ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await prisma.capacityProfile.create({
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
           ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await expect(deployFullMigrations()).rejects.toThrow()
@@ -1173,7 +1169,7 @@ describeIf('Migration and constraint enforcement', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: rt2.id, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await expect(deployFullMigrations()).rejects.toThrow()
@@ -1195,7 +1191,7 @@ describeIf('Migration and constraint enforcement', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: nr2.id,
           ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await expect(deployFullMigrations()).rejects.toThrow()
@@ -1207,14 +1203,14 @@ describeIf('Migration and constraint enforcement', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await prisma.capacityProfile.create({
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
           ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       await expect(deployFullMigrations()).resolves.not.toThrow()
@@ -1235,7 +1231,7 @@ describeIf('Migration and constraint enforcement', () => {
           data: {
             projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: ids.nrId,
             ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-            defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+            defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
           },
         }),
       ).rejects.toThrow()
@@ -1247,7 +1243,7 @@ describeIf('Migration and constraint enforcement', () => {
           data: {
             projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
             ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-            defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+            defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
           },
         }),
       ).rejects.toThrow()
@@ -1259,7 +1255,7 @@ describeIf('Migration and constraint enforcement', () => {
           data: {
             projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
             ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-            defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+            defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
           },
         }),
       ).rejects.toThrow()
@@ -1279,7 +1275,7 @@ describeIf('Migration and constraint enforcement', () => {
         data: {
           projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId2,
           ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+          defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
         },
       })
       expect(profile.id).toBeTruthy()
@@ -1291,7 +1287,7 @@ describeIf('Migration and constraint enforcement', () => {
           data: {
             projectId: ids.projectId, resourceTypeId: null, namedResourceId: ids.nrId,
             ownerKind: 'NAMED_PERSON', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-            defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+            defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
           },
         }),
       ).rejects.toThrow()
@@ -1316,7 +1312,7 @@ describeIf('Migration and constraint enforcement', () => {
           data: {
             projectId: ids.projectId, resourceTypeId: ids.rtId, namedResourceId: null,
             ownerKind: 'ROLE', planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-            defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: Prisma.DbNull,
+            defaultPercent: 100, startWeek: 0, endWeek: 10, provenance: null,
           },
         }),
       ).rejects.toThrow()

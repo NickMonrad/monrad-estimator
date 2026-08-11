@@ -1,8 +1,9 @@
 /**
  * capacityProfileOwnershipAudit.ts — Ownership-integrity audit for CapacityProfile rows.
  *
- * Loads every profile with deterministic ordering, exact legacy null semantics,
- * ordered segments, and classifies all ownership/integrity issues.
+ * Loads every profile with deterministic ordering, ordered segments, and the
+ * explicit behavioural provenance (issue #405), and classifies all
+ * ownership/integrity issues.
  *
  * Physical owner identity:
  *   - ROLE           → resourceTypeId (unique)
@@ -15,12 +16,9 @@
  * This module produces deterministic structured output. It never writes.
  */
 
-import { Prisma, type PrismaClient } from '@prisma/client'
+import type { PrismaClient } from '@prisma/client'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-
-/** Snapshot of legacy null state from raw SQL query. */
-export type LegacyNullStatus = 'DB_NULL' | 'JSON_NULL' | 'VALUE'
 
 export interface AuditedSegment {
   startWeek: number
@@ -40,9 +38,8 @@ export interface AuditedProfile {
   defaultPercent: number | null
   startWeek: number | null
   endWeek: number | null
-  legacyStatus: LegacyNullStatus
-  /** The raw legacy value when legacyStatus === 'VALUE'; undefined for DB_NULL/JSON_NULL. */
-  legacyValue: unknown
+  /** Explicit behavioural provenance (issue #405); null when none applies. */
+  provenance: string | null
   createdAt: Date
   segments: AuditedSegment[]
 }
@@ -144,16 +141,10 @@ export function compareSegments(a: AuditedSegment, b: AuditedSegment): number {
 // ─── Exact state equality for duplicate comparison ──────────────────────────
 
 /**
- * Test whether two legacy status values are semantically equal.
- * DB_NULL is distinct from JSON_NULL, which is distinct from VALUE.
- */
-export function legacyStatusEqual(a: LegacyNullStatus, b: LegacyNullStatus): boolean {
-  return a === b
-}
-
-/**
  * Test whether two AuditedProfiles represent the same authoritative state.
- * Ignores id, segment IDs, createdAt, updatedAt.
+ * Ignores id, segment IDs, createdAt, updatedAt. The explicit provenance
+ * (issue #405) participates in semantic equality: two rows with the same
+ * authoritative shape but different provenance are semantically different.
  */
 export function profilesAreSemanticEqual(a: AuditedProfile, b: AuditedProfile): boolean {
   if (a.projectId !== b.projectId) return false
@@ -165,11 +156,7 @@ export function profilesAreSemanticEqual(a: AuditedProfile, b: AuditedProfile): 
   if (a.defaultPercent !== b.defaultPercent) return false
   if (a.startWeek !== b.startWeek) return false
   if (a.endWeek !== b.endWeek) return false
-  if (!legacyStatusEqual(a.legacyStatus, b.legacyStatus)) return false
-  // Deep-compare actual JSON values when both are VALUE
-  if (a.legacyStatus === 'VALUE' && b.legacyStatus === 'VALUE') {
-    if (!deepEqual(a.legacyValue, b.legacyValue)) return false
-  }
+  if (a.provenance !== b.provenance) return false
   // Compare ordered segments
   if (a.segments.length !== b.segments.length) return false
   const aSegs = [...a.segments].sort(compareSegments)
@@ -185,36 +172,6 @@ export function profilesAreSemanticEqual(a: AuditedProfile, b: AuditedProfile): 
   return true
 }
 /**
- * Deep compare two unknown values for equality. Handles plain objects, arrays,
- * primitives, null. Covers the JSON-serialisable shapes stored in legacy JSONB.
- */
-export function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  if (a == null || b == null) return a === b
-  if (typeof a !== typeof b) return false
-  if (typeof a === 'object' && typeof b === 'object') {
-    if (Array.isArray(a) && Array.isArray(b)) {
-      if (a.length !== b.length) return false
-      for (let i = 0; i < a.length; i++) {
-        if (!deepEqual(a[i], b[i])) return false
-      }
-      return true
-    }
-    if (Array.isArray(a) !== Array.isArray(b)) return false
-    const aKeys = Object.keys(a as Record<string, unknown>).sort()
-    const bKeys = Object.keys(b as Record<string, unknown>).sort()
-    if (!deepEqual(aKeys, bKeys)) return false
-    for (const key of aKeys) {
-      if (!deepEqual(
-        (a as Record<string, unknown>)[key],
-        (b as Record<string, unknown>)[key],
-      )) return false
-    }
-    return true
-  }
-  return a === b
-}
-/**
  * Select the deterministic survivor from a group of semantically identical profiles.
  * Rule: earliest createdAt wins; lexical profile id is the tie-breaker.
  */
@@ -226,57 +183,10 @@ export function selectSurvivor(profiles: AuditedProfile[]): AuditedProfile {
   })
   return sorted[0]
 }
-type ProfileIdOnly = { id: string }
-async function loadLegacyNullMap(
-  prisma: PrismaClient,
-  ormProfileIds: ProfileIdOnly[],
-): Promise<Map<string, LegacyNullStatus>> {
-  if (ormProfileIds.length === 0) return new Map()
-
-  const idList = ormProfileIds.map(p => p.id)
-  const rows = await prisma.$queryRaw<
-    Array<{ id: string; legacy_is_null: boolean; legacy_typeof: string | null }>
-  >(
-    Prisma.sql`
-      SELECT id, "legacy" IS NULL AS legacy_is_null, jsonb_typeof("legacy") AS legacy_typeof
-      FROM "CapacityProfile"
-      WHERE id IN (${Prisma.join(idList)})
-      ORDER BY id
-    `,
-  )
-
-  const map = new Map<string, LegacyNullStatus>()
-  const seenRows = new Set<string>()
-  for (const row of rows) {
-    if (seenRows.has(row.id)) {
-      throw new Error(`Ownership audit: duplicate row for capacity profile ${row.id} in raw SQL query`)
-    }
-    seenRows.add(row.id)
-    if (row.legacy_is_null) {
-      map.set(row.id, 'DB_NULL')
-    } else if (row.legacy_typeof === 'null') {
-      map.set(row.id, 'JSON_NULL')
-    } else {
-      map.set(row.id, 'VALUE')
-    }
-  }
-  // Validate exact 1:1 correspondence — fail closed when any ORM-loaded profile
-  // has no matching raw row (database consistency error or concurrent change).
-  for (const p of ormProfileIds) {
-    if (!map.has(p.id)) {
-      throw new Error(
-        `Ownership audit: raw SQL query returned no row for ORM-loaded capacity profile ${p.id}. ` +
-        'This indicates a database consistency error or concurrent schema change. Aborting audit.',
-      )
-    }
-  }
-  return map
-}
-
-// ─── Load profiles with exact null semantics ─────────────────────────────────
+// ─── Load profiles ──────────────────────────────────────────────────────────
 
 /**
- * Load all CapacityProfile rows with ordered segments and exact legacy null semantics.
+ * Load all CapacityProfile rows with ordered segments.
  */
 export async function loadAllProfiles(prisma: PrismaClient): Promise<AuditedProfile[]> {
   const rawProfiles = await prisma.capacityProfile.findMany({
@@ -292,35 +202,26 @@ export async function loadAllProfiles(prisma: PrismaClient): Promise<AuditedProf
     ],
   })
 
-  const legacyNullMap = await loadLegacyNullMap(
-    prisma,
-    rawProfiles.map(p => ({ id: p.id })),
-  )
-
-  return rawProfiles.map(p => {
-    const legacyStatus = legacyNullMap.get(p.id) ?? 'DB_NULL'
-    return {
-      id: p.id,
-      projectId: p.projectId,
-      resourceTypeId: p.resourceTypeId,
-      namedResourceId: p.namedResourceId,
-      ownerKind: p.ownerKind,
-      planningBasis: p.planningBasis,
-      source: p.source,
-      defaultPercent: p.defaultPercent,
-      startWeek: p.startWeek,
-      endWeek: p.endWeek,
-      legacyStatus,
-      legacyValue: legacyStatus === 'VALUE' ? p.legacy : undefined,
-      createdAt: p.createdAt,
-      segments: p.segments.map(s => ({
-        startWeek: s.startWeek,
-        endWeek: s.endWeek,
-        capacityPercent: s.capacityPercent,
-        source: s.source,
-      })),
-    }
-  })
+  return rawProfiles.map(p => ({
+    id: p.id,
+    projectId: p.projectId,
+    resourceTypeId: p.resourceTypeId,
+    namedResourceId: p.namedResourceId,
+    ownerKind: p.ownerKind,
+    planningBasis: p.planningBasis,
+    source: p.source,
+    defaultPercent: p.defaultPercent,
+    startWeek: p.startWeek,
+    endWeek: p.endWeek,
+    provenance: p.provenance,
+    createdAt: p.createdAt,
+    segments: p.segments.map(s => ({
+      startWeek: s.startWeek,
+      endWeek: s.endWeek,
+      capacityPercent: s.capacityPercent,
+      source: s.source,
+    })),
+  }))
 }
 
 // ─── Cross-project owner detection ───────────────────────────────────────────
@@ -704,7 +605,7 @@ export function formatAuditReport(report: AuditReport): string {
       lines.push(`  Projects: ${g.projectIds.join(', ')} | ${g.ownerNamespace}=${g.ownerId}`)
       lines.push(`  Profiles: ${g.profileIds.join(', ')}`)
       for (const p of g.profiles) {
-        lines.push(`    Profile ${p.id}: ownerKind=${p.ownerKind}, planningBasis=${p.planningBasis}, source=${p.source}, defaultPercent=${p.defaultPercent}, weeks=[${p.startWeek}-${p.endWeek}], legacy=${p.legacyStatus}`)
+        lines.push(`    Profile ${p.id}: ownerKind=${p.ownerKind}, planningBasis=${p.planningBasis}, source=${p.source}, defaultPercent=${p.defaultPercent}, weeks=[${p.startWeek}-${p.endWeek}], provenance=${p.provenance ?? 'null'}`)
         const segs = [...p.segments].sort(compareSegments).map(sg => `W${sg.startWeek}-W${sg.endWeek}@${sg.capacityPercent}%(${sg.source})`)
         if (segs.length > 0) {
           lines.push(`    Segments: ${segs.join(', ')}`)

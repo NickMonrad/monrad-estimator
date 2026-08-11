@@ -12,16 +12,13 @@ import {
   buildOwnerKey,
   compareProfiles,
   compareSegments,
-  legacyStatusEqual,
   profilesAreSemanticEqual,
   selectSurvivor,
   formatAuditReport,
   auditReportToJson,
-  deepEqual,
   classifyDuplicateGroup,
   type AuditedProfile,
   type AuditReport,
-  type LegacyNullStatus,
 } from '../lib/capacityProfileOwnershipAudit.js'
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
@@ -38,8 +35,7 @@ function makeProfile(overrides: Partial<AuditedProfile> = {}): AuditedProfile {
     defaultPercent: 100,
     startWeek: 0,
     endWeek: 10,
-    legacyStatus: 'DB_NULL' as LegacyNullStatus,
-    legacyValue: undefined,
+    provenance: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     segments: [],
     ...overrides,
@@ -66,19 +62,25 @@ describe('buildOwnerKey', () => {
   })
 })
 
-// ─── Legacy status equality ─────────────────────────────────────────────────
+// ─── Provenance equality (issue #405) ───────────────────────────────────────
 
-describe('legacyStatusEqual', () => {
-  it('equal statuses are equal', () => {
-    expect(legacyStatusEqual('DB_NULL', 'DB_NULL')).toBe(true)
-    expect(legacyStatusEqual('JSON_NULL', 'JSON_NULL')).toBe(true)
-    expect(legacyStatusEqual('VALUE', 'VALUE')).toBe(true)
+describe('profilesAreSemanticEqual — provenance', () => {
+  it('equal provenance is equal', () => {
+    expect(profilesAreSemanticEqual(
+      makeProfile({ provenance: 'ROLE_DEFAULT' }),
+      makeProfile({ id: 'p-2', provenance: 'ROLE_DEFAULT' }),
+    )).toBe(true)
   })
 
-  it('different statuses are not equal', () => {
-    expect(legacyStatusEqual('DB_NULL', 'JSON_NULL')).toBe(false)
-    expect(legacyStatusEqual('DB_NULL', 'VALUE')).toBe(false)
-    expect(legacyStatusEqual('JSON_NULL', 'VALUE')).toBe(false)
+  it('different provenance is not equal', () => {
+    expect(profilesAreSemanticEqual(
+      makeProfile({ provenance: null }),
+      makeProfile({ provenance: 'LEGACY_MAPPER' }),
+    )).toBe(false)
+    expect(profilesAreSemanticEqual(
+      makeProfile({ provenance: 'ROLE_DEFAULT' }),
+      makeProfile({ provenance: 'RESOURCE_OPTIMISER' }),
+    )).toBe(false)
   })
 })
 
@@ -170,10 +172,10 @@ describe('profilesAreSemanticEqual', () => {
     )).toBe(false)
   })
 
-  it('different legacyStatus is not equal', () => {
+  it('different provenance is not equal', () => {
     expect(profilesAreSemanticEqual(
-      makeProfile({ legacyStatus: 'DB_NULL' }),
-      makeProfile({ legacyStatus: 'JSON_NULL' }),
+      makeProfile({ provenance: null }),
+      makeProfile({ provenance: 'LEGACY_MAPPER' }),
     )).toBe(false)
   })
 
@@ -199,92 +201,23 @@ describe('profilesAreSemanticEqual', () => {
   })
 })
 
-describe('deepEqual', () => {
-  it('identical primitives are equal', () => {
-    expect(deepEqual(1, 1)).toBe(true)
-    expect(deepEqual('a', 'a')).toBe(true)
-    expect(deepEqual(true, true)).toBe(true)
-    expect(deepEqual(null, null)).toBe(true)
-  })
-
-  it('different primitives are not equal', () => {
-    expect(deepEqual(1, 2)).toBe(false)
-    expect(deepEqual('a', 'b')).toBe(false)
-    expect(deepEqual(true, false)).toBe(false)
-    expect(deepEqual(null, undefined)).toBe(false)
-  })
-
-  it('identical objects are equal', () => {
-    expect(deepEqual({ a: 1, b: { c: 2 } }, { a: 1, b: { c: 2 } })).toBe(true)
-    expect(deepEqual({ a: null }, { a: null })).toBe(true)
-  })
-
-  it('different objects are not equal', () => {
-    expect(deepEqual({ a: 1 }, { a: 2 })).toBe(false)
-    expect(deepEqual({ a: 1 }, { b: 1 })).toBe(false)
-    expect(deepEqual({ a: { b: 1 } }, { a: { b: 2 } })).toBe(false)
-  })
-
-  it('identical arrays are equal', () => {
-    expect(deepEqual([1, 2, 3], [1, 2, 3])).toBe(true)
-    expect(deepEqual([], [])).toBe(true)
-  })
-
-  it('different arrays are not equal', () => {
-    expect(deepEqual([1, 2], [1, 2, 3])).toBe(false)
-    expect(deepEqual([1, 2], [2, 1])).toBe(false)
-  })
-})
-
-describe('Profiles with legacy JSON VALUE differences', () => {
-  it('different JSON legacy values are conflicting duplicates', () => {
-    const a = makeProfile({
-      legacyStatus: 'VALUE' as LegacyNullStatus,
-      legacyValue: { allocationMode: 'TIMELINE', allocationPercent: 80 },
-    })
-    const b = makeProfile({
-      id: 'p-2',
-      legacyStatus: 'VALUE' as LegacyNullStatus,
-      legacyValue: { allocationMode: 'FULL_PROJECT', allocationPercent: 100 },
-    })
+describe('Profiles with provenance differences (issue #405)', () => {
+  it('different provenance values are conflicting duplicates', () => {
+    const a = makeProfile({ provenance: 'LEGACY_MAPPER' })
+    const b = makeProfile({ id: 'p-2', provenance: null })
     expect(profilesAreSemanticEqual(a, b)).toBe(false)
   })
 
-  it('equivalent JSON legacy values are repairable', () => {
-    const a = makeProfile({
-      legacyStatus: 'VALUE' as LegacyNullStatus,
-      legacyValue: { allocationMode: 'TIMELINE', allocationPercent: 80 },
-    })
-    const b = makeProfile({
-      id: 'p-2',
-      legacyStatus: 'VALUE' as LegacyNullStatus,
-      legacyValue: { allocationMode: 'TIMELINE', allocationPercent: 80 },
-    })
+  it('equal provenance values are repairable', () => {
+    const a = makeProfile({ provenance: 'ROLE_DEFAULT' })
+    const b = makeProfile({ id: 'p-2', provenance: 'ROLE_DEFAULT' })
     expect(profilesAreSemanticEqual(a, b)).toBe(true)
   })
 
-  it('equivalent deeply nested JSON is equal', () => {
-    const a = makeProfile({
-      legacyStatus: 'VALUE' as LegacyNullStatus,
-      legacyValue: { nested: { deep: { value: 42, items: [1, 2] } } },
-    })
-    const b = makeProfile({
-      id: 'p-2',
-      legacyStatus: 'VALUE' as LegacyNullStatus,
-      legacyValue: { nested: { deep: { value: 42, items: [1, 2] } } },
-    })
+  it('null provenance on both sides is equal', () => {
+    const a = makeProfile({ provenance: null })
+    const b = makeProfile({ id: 'p-2', provenance: null })
     expect(profilesAreSemanticEqual(a, b)).toBe(true)
-  })
-
-  it('SQL null and JSON null are not equal', () => {
-    const a = makeProfile({
-      legacyStatus: 'DB_NULL' as LegacyNullStatus,
-    })
-    const b = makeProfile({
-      id: 'p-2',
-      legacyStatus: 'JSON_NULL' as LegacyNullStatus,
-    })
-    expect(profilesAreSemanticEqual(a, b)).toBe(false)
   })
 })
 // ─── Survivor selection ─────────────────────────────────────────────────────

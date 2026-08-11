@@ -464,21 +464,20 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(nrResult.nrId).toBeTruthy()
 
       // 2b. SQL: the generated profile carries the shared generation
-      // provenance (DERIVED + legacy.writer=ROLE_DEFAULT) — #403.
-      const genCp = await db.query(`SELECT id, source, legacy FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
+      // provenance (DERIVED + ROLE_DEFAULT) — #403/#405.
+      const genCp = await db.query(`SELECT id, source, provenance FROM "CapacityProfile" WHERE "namedResourceId" = $1 AND "projectId" = $2`, [nrResult.nrId, projectId])
       expect(genCp.rows).toHaveLength(1)
       expect(genCp.rows[0].source).toBe('DERIVED')
-      expect(genCp.rows[0].legacy).toMatchObject({ version: 1, writer: 'ROLE_DEFAULT' })
+      expect(genCp.rows[0].provenance).toBe('ROLE_DEFAULT')
 
       // Convert the generated clone into a mapper-derived scalar profile
-      // (LEGACY_MAPPER_SCALAR) — the supported state the optimiser may ramp
-      // up. A profile-less named resource is an integrity violation since
-      // the runtime cutover (issue #418): missing profiles fail closed.
+      // (LEGACY_MAPPER) — the supported state the optimiser may ramp up. A
+      // profile-less named resource is an integrity violation since the
+      // runtime cutover (issue #418): missing profiles fail closed.
       await db.query(
         `UPDATE "CapacityProfile" SET "source" = 'FIXED', "planningBasis" = 'DEMAND_FOLLOWING', ` +
         `"defaultPercent" = 100, "startWeek" = NULL, "endWeek" = NULL, ` +
-        `"legacy" = '{"allocationMode":"EFFORT","allocationPercent":100,"allocationPct":100,` +
-        `"allocationStartWeek":null,"allocationEndWeek":null,"startWeek":null,"endWeek":null}'::jsonb ` +
+        `"provenance" = 'LEGACY_MAPPER'::"CapacityProfileProvenance" ` +
         `WHERE "id" = $1`,
         [genCp.rows[0].id],
       )
@@ -626,8 +625,8 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(postCp.startWeek).toBe(rampUpWeek)
       expect(postCp.endWeek).toBeNull()
       expect(postCp.defaultPercent).toBe(100)
-      // Resource Optimiser provenance marker in legacy
-      expect(postCp.legacy).toEqual({ version: 1, writer: 'RESOURCE_OPTIMISER' })
+      // Resource Optimiser provenance marker (issue #405)
+      expect(postCp.provenance).toBe('RESOURCE_OPTIMISER')
       const createdProfileId = postCp.id
       const postSegRows = await db.query(`SELECT * FROM "CapacitySegment" WHERE "capacityProfileId" = $1`, [postCp.id])
       expect(postSegRows.rows).toHaveLength(0)
@@ -756,7 +755,7 @@ test.describe('Starting Team Finder drawer — with resources', () => {
       expect(restRp.devNr!.endWeek).toBe(preRpNr.endWeek)
       expect(restRp.devNr!.actualAllocationStartWeek).toBe(preRpNr.actualAllocationStartWeek)
       expect(restRp.devNr!.actualAllocationEndWeek).toBe(preRpNr.actualAllocationEndWeek)
-      // Full profile metadata restored to legacy fallback (matching pre-apply state)
+      // Full profile metadata restored (matching pre-apply state)
       expect(restRp.devNr!.capacityProfile).toBeDefined()
       expect(restRp.devNr!.capacityProfile!.resolutionSource).toBe(preRpNr.capacityProfile!.resolutionSource)
       expect(restRp.devNr!.capacityProfile!.planningBasis).toBe(preRpNr.capacityProfile!.planningBasis)
