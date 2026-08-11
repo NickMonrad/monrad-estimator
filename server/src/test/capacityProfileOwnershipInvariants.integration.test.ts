@@ -232,6 +232,19 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!runIntegration || !prisma) return
+  // Remove every fixture this suite created (fresh unique emails per run) so
+  // later suites see a clean shared test database. Project deletion cascades
+  // to resource types, named resources, profiles and segments; the fixture
+  // never creates backlog/timeline/plan rows.
+  const fixtureUsers = await prisma.user.findMany({
+    where: { email: { startsWith: 'ownership-test-' } },
+    select: { id: true },
+  })
+  if (fixtureUsers.length > 0) {
+    const ownerIds = fixtureUsers.map(u => u.id)
+    await prisma.project.deleteMany({ where: { ownerId: { in: ownerIds } } })
+    await prisma.user.deleteMany({ where: { id: { in: ownerIds } } })
+  }
   await prisma.$disconnect()
 })
 

@@ -168,65 +168,21 @@ PRESERVING its capacity) is a separate, non-destructive workflow. #449 Reset
 Planning deliberately discards the current planning model. They are kept as distinct
 user actions and are never merged into one "detach/reset" operation.
 
-## Production maintenance classification (#404)
+## Production maintenance classification (#404) — completed
 
-`server/src/scripts/classifyNeedsReplan.ts` (library logic in
-`lib/classifyNeedsReplan.ts`):
+The one-time production classification command
+(`server/src/scripts/classifyNeedsReplan.ts` + `lib/classifyNeedsReplan.ts`)
+classified the 131 affected legacy projects as `NEEDS_REPLAN` under #404
+before the destructive legacy-column migration. It ran dry-run-by-default
+with a reviewed manifest and deterministic state fingerprint, applied
+atomically at SERIALIZABLE isolation, failed closed on any drift, and never
+inferred capacity.
 
-```
-npx tsx src/scripts/classifyNeedsReplan.ts --manifest manifest.json                          # DRY RUN (default)
-npx tsx src/scripts/classifyNeedsReplan.ts --manifest manifest.json --apply \
-     --expected-fingerprint <sha256>                                                          # apply
-```
-
-- Manifest shape: `{ "projectIds": ["<id>", ...] }` — an explicitly reviewed input,
-  never invented selection rules on production.
-- Dry-run by default; `--apply` required to write. Every dry-run prints
-  `stateFingerprint: <sha256>`.
-- **Dry-run snapshot consistency.** The classification entries/counts AND the
-  fingerprint are generated inside ONE Prisma transaction at repeatable-read
-  isolation, so the report and the reviewed fingerprint always describe the same
-  database snapshot. The dry run performs zero writes (the transaction is
-  nominally read-write only because Prisma has no read-only transaction option).
-  A concurrent change cannot produce a report whose entries describe one state
-  and whose fingerprint describes another.
-- **Reviewed-state fingerprint.** The fingerprint is a deterministic SHA-256 over
-  exactly the reset-relevant state of the manifest set: manifest project IDs and
-  existence, `planningState`, `weeklyDemandCache`, `CapacityProfile`
-  ownership/provenance fields, `CapacitySegment`s, `CapacityPlan`/period/entry
-  rows, `TimelineEntry`/`StoryTimelineEntry` rows, and the `NamedResource` identity
-  linkage that (with profile ownerKind + the legacy `isLegacyPlannerProfile` form)
-  determines which rows are proven planner artefacts. Ordering is canonicalised
-  (sorted IDs and rows, sorted JSON object keys), so unchanged state always yields
-  the same fingerprint. Unrelated backlog/business fields are never included.
-- **Apply contract.** `--apply` REQUIRES the reviewed fingerprint
-  (`--expected-fingerprint <sha256>` from a dry-run on unchanged state). The
-  fingerprint is recomputed INSIDE the apply transaction immediately before any
-  write; any mismatch aborts with zero writes and an explicit drift error telling
-  the operator to rerun the dry-run and review the new state. A project changed
-  after review can never be destructively reset on stale evidence.
-- **Atomic batch, Serializable isolation.** The complete manifest apply runs in
-  ONE Prisma transaction at SERIALIZABLE isolation: either every to-classify
-  project is reset (via the same reset transaction body the product uses) or none
-  is. A failure on any project rolls the whole batch back — no partial
-  classification. A serialization conflict (concurrent reset-relevant write
-  between review and apply) aborts with a typed error and is NEVER retried
-  automatically with the stale reviewed fingerprint — the operator reruns the
-  dry-run and reviews the new fingerprint.
-- **Idempotence.** Already-`NEEDS_REPLAN` projects are skipped, but only when that
-  state is part of the reviewed fingerprint; the drift check still refuses every
-  other unexpected change.
-- Each classified project goes through the same atomic reset transaction as the
-  product action: planning state discarded, business data preserved, marked
-  `NEEDS_REPLAN`.
-- Fails closed: malformed manifest, unknown arguments, missing or malformed
-  fingerprint for apply, fingerprint drift, or a manifest project that no longer
-  exists abort with nothing changed.
-- No capacity inference, profile reconstruction, percentage, window or owner-kind
-  decisions. Output is sanitized (operator-supplied IDs, the reviewed hash, and
-  aggregate counts only).
-- Production execution under #404 remains owned by the production agent; the
-  restore-tested backup retained by #404 is untouched by this command.
+**Completed in production under #404:** the classification applied exactly
+once (CURRENT 4 / NEEDS_REPLAN 130) and the migration then completed. The
+command, its tests and its wiring were removed in PR 3; the product
+Reset Planning / Replan workflow remains the supported user path for
+`NEEDS_REPLAN` projects.
 
 ## Readiness semantics
 

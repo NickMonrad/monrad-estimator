@@ -1,27 +1,34 @@
 # Legacy capacity-column runtime cutover (Issue #418 — PR 1)
 
+> **Migration completed (issue #418, PRs 2–3, executed under #404).** The
+> pre-V4 purge and the destructive legacy-column migration
+> (`20260810072212_drop_legacy_capacity_columns`) both completed in
+> production; V4 is the minimum supported/restorable snapshot format. The
+> temporary migration tooling (backfill/reconcile, purge, NEEDS_REPLAN
+> classification, and the PR-2 migration harness) was removed in PR 3. This
+> document is retained as the historical record of the PR-1 cutover.
+
 ## Sequencing correction after #404 Stage 4 evidence (2026-08-07)
 
 Production evidence from #404 showed that requiring a fresh V4 snapshot for every current project before the pre-V4 purge is not a useful safety gate: the useful database currently has no V4 snapshots and still contains known live CapacityProfile completeness/shape blockers. A V4 snapshot would preserve that current state but would not prove that the state is migration-ready.
 
 This correction supersedes the older sequencing text later in this document under **Fresh V4 safety snapshots**, **Revised #404 production sequence**, and the first bullet under **Sequencing and rollback** wherever those sections require V4 snapshot creation/restoration before the pre-V4 purge.
 
-The corrected production contract is:
+The corrected production contract was executed under #404:
 
-1. install the exact reviewed non-destructive release and verify service/database health;
-2. run `npm run capacity-profiles:purge-pre-v4-snapshots` in dry-run mode and require malformed/unsupported = 0;
-3. enter maintenance mode;
-4. create a fresh PostgreSQL backup of the useful database and successfully restore-test it before any purge write; retain this backup through migration acceptance;
-5. rerun the purge dry-run and require the pre-V4 counts to reconcile;
-6. run `npm run capacity-profiles:purge-pre-v4-snapshots -- --apply`;
-7. prove V1 = 0, V2 = 0, V3 = 0, malformed/unsupported = 0, and that current project/backlog/resource/profile/timeline state is unchanged apart from the deliberate `BacklogSnapshot` deletion;
-8. restart the application and rerun `npm run capacity-profiles:readiness`;
-9. remediate only the remaining current/live CapacityProfile blockers under the reviewed #421 process until readiness passes;
-10. create a fresh V4 snapshot on a representative useful project and prove supported V4 restore succeeds with CapacityProfile ownership/integrity still valid;
-11. rerun `npm run capacity-profiles:readiness` against the post-restore database state and require exit 0;
-12. authorize #418 PR 2 only after that final post-restore readiness pass, the restore-tested backup is retained, pre-V4 snapshot count is zero, and representative V4 create/restore has passed.
+1. the exact reviewed non-destructive release was installed and service/database health verified;
+2. `npm run capacity-profiles:purge-pre-v4-snapshots` (dry-run) required malformed/unsupported = 0;
+3. maintenance mode entered;
+4. a fresh PostgreSQL backup of the useful database was created and successfully restore-tested before any purge write, and retained through migration acceptance;
+5. the purge dry-run reconciled and `--apply` ran;
+6. V1 = V2 = V3 = 0, malformed/unsupported = 0, and current project/backlog/resource/profile/timeline state was unchanged apart from the deliberate `BacklogSnapshot` deletion;
+7. the application restarted and `npm run capacity-profiles:readiness` was rerun;
+8. the remaining current/live CapacityProfile blockers were handled through the #449 planning reset/replan workflow (131 projects classified `NEEDS_REPLAN`);
+9. a fresh V4 snapshot on a representative useful project proved supported V4 restore succeeds with CapacityProfile ownership/integrity still valid;
+10. readiness passed post-restore (exit 0);
+11. #418 PR 2 was authorized, merged, and executed in production via `prisma migrate deploy` (`20260810072212_drop_legacy_capacity_columns`, 11 columns dropped, 39/39/0 migrations), with initial post-migration validation passing.
 
-The restore-tested PostgreSQL backup is the authoritative pre-purge rollback mechanism because it captures the complete useful database, including the legacy snapshots being deliberately deleted. Do not build or run a bulk 134-project snapshot mechanism solely for this migration gate. The purge command remains unchanged and must never create snapshots itself.
+The restore-tested PostgreSQL backup is the authoritative pre-purge rollback mechanism because it captures the complete useful database, including the legacy snapshots being deliberately deleted. Rollback for the completed migration is backup restoration.
 
 ## Status after PR 1
 
@@ -32,13 +39,15 @@ The restore-tested PostgreSQL backup is the authoritative pre-purge rollback mec
   exports, Squad Planner, Resource Optimiser, named-resource lifecycle, count
   changes, clone, imports, snapshots) derives capacity exclusively from
   `CapacityProfile` / `CapacitySegment` state.
-- Candidate columns are now **frozen historical data**. They are only
-  referenced by:
-  1. historical snapshot input types and version translators (v1/v2/v3
-     parsing and restore translation);
-  2. explicit migration tooling (backfill/reconcile scripts and the
-     readiness command);
+- Candidate columns are now **frozen historical data** — and since PR 2 they
+  no longer exist in the database. They are only referenced by:
+  1. historical snapshot input types and version classifiers (v1/v2/v3
+     parsing for the V4-minimum policy);
+  2. the retained readiness command;
   3. tests that intentionally construct historical payloads.
+- The temporary migration tooling that consumed the columns (backfill,
+  sync/reconcile, pre-V4 purge, NEEDS_REPLAN classification) was removed in
+  PR 3.
 - A source guard (`server/src/test/legacyCapacityFieldSourceGuard.test.ts`)
   proves production code never reintroduces candidate-field access through
   Prisma `resourceType` / `namedResource` queries.
@@ -169,84 +178,43 @@ For each readiness run, the production machine records:
    capacity editing, Squad Planner, planner-to-manual transfer, Resource
    Optimiser, Commercial, exports and snapshot creation/restoration.
 
-## Pre-V4 snapshot purge (Issue #444)
+## Pre-V4 snapshot purge (Issue #444) — completed
 
-One standalone, explicitly-invoked maintenance command deliberately removes
-every stored pre-V4 (`v1`/`v2`/`v3`) `BacklogSnapshot` row before the
-destructive column migration. It operates ONLY on `BacklogSnapshot` rows.
+The standalone purge command (`npm run capacity-profiles:purge-pre-v4-snapshots`)
+deliberately removed every stored pre-V4 (`v1`/`v2`/`v3`) `BacklogSnapshot`
+row before the destructive column migration. It operated ONLY on
+`BacklogSnapshot` rows, classified payloads by schema version, applied
+delete-only under dry-run-then-apply control, and aborted on any
+malformed/unsupported payload.
 
-```bash
-npm run capacity-profiles:purge-pre-v4-snapshots            # DRY RUN (default)
-npm run capacity-profiles:purge-pre-v4-snapshots -- --apply  # destructive apply
-# raw: npx tsx server/src/scripts/purgePreV4Snapshots.ts [--apply]
-```
+**Completed in production under #404 (2026-08):** V1 = V2 = V3 = 0,
+malformed/unsupported = 0, V4 snapshots retained. The tool and its tests were
+removed in PR 3; V4 is the minimum supported/restorable snapshot format and
+the readiness command enforces that policy.
 
-### Behaviour and safety contract
+## Revised #404 production sequence — completed
 
-- **Never** runs during application startup or from an HTTP request; exposes
-  no API or UI; is not invoked by readiness or any other command.
-- Classifies every stored `BacklogSnapshot` payload by schema version only
-  (`parseSnapshotData` + the existing version guards — no second parser):
-  V1, V2, V3, V4, or malformed/unsupported.
-- **DRY RUN (default):** reports sanitized aggregate counts
-  (V1/V2/V3/V4/malformed) and performs **zero writes**.
-- **APPLY (`--apply`):** deletes **only** rows positively classified
-  V1/V2/V3. V4 snapshots can never be deleted by this command. If ANY
-  malformed/unsupported snapshot exists, the whole apply aborts before any
-  deletion with an aggregate reason and a non-zero exit — unexpected data is
-  never worked around.
-- Never touches project/backlog/resource/profile/timeline tables and never
-  synthesises snapshots.
-- Output is aggregate-only: no project names/IDs, snapshot IDs, payloads,
-  user data, database URLs or credentials.
-- The production maintenance window under #404 is responsible for preventing
-  concurrent writes; the tool builds no locking or orchestration.
-
-### Fresh V4 safety snapshots (operational gate, not part of the tool)
-
-Before any purge apply, #404 must, for every current useful project in
-migration scope:
-
-1. create/verify at least one valid V4 snapshot through the normal snapshot
-   flow (the purge command never creates snapshots);
-2. create a fresh PostgreSQL backup and restore-test it successfully — the
-   backup is the disaster-recovery record of the deleted legacy snapshot
-   rows and must be retained through migration acceptance.
-
-## Revised #404 production sequence (after this release is merged)
-
-1. install the exact reviewed release containing this policy/tooling;
-2. verify service/database health;
-3. run the purge command in **dry-run** mode and record the sanitized
-   aggregate pre-V4/V4 counts;
-4. create/verify fresh V4 snapshot(s) for every useful current project;
-5. create a fresh PostgreSQL backup;
-6. restore-test that backup successfully;
-7. enter maintenance mode;
-8. run the purge **apply**;
-9. verify: V1 = 0, V2 = 0, V3 = 0, V4 snapshots remain,
-   malformed/unsupported = 0;
-10. verify a representative V4 restore succeeds;
-11. rerun the readiness command;
-12. continue remediation **only** for remaining **live-state** blockers
-    (the historical snapshot sections of the remediation plan are
-    superseded by the purge);
-13. authorize #418 PR 2 **only** when readiness passes AND the fresh backup
-    has been restore-tested. The purge itself does NOT authorize PR 2.
+The revised production sequence (purge dry-run → backup + restore-test →
+purge apply → pre-V4 verification → readiness → live-state remediation via
+#449 → representative V4 restore → final readiness) was executed under #404.
+PR 2 merged (`20260810072212_drop_legacy_capacity_columns`) and the live
+migration completed: exactly the 11 approved columns dropped, 39/39/0
+migrations, readiness PASS before/after, ownership audit PASS, CURRENT 4 /
+NEEDS_REPLAN 130, representative V4 create/restore PASS. Initial
+post-migration validation passed and rollback was not required.
 
 ## Sequencing and rollback
 
-- **PR 2 (destructive Prisma migration) cannot start** until #404 records
-  that the readiness command passes against the useful database (with
-  pre-V4 snapshot count zero and representative V4 restore verified) AND a
-  fresh backup has been restore-tested successfully.
+- The destructive Prisma migration (PR 2) was authorized only after #404
+  recorded that the readiness command passed (pre-V4 snapshot count zero,
+  representative V4 restore verified) and a fresh backup had been
+  restore-tested successfully.
 - Representative V1/V2/V3 restoration is **no longer required** — the
   product accepts the loss of pre-V4 rollback history (issue #444).
 - **Rollback remains backup restoration.** There is no reverse migration that
   recreates empty legacy columns.
-- **PR 1 performs no production migration.** All database and migration
-  testing in PR 1 uses disposable PostgreSQL databases on the development
-  machine.
+- **PR 1 performed no production migration.** All database and migration
+  testing used disposable PostgreSQL databases on the development machine.
 
 ## Pre-PR-2 remediation (Issue #421)
 
@@ -260,11 +228,11 @@ including the deterministic transformation matrix, the decision manifest
 contract, and the ownership-invariant migration sequencing. Issue #444
 supersedes the historical v2 snapshot policy sections of that document:
 pre-V4 snapshots are deliberately purged (see above) instead of being
-remediated, rewritten or translated. PR 2 remains blocked until #404
-executes the revised procedure and records both gates.
+remediated, rewritten or translated. PR 2 executed under #404 once the
+revised procedure and both gates were recorded.
 
-> **Superseded by PR 2 (issue #418):** issue #421 was closed as not planned
-> and the #449 planning reset/replan workflow replaced preservation
-> remediation. PR 2 (`20260810072212_drop_legacy_capacity_columns`) removes
-> the remediation tooling together with the candidate columns; see
-> [`docs/domain/legacy-capacity-column-migration.md`](legacy-capacity-column-migration.md).
+> **Superseded (issue #418):** issue #421 was closed as not planned and the
+> #449 planning reset/replan workflow replaced preservation remediation. PR 2
+> (`20260810072212_drop_legacy_capacity_columns`) removed the remediation
+> tooling together with the candidate columns and completed in production;
+> PR 3 removed the remaining temporary migration tooling.
