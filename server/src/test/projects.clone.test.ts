@@ -5,11 +5,6 @@ import { Prisma } from '@prisma/client'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
 
-vi.mock('../lib/syncCapacityProfiles.js', () => ({
-  syncCapacityProfilesForProject: vi.fn(),
-}))
-import { syncCapacityProfilesForProject } from '../lib/syncCapacityProfiles.js'
-
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'
@@ -1341,21 +1336,6 @@ describe('POST /api/projects/:id/clone', () => {
 
       const res = await request(app).post('/api/projects/proj-1/clone').set('Authorization', authHeader)
       expect(res.status).toBe(500)
-    })
-
-    it('does not call syncCapacityProfilesForProject during clone', async () => {
-      vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
-        const tx = baseTx()
-        tx.project.findFirst
-          .mockResolvedValueOnce(mockSource as unknown as Record<string, unknown>)
-          .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
-        tx.capacityProfile.findMany.mockResolvedValue([])
-        tx.$queryRaw.mockResolvedValue([])
-        return (fn as (tx: unknown) => Promise<unknown>)(tx)
-      })
-
-      await request(app).post('/api/projects/proj-1/clone').set('Authorization', authHeader)
-      expect(syncCapacityProfilesForProject).not.toHaveBeenCalled()
     })
   })
 })

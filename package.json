@@ -22,21 +22,16 @@
     "screenshots": "npm run screenshots --workspace=e2e",
     "db:setup": "node scripts/db-setup.mjs",
     "test:integration:local": "node scripts/run-integration-local.mjs",
-    "test:migration-pr2": "node --test scripts/migration-drop-legacy-columns.test.mjs",
     "db:backup": "node scripts/db-backup.mjs",
     "test:backup": "node --test scripts/db-backup.test.mjs",
-    "test:local-db": "node --test scripts/local-postgres.test.mjs scripts/runner-lifecycle.test.mjs scripts/runner-monitoring.test.mjs scripts/aggregated-error.test.mjs scripts/db-setup.test.mjs scripts/purge-forwarding.test.mjs",
+    "test:local-db": "node --test scripts/local-postgres.test.mjs scripts/runner-lifecycle.test.mjs scripts/runner-monitoring.test.mjs scripts/aggregated-error.test.mjs scripts/db-setup.test.mjs",
     "test:pdf-cleanup": "node --import tsx --test server/src/test/pdf-cleanup.test.mjs",
     "test:pdf-smoke": "node --import tsx --test server/src/test/pdf-smoke.test.mjs",
     "test:install-chrome": "node --test scripts/install-chrome-lifecycle.test.mjs",
     "capacity-profiles:audit": "npm run capacity-profiles:audit --workspace=server",
     "capacity-profiles:audit:json": "npm run capacity-profiles:audit:json --workspace=server",
     "capacity-profiles:audit:repair": "npm run capacity-profiles:audit:repair --workspace=server",
-    "capacity-profiles:readiness": "npm run capacity-profiles:readiness --workspace=server",
-    "capacity-profiles:purge-pre-v4-snapshots": "npm run capacity-profiles:purge-pre-v4-snapshots --workspace=server --",
-    "capacity-profiles:classify-needs-replan": "npm run capacity-profiles:classify-needs-replan --workspace=server --",
-    "capacity-profiles:backfill": "npm run capacity-profiles:backfill --workspace=server",
-    "capacity-profiles:reconcile": "npm run capacity-profiles:reconcile --workspace=server"
+    "capacity-profiles:readiness": "npm run capacity-profiles:readiness --workspace=server"
   },
   "devDependencies": {
     "concurrently": "^10.0.3"

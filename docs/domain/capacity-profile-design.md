@@ -338,44 +338,19 @@ Billable days: based on reserved/planned capacity
 - Do we need a legacy resource-profile export during transition?
 - Should Quick schedule be renamed to Update Timeline in the first implementation slice?
 
-## Backfill and Reconciliation
+## Backfill and Reconciliation — completed
 
-### Running the backfill
+The backfill/reconcile tooling
+(`npm run capacity-profiles:backfill` / `capacity-profiles:reconcile`)
+derived `CapacityProfile`/`CapacitySegment` rows from the former
+`ResourceType`/`NamedResource` legacy allocation fields. It was used during
+the profile-first transition.
 
-The capacity-profile backfill is an idempotent operation that derives CapacityProfile and CapacitySegment records from existing ResourceType, NamedResource, and CapacityPlan data. It is safe to run multiple times.
-
-**Run backfill + reconcile (writes data):**
-```bash
-npm run capacity-profiles:backfill --workspace=server
-```
-
-**Run reconcile only (read-only, no writes):**
-```bash
-npm run capacity-profiles:reconcile --workspace=server
-```
-
-**What success/failure means:**
-- **Success** (exit code 0): All persisted CapacityProfile/CapacitySegment rows match the mapper-derived profiles.
-- **Failure** (exit code 1): Mismatches detected between expected and actual profiles. The output includes a detailed mismatch report.
-
-### Reconciliation report
-
-The reconciliation helper compares:
-- Legacy mapper-derived profiles (using `mapProjectToCapacityProfiles`)
-- Persisted CapacityProfile and CapacitySegment rows
-
-It produces a structured report with:
-- `projectsChecked`: number of projects examined
-- `expectedProfiles`: profiles derived from legacy fields
-- `actualProfiles`: profiles found in the database
-- `matchedProfiles`: profiles that matched
-- `mismatches`: array of detailed mismatch objects
-
-**Mismatch types:**
-- `missingPersistedProfile`: Expected profile not found in database
-- `extraPersistedProfile`: Database profile not expected by mapper
-- `profileFieldMismatch`: Field value differs (ownerKind, planningBasis, source, defaultPercent, startWeek, endWeek)
-- `segmentMismatch`: Segment count or field values differ
+**Removed in issue #418 PR 3:** the legacy columns no longer exist and the
+migration completed in production; profiles are the sole capacity source.
+Backfill/reconcile commands, their tests and the legacy→profile mapper
+exports were retired. Generally useful profile-integrity auditing remains in
+`npm run capacity-profiles:audit`.
 
 ### Important notes
 
@@ -390,13 +365,6 @@ It produces a structured report with:
   availability and project legacy fields for compatibility. PR #356 extended persisted
   profile adoption to Resource Profile and exports. PR #359 applies the same boundary to
   Squad Planner.
-- **Reconciliation remains a backfill/diagnostic report**, not a lossy read gate.
-  Structural validity (IDs, owner shape, enums, segments, and references) is the
-  safety check for the persisted endpoint.
-- **No schema or migration changes** are required for backfill/reconciliation.
-- The backfill is idempotent — running it multiple times is safe.
-- The `--dry-run` flag currently implements reconcile-only mode. True dry-run (showing what
-  would be written without writing) is deferred for a future PR if needed.
 
 ## Persisted-read endpoint
 
@@ -447,62 +415,28 @@ an endpoint read gate.
 - `legacy` set to all-null (legacy fields are on ResourceType/NamedResource, not copied)
 - Stable sort order: role profiles first, then named/person/planned by owner id
 
-## Runtime Sync Adoption
+## Runtime Sync Adoption — completed
 
-`syncCapacityProfilesForProject` in `server/src/lib/syncCapacityProfiles.ts` keeps the additive `CapacityProfile`/`CapacitySegment` read model in sync when legacy planning fields change.
+The temporary `syncCapacityProfilesForProject` helper
+(`server/src/lib/syncCapacityProfiles.ts`) kept the persisted profile read
+model in sync when legacy planning fields changed, and the backfill runner
+delegated per-project work to it. The helper was called inside the
+resource-type/named-resource write transactions and squad-plan apply.
 
-### Behaviour
+**Removed in issue #418 PR 3:** the legacy columns and the temporary
+sync/backfill/reconcile tooling are gone; write routes persist
+`CapacityProfile`/`CapacitySegment` rows directly (profile-first). Squad
+Planner apply still writes plans, role/named-resource projections, capacity
+profiles, timeline entries and `weeklyDemandCache` in one transaction, with
+the pre-apply v3 snapshot created before that transaction for undo.
+Planned resources (`ownerKind: PLANNED_RESOURCE`) keep stable
+`namedResourceId` values from persisted `NamedResource` rows.
 
-1. Fetch the project with resource types, named resources, and active capacity plan (same includes as the read endpoint).
-2. Derive expected DTOs via `mapProjectToCapacityProfiles`.
-3. Upsert `CapacityProfile` rows to match expected.
-4. Replace segments for each profile (delete all, recreate).
-5. Delete persisted profiles that no longer correspond to an expected owner key.
-6. Reconcile after sync; throw if mismatches remain.
-
-### Integration
-
-The helper is called inside existing write transactions:
-- `PUT /api/projects/:projectId/resource-types/:id` — resource type allocation mode/percent/weeks
-- `PATCH /api/projects/:projectId/resource-types/:id` — resource type count change (named-resource creation/deletion)
-- `DELETE /api/projects/:projectId/resource-types/:id` — resource type removal
-- `POST /api/projects/:projectId/resource-types/:rtId/named-resources` — named resource creation
-- `PUT /api/projects/:projectId/resource-types/:rtId/named-resources/:id` — named resource update
-- `PATCH /api/projects/:projectId/resource-types/:rtId/named-resources/:id` — named resource allocation update
-- `DELETE /api/projects/:projectId/resource-types/:rtId/named-resources/:id` — named resource deletion (after RT count update)
-- `POST /api/projects` — project creation
-- `POST /api/projects/:projectId/squad-plan/apply` — squad plan apply (transactional, inside same transaction as RT/NR writes)
-
-### Write transactionality
-
-- Routes that use `prisma.$transaction` keep profile writes in the same transaction,
-  so profile failure rolls back the source update.
-- Named-resource DELETE ensures profile reconciliation runs after the resource-type
-  count is updated, so persisted ownership reflects the final count.
-- Owner-key normalization uses `prismaOwnerKindToDtoKind` to map Prisma enum values
-  (`NAMED_PERSON`, `PLANNED_RESOURCE`) to DTO format (`namedPerson`, `plannedResource`),
-  ensuring stable persisted IDs across syncs.
-- Squad-plan apply writes the plan, role/named-resource projections, capacity profiles,
-  timeline entries, and `weeklyDemandCache` in one transaction. The pre-apply v3
-  snapshot is created before that transaction and survives a failed apply for undo.
-
-### Backfill refactor
-
-`backfillCapacityProfiles.ts` has been refactored to delegate per-project work to `syncCapacityProfilesForProject`, sharing the same helper used by runtime writes.
-
-### Planned resource handling
-
-Planned resources (`ownerKind: PLANNED_RESOURCE`) have stable `namedResourceId` values from persisted `NamedResource` rows, so they persist without ambiguity.
-
-### Authority and remaining work
-
-`CapacityProfile`/`CapacitySegment` are the persisted authority for availability when
-structurally valid. `ResourceType`/`NamedResource` allocation fields are compatibility
-projections; `CapacityPlan` is the Squad Planner generation/history record. Timeline
-owns assignment reality and weekly demand; Commercial owns billing.
-
-- True dry-run support in the backfill runner (showing what would be written) remains
-  deferred for a future PR if needed.
+`CapacityProfile`/`CapacitySegment` are the persisted authority for
+availability when structurally valid. `ResourceType`/`NamedResource`
+allocation fields are compatibility projections; `CapacityPlan` is the Squad
+Planner generation/history record. Timeline owns assignment reality and
+weekly demand; Commercial owns billing.
 
 ### Integration test coverage
 
@@ -515,7 +449,7 @@ Runtime persisted DTO integration tests cover:
 - Structural fallback — invalid persisted shape falls back safely without a 500
 - Repair cycle — a write after corruption restores the persisted path
 
-Tests use the real `syncCapacityProfilesForProject` helper (not mocked). See `server/src/test/capacityProfilePersistedDtoIntegration.test.ts` (58 tests).
+Tests use the real persisted-profile write paths (not mocked). See `server/src/test/capacityProfilePersistedDtoIntegration.test.ts`.
 
 ## Resource Profile and Export Adoption
 

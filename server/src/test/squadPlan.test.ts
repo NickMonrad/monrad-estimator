@@ -42,17 +42,6 @@ import type { SchedulerResourceType } from '../lib/scheduler.js'
 import { getWeeklyCapacity } from '../lib/scheduler.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
 
-
-
-vi.mock('../lib/syncCapacityProfiles.js', () => ({
-  syncCapacityProfilesForProject: vi.fn().mockResolvedValue({
-    profilesCreated: 0,
-    profilesUpdated: 0,
-    profilesDeleted: 0,
-    segmentsCreated: 0,
-    segmentsDeleted: 0,
-  }),
-}))
 process.env.JWT_SECRET = 'test-secret'
 
 const userId = 'user-1'

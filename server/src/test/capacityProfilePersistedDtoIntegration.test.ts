@@ -6,9 +6,8 @@
  *   vi.hoisted → createStore() + makeStoreClient(storeRef)
  *   vi.mock('../lib/prisma.js', ...)  → prisma backed by storeRef.current
  *
- * Write routes, syncCapacityProfilesForProject, and GET /capacity-profiles
- * all share the same mutable store object. The test fails if sync stops
- * writing CapacityProfile/CapacitySegment rows.
+ * Write routes and GET /capacity-profiles
+ * all share the same mutable store object.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
@@ -588,11 +587,6 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
 })
 
 // ─── vi.mock: override global mocks ─────────────────────────────────────────
-
-// Use real sync helper
-vi.mock('../lib/syncCapacityProfiles.js', async (importOriginal: () => Promise<any>) => {
-  return await importOriginal()
-})
 
 // Mock snapshots to avoid real DB calls
 vi.mock('../routes/snapshots.js', async (importOriginal: () => Promise<any>) => {
