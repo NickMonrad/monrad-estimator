@@ -112,6 +112,7 @@ async function seedPre405Fixtures(): Promise<void> {
   await prisma.$executeRawUnsafe(
     `INSERT INTO "NamedResource" (id, name, "resourceTypeId", "updatedAt") VALUES
      ('nr405a','A','rt405', now()), ('nr405b','B','rt405', now()),
+     ('nr405b2','B2','rt405', now()),
      ('nr405c','C','rt405b', now()), ('nr405d','D','rt405b', now()),
      ('nr405e','E','rt405b', now()), ('nr405f','F','rt405b', now()),
      ('nr405g','G','rt405b', now()), ('nr405h','H','rt405b', now()),
@@ -136,6 +137,11 @@ async function seedPre405Fixtures(): Promise<void> {
   await insertProfile('cp-opt', 'NAMED_PERSON', null, 'nr405b',
     'AVAILABILITY_WINDOW', 'DERIVED', 60, 2, 10,
     '{"version":1,"writer":"RESOURCE_OPTIMISER","allocationMode":"TIMELINE"}')
+  // 2b. Optimiser-shaped but version is the JSON STRING "1" — the runtime
+  // predicate requires the JSON number 1, so this must NOT be promoted.
+  await insertProfile('cp-opt-string-version', 'NAMED_PERSON', null, 'nr405b2',
+    'AVAILABILITY_WINDOW', 'DERIVED', 60, 2, 10,
+    '{"version":"1","writer":"RESOURCE_OPTIMISER","allocationMode":"TIMELINE"}')
   // 3. Transferred planned resource
   await insertProfile('cp-transfer', 'PLANNED_RESOURCE', null, 'nr405c',
     'CAPACITY_PROFILE', 'MANUAL', 100, 0, 10,
@@ -264,6 +270,7 @@ describeIf('capacity-profile provenance migration (#405)', () => {
     const byId = new Map(rows.map(r => [r.id, r.provenance]))
     expect(byId.get('cp-role-default')).toBe('ROLE_DEFAULT')
     expect(byId.get('cp-opt')).toBe('RESOURCE_OPTIMISER')
+    expect(byId.get('cp-opt-string-version')).toBeNull()
     expect(byId.get('cp-transfer')).toBe('TRANSFERRED_FROM_SQUAD_PLANNER')
     expect(byId.get('cp-mapper-role')).toBe('LEGACY_MAPPER')
     expect(byId.get('cp-mapper-named')).toBe('LEGACY_MAPPER')

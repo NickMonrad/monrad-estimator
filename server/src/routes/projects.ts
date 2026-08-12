@@ -166,13 +166,18 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
       rtIdMap.set(rt.id, newRt.id)
 
       // Copy named resources (identity and independent metadata only;
-      // capacity state is cloned losslessly via capacity profiles below)
+      // capacity state is cloned losslessly via capacity profiles below).
+      // createdAt is preserved so scheduler/resource-profile ordering (which
+      // sorts named resources by createdAt) matches the source exactly —
+      // otherwise a transaction-stamped identical createdAt defers the order
+      // to a random id tiebreak and assignment parity breaks.
       for (const nr of rt.namedResources) {
         const newNr = await tx.namedResource.create({
           data: {
             name: nr.name,
             pricingModel: nr.pricingModel,
             resourceTypeId: newRt.id,
+            createdAt: nr.createdAt,
           },
         })
         nrIdMap.set(nr.id, newNr.id)

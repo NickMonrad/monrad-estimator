@@ -121,6 +121,16 @@ export function isMapperSourceBasisPair(source: string | null | undefined, plann
 }
 
 /**
+ * The EFFORT mapper mode's exact (source, planningBasis) pair. Post-#405 the
+ * mode lives only in history, so FIXED/DEMAND_FOLLOWING is the authoritative
+ * shape evidence of an EFFORT-derived profile (the optimiser ramps EFFORT
+ * profiles at a fixed 100% regardless of the persisted percent).
+ */
+export function isEffortMapperSourceBasisPair(source: string | null | undefined, planningBasis: string | null | undefined): boolean {
+  return source === 'FIXED' && planningBasis === 'DEMAND_FOLLOWING'
+}
+
+/**
  * Whether a persisted profile satisfies the strict mapper-derived contract
  * after #405: explicit LEGACY_MAPPER provenance plus the authoritative
  * mapper shape (owner kind, FKs, mapper pair, valid scalar window).

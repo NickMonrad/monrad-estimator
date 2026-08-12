@@ -532,11 +532,23 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     rtGovId = await createResourceType(srcProjectId, crypto.randomUUID(), 'Governance',
       { category: 'GOVERNANCE', count: 1 })
 
-    // Named resources under Engineering (2 — one of each billing model)
+    // Named resources under Engineering (2 — one of each billing model).
+    // createdAt is pinned to distinct timestamps: the clone preserves them and
+    // the scheduler/resource-profile order (createdAt asc) is deterministic —
+    // otherwise a created-at tie defers order to a random id tiebreak and the
+    // A16/A17 assignment/CSV parity becomes order-flaky.
     nrJohnId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'John Developer',
       { pricingModel: 'ACTUAL_DAYS' })
+    await prisma.namedResource.update({
+      where: { id: nrJohnId },
+      data: { createdAt: new Date('2026-01-01T00:00:00.000Z') },
+    })
     nrJaneId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'Jane Architect',
       { pricingModel: 'PRO_RATA' })
+    await prisma.namedResource.update({
+      where: { id: nrJaneId },
+      data: { createdAt: new Date('2026-01-01T00:00:01.000Z') },
+    })
 
     // ── Capacity profiles (11) ───────────────────────────────────────────
     // ROLE — scalar shape (single segment, same window). Segmented with

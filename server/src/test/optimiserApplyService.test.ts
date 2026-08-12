@@ -197,6 +197,28 @@ describe('buildOptimiserRampUpProfileWrite', () => {
     })
   })
 
+  it('ramps EFFORT-mode mapper profiles at a fixed 100% even when the persisted percent differs', () => {
+    // Issue #405: a migrated strict mapper EFFORT profile may persist a
+    // non-100 defaultPercent (the legacy mapper accepted any finite percent).
+    // The old runtime mapped allocationMode==='EFFORT' to 100 regardless, and
+    // the EFFORT pair (FIXED/DEMAND_FOLLOWING) is its authoritative shape
+    // evidence — the ramp-up write must keep the 100% behaviour.
+    const persisted = profile({
+      source: 'FIXED',
+      planningBasis: 'DEMAND_FOLLOWING',
+      provenance: 'LEGACY_MAPPER',
+      defaultPercent: 60,
+      startWeek: null,
+      endWeek: null,
+    })
+    const classification = classifyOptimiserRampUpOwner([persisted], namedResource())
+    if (classification.outcome !== 'LEGACY_MAPPER_SCALAR') throw new Error('Expected eligible owner')
+
+    const write = buildOptimiserRampUpProfileWrite(classification, namedResource(), persisted, 4)
+
+    expect(write.defaultPercent).toBe(100)
+  })
+
   it.each([
     ['TIMELINE', 'AVAILABILITY_WINDOW', 'AVAILABILITY_WINDOW'],
     ['FULL_PROJECT', 'FIXED', 'WHOLE_PROJECT_ALLOCATION'],

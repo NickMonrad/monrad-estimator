@@ -71,7 +71,10 @@ WHERE "ownerKind" = 'NAMED_PERSON'
   AND ("startWeek" IS NULL OR "endWeek" IS NULL OR "startWeek" <= "endWeek")
   AND jsonb_typeof("legacy") = 'object'
   AND "legacy"->>'writer' = 'RESOURCE_OPTIMISER'
-  AND "legacy"->>'version' = '1';
+  -- version must be the JSON number 1 (jsonb equality: number 1 != string "1"),
+  -- matching the shared runtime/V4 translator's strict numeric version===1.
+  AND jsonb_typeof("legacy"->'version') = 'number'
+  AND "legacy"->'version' = '1'::jsonb;
 
 -- ── Backfill TRANSFERRED_FROM_SQUAD_PLANNER (transferred planned resource) ──
 -- Only PLANNED_RESOURCE profiles whose current source/basis/owner shape

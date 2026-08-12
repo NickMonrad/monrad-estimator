@@ -1,6 +1,7 @@
 import { resolveSchedulerCapacity } from './schedulerCapacityResolver.js'
 import {
   CapacityProfileProvenance,
+  isEffortMapperSourceBasisPair,
   isLegacyMapperProfile,
   isOptimiserDerivedProfile as isSharedOptimiserDerivedProfile,
 } from './capacityProfileProvenance.js'
@@ -248,11 +249,17 @@ function effectiveCurrentStart(
 function effectiveScalarPercent(
   profile: PersistedOptimiserProfile | undefined,
 ): number {
-  // Issue #405: the legacy allocationMode EFFORT special case is gone — the
-  // persisted defaultPercent is the single authoritative percent. Strict
-  // mapper EFFORT profiles persisted defaultPercent 100 (allocationPercent
-  // ?? allocationPct ?? 100), so this is equivalent for every recognised
-  // LEGACY_MAPPER row.
+  // Issue #405: the legacy allocationMode==='EFFORT' special case survives
+  // via its authoritative shape evidence. A strict mapper EFFORT profile
+  // (FIXED/DEMAND_FOLLOWING pair) always ramps at a fixed 100% — even when
+  // the migrated row persisted a different defaultPercent — because the
+  // legacy mapper treated EFFORT as full-effort capacity.
+  if (
+    profile?.provenance === CapacityProfileProvenance.LEGACY_MAPPER
+    && isEffortMapperSourceBasisPair(profile.source, profile.planningBasis)
+  ) {
+    return 100
+  }
   return profile?.defaultPercent ?? 100
 }
 
