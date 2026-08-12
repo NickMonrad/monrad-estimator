@@ -63,11 +63,13 @@ WHERE "ownerKind" = 'NAMED_PERSON'
   AND "source" = 'DERIVED'
   AND "planningBasis" = 'AVAILABILITY_WINDOW'
   -- hasValidAvailabilityWindow: defaultPercent finite, window edges
-  -- null-or-finite, non-inverted when both present. `x = x` is false for
-  -- NaN and NULL, rejecting both exactly like Number.isFinite.
-  AND "defaultPercent" = "defaultPercent"
-  AND ("startWeek" IS NULL OR "startWeek" = "startWeek")
-  AND ("endWeek" IS NULL OR "endWeek" = "endWeek")
+  -- null-or-finite, non-inverted when both present. PostgreSQL treats NaN
+  -- as equal to itself (unlike IEEE equality), so `x = x` passes for NaN
+  -- and ±Infinity; exclude the three non-finite float8 sentinels explicitly
+  -- to mirror Number.isFinite exactly.
+  AND "defaultPercent" NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)
+  AND ("startWeek" IS NULL OR "startWeek" NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8))
+  AND ("endWeek" IS NULL OR "endWeek" NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8))
   AND ("startWeek" IS NULL OR "endWeek" IS NULL OR "startWeek" <= "endWeek")
   AND jsonb_typeof("legacy") = 'object'
   AND "legacy"->>'writer' = 'RESOURCE_OPTIMISER'

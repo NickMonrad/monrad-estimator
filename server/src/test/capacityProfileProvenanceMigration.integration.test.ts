@@ -112,7 +112,7 @@ async function seedPre405Fixtures(): Promise<void> {
   await prisma.$executeRawUnsafe(
     `INSERT INTO "NamedResource" (id, name, "resourceTypeId", "updatedAt") VALUES
      ('nr405a','A','rt405', now()), ('nr405b','B','rt405', now()),
-     ('nr405b2','B2','rt405', now()),
+     ('nr405b2','B2','rt405', now()), ('nr405b3','B3','rt405', now()),
      ('nr405c','C','rt405b', now()), ('nr405d','D','rt405b', now()),
      ('nr405e','E','rt405b', now()), ('nr405f','F','rt405b', now()),
      ('nr405g','G','rt405b', now()), ('nr405h','H','rt405b', now()),
@@ -142,6 +142,17 @@ async function seedPre405Fixtures(): Promise<void> {
   await insertProfile('cp-opt-string-version', 'NAMED_PERSON', null, 'nr405b2',
     'AVAILABILITY_WINDOW', 'DERIVED', 60, 2, 10,
     '{"version":"1","writer":"RESOURCE_OPTIMISER","allocationMode":"TIMELINE"}')
+  // 2c. Optimiser-shaped but defaultPercent is the PostgreSQL NaN double —
+  // hasValidAvailabilityWindow uses Number.isFinite, which rejects NaN, so
+  // this must NOT be promoted (PostgreSQL's x = x self-equality would pass).
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO "CapacityProfile"
+       (id, "projectId", "resourceTypeId", "namedResourceId", "ownerKind",
+        "planningBasis", source, "defaultPercent", "startWeek", "endWeek", legacy, "updatedAt")
+     VALUES ('cp-opt-nan','p405',NULL,'nr405b3','NAMED_PERSON',
+        'AVAILABILITY_WINDOW','DERIVED','NaN'::float8,2,10,
+        '{"version":1,"writer":"RESOURCE_OPTIMISER","allocationMode":"TIMELINE"}'::jsonb, now())`,
+  )
   // 3. Transferred planned resource
   await insertProfile('cp-transfer', 'PLANNED_RESOURCE', null, 'nr405c',
     'CAPACITY_PROFILE', 'MANUAL', 100, 0, 10,
@@ -271,6 +282,7 @@ describeIf('capacity-profile provenance migration (#405)', () => {
     expect(byId.get('cp-role-default')).toBe('ROLE_DEFAULT')
     expect(byId.get('cp-opt')).toBe('RESOURCE_OPTIMISER')
     expect(byId.get('cp-opt-string-version')).toBeNull()
+    expect(byId.get('cp-opt-nan')).toBeNull()
     expect(byId.get('cp-transfer')).toBe('TRANSFERRED_FROM_SQUAD_PLANNER')
     expect(byId.get('cp-mapper-role')).toBe('LEGACY_MAPPER')
     expect(byId.get('cp-mapper-named')).toBe('LEGACY_MAPPER')
