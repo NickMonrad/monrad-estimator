@@ -30,6 +30,9 @@ import {
 
   type SnapshotV2,
   type SnapshotV3,
+  type SnapshotV4,
+  type SnapshotV5,
+  type SnapshotCapacityProfileV5,
 } from '../lib/projectSnapshotTypes.js'
 import {
   validateSnapshotV3,
@@ -335,6 +338,141 @@ describe('validateSnapshotV3', () => {
     const snap = makeBaseV3()
     snap.resourceTypes.push(null as never)
     expect(() => validateSnapshotV3(snap)).toThrow(SnapshotValidationError)
+  })
+
+  // ── Version-aware capacity-profile discriminator (issue #405) ──────────
+  // V3/V4 profiles carry the legacy SnapshotJsonValue; V5 profiles carry
+  // explicit provenance. Missing or cross-version shapes fail closed.
+
+  it('rejects a V4 profile without legacy', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV4
+    snap.schemaVersion = 4
+    delete (snap.capacityProfiles[0] as Record<string, unknown>).legacy
+    expect(() => validateSnapshotV3(snap)).toThrow(/requires legacy/)
+  })
+
+  it('rejects a V4 profile carrying only V5 provenance shape', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV4
+    snap.schemaVersion = 4
+    const profile = snap.capacityProfiles[0] as Record<string, unknown>
+    delete profile.legacy
+    profile.provenance = 'LEGACY_MAPPER'
+    expect(() => validateSnapshotV3(snap)).toThrow(SnapshotValidationError)
+  })
+
+  it('rejects a V5 profile without provenance', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV5
+    snap.schemaVersion = 5
+    snap.capacityProfiles = [
+      {
+        id: 'cp-1',
+        ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+        segments: [],
+      } as unknown as SnapshotCapacityProfileV5,
+    ]
+    expect(() => validateSnapshotV3(snap)).toThrow(/requires explicit provenance/)
+  })
+
+  it('rejects a V5 profile carrying legacy-shaped data instead of provenance', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV5
+    snap.schemaVersion = 5
+    snap.capacityProfiles = [
+      {
+        id: 'cp-1',
+        ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+        legacy: { kind: 'DB_NULL' },
+        segments: [],
+      } as unknown as SnapshotCapacityProfileV5,
+    ]
+    expect(() => validateSnapshotV3(snap)).toThrow(/legacy is not valid on a V5/)
+  })
+
+  it('rejects an unsupported provenance value on a V5 profile', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV5
+    snap.schemaVersion = 5
+    snap.capacityProfiles = [
+      {
+        id: 'cp-1',
+        ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+        provenance: 'NOT_A_PROVENANCE',
+        segments: [],
+      } as unknown as SnapshotCapacityProfileV5,
+    ]
+    expect(() => validateSnapshotV3(snap)).toThrow(/unsupported provenance/)
+  })
+
+  it('accepts a valid V4 snapshot (legacy discriminator)', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV4
+    snap.schemaVersion = 4
+    expect(() => validateSnapshotV3(snap)).not.toThrow()
+  })
+
+  it('accepts a valid V5 snapshot (provenance discriminator, all values + null)', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV5
+    snap.schemaVersion = 5
+    snap.capacityProfiles = [
+      {
+        id: 'cp-1',
+        ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+        provenance: null,
+        segments: [],
+      },
+      {
+        id: 'cp-2',
+        ownerKind: 'NAMED_PERSON',
+        resourceTypeId: null,
+        namedResourceId: 'nr-alice',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        provenance: 'TRANSFERRED_FROM_SQUAD_PLANNER',
+        segments: [],
+      },
+      {
+        id: 'cp-3',
+        ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+        provenance: 'LEGACY_MAPPER',
+        segments: [],
+      },
+    ] as unknown as SnapshotCapacityProfileV5[]
+    expect(() => validateSnapshotV3(snap)).not.toThrow()
   })
 })
 

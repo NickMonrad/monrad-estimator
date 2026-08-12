@@ -962,6 +962,10 @@ export async function writePlannerProfiles(
             ownerKind: 'ROLE',
             planningBasis: 'CAPACITY_PROFILE',
             source: prismaSource,
+            // Issue #405: the planner now owns this profile — any prior
+            // special provenance (e.g. LEGACY_MAPPER on an adopted strict
+            // mapper role) no longer applies and must not be retained.
+            provenance: null,
             defaultPercent: roleDefaultPercent,
             startWeek: rp.startWeek,
             endWeek: rp.endWeek,
@@ -1040,6 +1044,9 @@ export async function writePlannerProfiles(
             ownerKind: 'PLANNED_RESOURCE',
             planningBasis: 'CAPACITY_PROFILE',
             source: prismaSource,
+            // Issue #405: planner-owned now — clear any stale mapper
+            // provenance carried by the adopted profile.
+            provenance: null,
             defaultPercent: pp.defaultPercent,
             startWeek: pp.startWeek,
             endWeek: pp.endWeek,
@@ -1115,6 +1122,8 @@ export async function writePlannerProfiles(
       ownerKind: 'PLANNED_RESOURCE' as const,
       planningBasis: 'CAPACITY_PROFILE' as const,
       source: prismaSource,
+      // Issue #405: planner-owned now — clear any stale provenance.
+      provenance: null,
       defaultPercent: 0,
       startWeek: null,
       endWeek: null,

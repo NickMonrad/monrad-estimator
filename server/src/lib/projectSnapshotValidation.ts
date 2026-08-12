@@ -184,6 +184,12 @@ export function validateSnapshotJsonValue(
 export function validateSnapshotV3(snapshot: SnapshotV3 | SnapshotV4 | SnapshotV5): void {
   const { capacityProfiles, resourceTypes, namedResources, overheadItems } = snapshot
 
+  // Issue #405: capacity-profile discriminators are version-specific.
+  // V3/V4 profiles carry the legacy SnapshotJsonValue; V5 profiles carry
+  // explicit provenance. Missing or cross-version discriminator shapes fail
+  // closed so malformed payloads can never pass structural validation.
+  const capacityProfileShape: 'v3v4' | 'v5' = snapshot.schemaVersion === 5 ? 'v5' : 'v3v4'
+
   // ── resourceTypes structure ──────────────────────────────────────────────
   const seenRtIds = new Set<string>()
   for (let ri = 0; ri < resourceTypes.length; ri++) {
@@ -257,7 +263,7 @@ export function validateSnapshotV3(snapshot: SnapshotV3 | SnapshotV4 | SnapshotV
       fail(pfx, 'capacity profile must be a non-null object')
     }
 
-    validateProfile(profile, pfx, rtIds, nrIds, nrRtIds, seenProfileIds, seenSegmentIds)
+    validateProfile(profile, pfx, rtIds, nrIds, nrRtIds, seenProfileIds, seenSegmentIds, capacityProfileShape)
   }
 
   // ── Capacity plans (optional for backward-compatible v3 snapshots) ───────
@@ -320,6 +326,7 @@ function validateProfile(
   nrRtIds: Map<string, string>,
   seenProfileIds: Set<string>,
   seenSegmentIds: Set<string>,
+  capacityProfileShape: 'v3v4' | 'v5',
 ): void {
   // id — non-empty and globally unique
   if (typeof profile.id !== 'string' || profile.id.length === 0) {
@@ -405,16 +412,28 @@ function validateProfile(
     fail(pfx, `endWeek (${profile.endWeek}) must be >= startWeek (${profile.startWeek})`)
   }
 
-  // V3/V4 legacy payload — SnapshotJsonValue discriminator
-  if ('legacy' in profile) {
-    validateSnapshotJsonValue(profile.legacy, `${pfx}.legacy`)
-  }
-  // V5 explicit provenance (issue #405) — supported value or null
-  if ('provenance' in profile) {
+  // Version-specific discriminator (issue #405). V3/V4 profiles carry the
+  // legacy SnapshotJsonValue; V5 profiles carry explicit provenance. A
+  // missing discriminator or a cross-version shape fails closed.
+  if (capacityProfileShape === 'v5') {
+    if ('legacy' in profile) {
+      fail(pfx, 'legacy is not valid on a V5 capacity profile')
+    }
+    if (!('provenance' in profile)) {
+      fail(pfx, 'V5 capacity profile requires explicit provenance')
+    }
     const provenance = profile.provenance
     if (provenance !== null && !VALID_PROVENANCE.includes(provenance as CapacityProfileProvenanceEnum)) {
       fail(pfx, `unsupported provenance "${String(provenance)}"`)
     }
+  } else {
+    if ('provenance' in profile) {
+      fail(pfx, 'provenance is not valid on a V3/V4 capacity profile')
+    }
+    if (!('legacy' in profile)) {
+      fail(pfx, 'V3/V4 capacity profile requires legacy')
+    }
+    validateSnapshotJsonValue(profile.legacy, `${pfx}.legacy`)
   }
 
   // Segments
