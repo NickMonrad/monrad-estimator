@@ -27,15 +27,8 @@ import { PrismaClient } from '@prisma/client'
 
 import { app } from '../app.js'
 import { applyRoleCountsAsNeeded } from '../lib/bulkAsNeededProfiles.js'
-import { replaceCapacityProfile } from '../lib/capacityProfileReplaceService.js'
 // Override the global prisma mock so route handlers use real PostgreSQL.
 vi.mock('../lib/prisma.js', async importOriginal => await importOriginal())
-// Wrap the authoritative writer with a spy so atomicity can be injected
-// deterministically; the real implementation runs for every other call.
-vi.mock('../lib/capacityProfileReplaceService.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../lib/capacityProfileReplaceService.js')>()
-  return { ...actual, replaceCapacityProfile: vi.fn(actual.replaceCapacityProfile) }
-})
 
 // ─── Guard ──────────────────────────────────────────────────────────────────
 
@@ -334,17 +327,18 @@ describeIf('NEEDS_REPLAN Resource Profile — missing ROLE profiles (issue #456)
 
   it('an injected mid-batch failure rolls the whole bulk action back atomically', async () => {
     const f = await createNeedsReplanFixture()
-    const realReplace = vi.mocked(replaceCapacityProfile).getMockImplementation()!
 
     // First eligible role writes normally; the second fails.
-    vi.mocked(replaceCapacityProfile)
-      .mockImplementationOnce(realReplace)
-      .mockImplementationOnce(async () => {
-        throw new Error('injected mid-batch failure')
-      })
-
+    let injected = false
     await expect(
-      applyRoleCountsAsNeeded(prisma, f.projectId, userId),
+      applyRoleCountsAsNeeded(prisma, f.projectId, userId, {
+        afterCreate: async () => {
+          if (!injected) {
+            injected = true
+            throw new Error('injected mid-batch failure')
+          }
+        },
+      }),
     ).rejects.toThrow('injected mid-batch failure')
 
     // Zero partial state: no profiles were committed and the project remains
@@ -352,6 +346,84 @@ describeIf('NEEDS_REPLAN Resource Profile — missing ROLE profiles (issue #456)
     expect(await profileCount(f.projectId)).toBe(0)
     const state = await prisma.project.findUnique({ where: { id: f.projectId } })
     expect(state!.planningState).toBe('NEEDS_REPLAN')
+  })
+
+  it('a ROLE profile created concurrently mid-batch is never overwritten by the bulk action', async () => {
+    const f = await createNeedsReplanFixture()
+    // Eligibility order follows creation order: Engineer (demanded),
+    // Business Analyst, Data Scientist — all eligible and role-only.
+    const [firstEligibleRoleId, secondEligibleRoleId] = f.roleOnlyRtIds
+    expect(firstEligibleRoleId).toBe(f.demandedRtId)
+
+    // A second real PostgreSQL connection commits a valid persisted ROLE
+    // profile for the SECOND eligible role while the bulk batch is open
+    // (after the first role's create). The profile uses deliberately
+    // different semantics (AVAILABILITY_WINDOW / 75% / W2-W8) so any
+    // overwrite by the bulk would be unmistakable.
+    const concurrentClient = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+    })
+    await concurrentClient.$connect()
+    let concurrentProfileId: string | null = null
+    try {
+      const result = await applyRoleCountsAsNeeded(prisma, f.projectId, userId, {
+        afterCreate: async roleId => {
+          if (roleId !== firstEligibleRoleId || concurrentProfileId) return
+          const created = await concurrentClient.capacityProfile.create({
+            data: {
+              projectId: f.projectId,
+              ownerKind: 'ROLE',
+              resourceTypeId: secondEligibleRoleId,
+              namedResourceId: null,
+              planningBasis: 'AVAILABILITY_WINDOW',
+              source: 'MANUAL',
+              defaultPercent: 75,
+              startWeek: 2,
+              endWeek: 8,
+            },
+            select: { id: true },
+          })
+          concurrentProfileId = created.id
+        },
+      })
+
+      // The bulk created the first and third eligible roles only; the second
+      // role (whose profile appeared mid-batch) was skipped.
+      expect(result.created).toBe(2)
+
+      const profiles = await prisma.capacityProfile.findMany({
+        where: { projectId: f.projectId },
+        orderBy: { resourceTypeId: 'asc' },
+      })
+      const byRt = new Map(profiles.map(p => [p.resourceTypeId, p]))
+
+      // The concurrently created profile survived COMPLETELY unchanged:
+      // same id, same planning semantics, same source, no provenance.
+      const concurrent = byRt.get(secondEligibleRoleId)!
+      expect(concurrent.id).toBe(concurrentProfileId)
+      expect(concurrent.planningBasis).toBe('AVAILABILITY_WINDOW')
+      expect(concurrent.defaultPercent).toBe(75)
+      expect(concurrent.startWeek).toBe(2)
+      expect(concurrent.endWeek).toBe(8)
+      expect(concurrent.source).toBe('MANUAL')
+      expect(concurrent.provenance).toBeNull()
+
+      // The other eligible roles received the canonical As-needed profile.
+      for (const rtId of f.roleOnlyRtIds.filter(id => id !== secondEligibleRoleId)) {
+        const profile = byRt.get(rtId)
+        expect(profile!.planningBasis).toBe('DEMAND_FOLLOWING')
+        expect(profile!.defaultPercent).toBe(100)
+        expect(profile!.source).toBe('MANUAL')
+      }
+
+      // The skipped role no longer appears among remaining findings and the
+      // project stays quarantined (completion owns the transition).
+      expect(result.remainingFindings.join(' | ')).not.toContain('Business Analyst')
+      const state = await prisma.project.findUnique({ where: { id: f.projectId } })
+      expect(state!.planningState).toBe('NEEDS_REPLAN')
+    } finally {
+      await concurrentClient.$disconnect()
+    }
   })
 
   it('the existing completion returns the project to CURRENT and Timeline resumes', async () => {

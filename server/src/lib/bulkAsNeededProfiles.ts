@@ -15,21 +15,25 @@
  *   - Eligible owners are role-only ResourceTypes (zero named resources —
  *     so there is no named-person, planned-resource or segmented authority
  *     to conflict with) that lack a persisted ROLE profile.
- *   - Exactly one canonical ROLE profile (DEMAND_FOLLOWING, 100% As needed,
- *     MANUAL source) is created per eligible role via the existing
- *     authoritative writer (`replaceCapacityProfile`), never overwriting an
- *     existing profile and never guessing planner-owned or named-resource
- *     authority.
- *   - The batch is atomic: any failure (including a concurrent duplicate
- *     create hitting the partial unique index) rolls back every write.
- *   - The project stays NEEDS_REPLAN; the response reports the remaining
+ *   - The bulk write is strictly CREATE-ONLY (issue #456 review): it never
+ *     updates or replaces an existing profile. The general-purpose editor
+ *     writer (`replaceCapacityProfile`) is deliberately NOT reused because
+ *     it is a create-or-replace writer — a ROLE profile created by another
+ *     request after the bulk eligibility read could otherwise be
+ *     overwritten. Instead each role is re-checked inside the transaction
+ *     immediately before its insert, and a concurrent duplicate insert is
+ *     detected through the partial unique index on `resourceTypeId`
+ *     (P2002) and treated as "already exists → skip". A concurrently
+ *     created profile therefore always survives completely unchanged.
+ *   - The batch is atomic: an unexpected failure rolls back every write;
+ *     the project stays NEEDS_REPLAN; the response reports the remaining
  *     canonical completeness findings so the user can resolve non-eligible
  *     findings manually before running the existing completion operation.
  */
 
-import type { Prisma, PrismaClient } from '@prisma/client'
+import { Prisma, type PrismaClient } from '@prisma/client'
 
-import { replaceCapacityProfile } from './capacityProfileReplaceService.js'
+import { validateProfileStructure } from './capacityProfileStructureValidation.js'
 import { collectReplanningFindings } from './completeReplanning.js'
 
 export class BulkAsNeededError extends Error {
@@ -54,6 +58,112 @@ export interface BulkAsNeededResult {
   remainingFindings: string[]
 }
 
+/** Optional test seams (mirrors the reset service's `afterWrites` hook). */
+export interface BulkAsNeededHooks {
+  /** Invoked after each successful profile create (roleId = role just created). */
+  afterCreate?: (roleId: string, created: number) => Promise<void> | void
+}
+
+/**
+ * Whether a Prisma P2002 error is the partial-unique-index violation on
+ * CapacityProfile.resourceTypeId (a concurrent ROLE profile insert for the
+ * same resource type). Same constraint-identity detection as the Squad
+ * Planner apply path; unrelated P2002 errors propagate.
+ */
+function isRoleProfileAlreadyExistsConflict(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false
+  if (err.code !== 'P2002') return false
+  const meta = err.meta as Record<string, unknown> | null | undefined
+  if (!meta) return false
+  if (meta.modelName !== 'CapacityProfile') return false
+  // With adapter-pg (Prisma 7) the constraint name is in
+  // driverAdapterError.cause.originalMessage.
+  const adapterErr = meta.driverAdapterError as Record<string, unknown> | undefined
+  const cause = adapterErr?.cause as Record<string, unknown> | undefined
+  if (cause && typeof cause.originalMessage === 'string') {
+    return cause.originalMessage.includes('CapacityProfile_resourceTypeId_key')
+  }
+  return false
+}
+
+/**
+ * Create the canonical As-needed ROLE profile for one role, guaranteeing the
+ * profile is CREATE-ONLY: the role is re-checked immediately before the
+ * insert, and a concurrent insert that wins the unique-index race is treated
+ * as "already exists" (skip, never update).
+ *
+ * @returns true when a profile was created, false when one already exists.
+ */
+async function createMissingRoleAsNeededProfile(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+  roleId: string,
+  resourceTypeIds: ReadonlySet<string>,
+): Promise<boolean> {
+  // Re-check inside the transaction: a profile created after the initial
+  // eligibility read (e.g. by a concurrent editor save) must never be
+  // updated or replaced by this bulk action.
+  const existing = await tx.capacityProfile.findFirst({
+    where: { projectId, resourceTypeId: roleId, ownerKind: 'ROLE' },
+    select: { id: true },
+  })
+  if (existing) return false
+
+  // Canonical "As needed / demand-following" ROLE profile — the same shape
+  // the single-owner editor would persist for this choice. Run it through
+  // the single authoritative structural rule set before writing.
+  const structuralErrors = validateProfileStructure(
+    {
+      id: 'pending-create',
+      projectId,
+      resourceTypeId: roleId,
+      namedResourceId: null,
+      ownerKind: 'ROLE',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'MANUAL',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      segments: [],
+    },
+    {
+      projectId,
+      resourceTypeIds,
+      namedResourceIds: new Set<string>(),
+    },
+  )
+  if (structuralErrors.length > 0) {
+    throw new Error(
+      `Refusing to create a non-canonical As-needed profile for role ${roleId}: ` +
+        structuralErrors.join('; '),
+    )
+  }
+
+  try {
+    await tx.capacityProfile.create({
+      data: {
+        projectId,
+        ownerKind: 'ROLE',
+        resourceTypeId: roleId,
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'MANUAL',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        provenance: null,
+      },
+    })
+    return true
+  } catch (error) {
+    // A concurrent ROLE profile insert committed between the re-check and
+    // this insert → the unique index refused the duplicate. The concurrent
+    // profile is authoritative and untouched; skip this role.
+    if (isRoleProfileAlreadyExistsConflict(error)) return false
+    throw error
+  }
+}
+
 /**
  * Persist a canonical demand-following (As needed) ROLE profile for every
  * eligible missing role-only ResourceType in one atomic transaction.
@@ -61,6 +171,7 @@ export interface BulkAsNeededResult {
  * @param prisma    Prisma client
  * @param projectId Project ID
  * @param userId    Requesting user (ownership revalidated inside the tx)
+ * @param hooks     Optional test seams
  * @returns         Created count + remaining completeness findings
  * @throws BulkAsNeededError with a stable `code` on guard violations
  */
@@ -68,6 +179,7 @@ export async function applyRoleCountsAsNeeded(
   prisma: PrismaClient,
   projectId: string,
   userId: string,
+  hooks: BulkAsNeededHooks = {},
 ): Promise<BulkAsNeededResult> {
   return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const project = await tx.project.findFirst({
@@ -120,24 +232,29 @@ export async function applyRoleCountsAsNeeded(
     const eligibleRoleIds = project.resourceTypes
       .filter(rt => rt.namedResources.length === 0 && !persistedRoleRtIds.has(rt.id))
       .map(rt => rt.id)
+    const resourceTypeIds = new Set(project.resourceTypes.map(rt => rt.id))
 
     let created = 0
     for (const roleId of eligibleRoleIds) {
-      // The authoritative single-owner writer: validates ownership, refuses
-      // PLANNED_RESOURCE/SQUAD_PLANNER overwrite, creates the canonical
-      // MANUAL-source DEMAND_FOLLOWING profile, clears behavioural
-      // provenance and invalidates the weekly-demand cache. A concurrent
-      // duplicate create fails on the partial unique index and aborts the
-      // whole batch atomically.
-      await replaceCapacityProfile(
-        tx,
-        projectId,
-        'ROLE',
-        roleId,
-        { planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 100 },
-        userId,
-      )
-      created++
+      // Strictly create-only: the role is re-checked inside the transaction
+      // and a concurrent duplicate insert (P2002 on the resourceTypeId
+      // unique index) is treated as "already exists → skip" — an existing
+      // profile, including one that appeared after the eligibility read, is
+      // never updated or replaced by this bulk action.
+      const didCreate = await createMissingRoleAsNeededProfile(tx, projectId, roleId, resourceTypeIds)
+      if (didCreate) {
+        created++
+        await hooks.afterCreate?.(roleId, created)
+      }
+    }
+
+    if (created > 0) {
+      // Invalidate the derived weekly-demand cache for the created profiles
+      // (same invalidation the single-owner writer performs).
+      await tx.project.update({
+        where: { id: projectId },
+        data: { weeklyDemandCache: {} },
+      })
     }
 
     // Reuse the authoritative completion validation for the remaining
