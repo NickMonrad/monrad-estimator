@@ -56,7 +56,12 @@ async function setAllRoleCapacitiesAsNeeded(page: Page) {
   const rows = page.locator('tr[data-testid^="resource-profile-row-"]')
   const rowCount = await rows.count()
   for (let i = 0; i < rowCount; i++) {
-    const editButton = rows.nth(i).locator('button[title="Click to edit capacity profile"]')
+    // Missing persisted profiles render the amber "Needs capacity profile"
+    // badge (issue #456); persisted ones keep the normal edit badge — both
+    // open the same capacity editor.
+    const editButton = rows.nth(i).locator(
+      'button[title="Click to edit capacity profile"], button[title="Click to create capacity profile"]',
+    )
     await editButton.waitFor({ state: 'visible', timeout: 10_000 })
     await editButton.click()
     await expect(page.getByTestId('capacity-profile-editor')).toBeVisible({ timeout: 8_000 })
