@@ -141,14 +141,14 @@ describe('resolveRTPatchState', () => {
           defaultPercent: 100,
           startWeek: null,
           endWeek: null,
-          legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+          provenance: null,
         }),
         makeNRProfile('cp-nr-2', 'nr-2', {
           planningBasis: 'DEMAND_FOLLOWING',
           defaultPercent: 70,
           startWeek: null,
           endWeek: null,
-          legacy: { allocationMode: 'EFFORT', allocationPercent: 70, allocationPct: 70, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+          provenance: 'LEGACY_MAPPER',
         }),
       ])
       setRoleProfiles([
@@ -180,7 +180,7 @@ describe('resolveRTPatchState', () => {
           defaultPercent: 100,
           startWeek: null,
           endWeek: null,
-          legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+          provenance: null,
         }),
       ])
       tx.namedResource.findMany = vi.fn().mockResolvedValue([
@@ -277,7 +277,7 @@ describe('resolveRTPatchState', () => {
           defaultPercent: 70,
           startWeek: null,
           endWeek: null,
-          legacy: { allocationMode: 'EFFORT', allocationPercent: 70, allocationPct: 70, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+          provenance: 'LEGACY_MAPPER',
         }),
       ])
       tx.namedResource.findMany = vi.fn().mockResolvedValue([
@@ -300,7 +300,7 @@ describe('resolveRTPatchState', () => {
           defaultPercent: 100,
           startWeek: null,
           endWeek: null,
-          legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+          provenance: null,
         }),
       ])
       tx.namedResource.findMany = vi.fn().mockResolvedValue([

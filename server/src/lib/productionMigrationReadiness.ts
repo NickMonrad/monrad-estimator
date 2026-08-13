@@ -18,12 +18,12 @@
  *     its named resources are explicit NAMED_PERSON profiles; profile and
  *     segment shapes follow the authoritative validation rules (reuses
  *     validatePersistedCapacityProfiles + checkPersistedCompleteness).
- *  3. Snapshot version policy (issue #444) — every stored BacklogSnapshot is
- *     classified by schema version only. Any V1/V2/V3 snapshot is a blocker
+ *  3. Snapshot version policy (issue #444/#405) — every stored BacklogSnapshot
+ *     is classified by schema version only. Any V1/V2/V3 snapshot is a blocker
  *     (it must be deliberately purged before the destructive migration); any
- *     malformed/unsupported payload blocks; any structurally invalid V4
- *     payload blocks. Valid V4 snapshots pass. No historical translation,
- *     quarantine or decision analysis runs here.
+ *     malformed/unsupported payload blocks; any structurally invalid V4 or V5
+ *     payload blocks. Valid V4 and valid V5 snapshots pass. No historical
+ *     translation, quarantine or decision analysis runs here.
  *
  * Exit contract: the CLI exits 0 only when every section passes. Any blocker
  * yields a non-zero exit with an actionable human-readable report.
@@ -159,15 +159,18 @@ async function checkSnapshots(prisma: PrismaClient): Promise<ReadinessSection> {
     select: { snapshot: true },
   })
 
-  // Issue #444: classify stored payloads by schema version only (V4 is the
-  // minimum supported snapshot format). Aggregate counts, never identifiers.
-  // Any pre-V4 row is a blocker because it must be purged before the
-  // destructive migration; malformed/unsupported payloads and invalid V4
-  // payloads also block. No historical translation semantics are evaluated.
+  // Issue #444/#405: classify stored payloads by schema version only (V4 is
+  // the minimum supported snapshot format; V5 is the current write format).
+  // Aggregate counts, never identifiers. Any pre-V4 row is a blocker because
+  // it must be purged before the destructive migration; malformed/unsupported
+  // payloads and invalid V4 or V5 payloads also block. No historical
+  // translation semantics are evaluated.
   let preV4Count = 0
   let malformedCount = 0
   let invalidV4Count = 0
   let validV4Count = 0
+  let invalidV5Count = 0
+  let validV5Count = 0
   for (const snapshot of backlogSnapshots) {
     const version = classifySnapshotVersion(snapshot.snapshot)
     switch (version.kind) {
@@ -180,6 +183,10 @@ async function checkSnapshots(prisma: PrismaClient): Promise<ReadinessSection> {
         if (version.valid) validV4Count++
         else invalidV4Count++
         break
+      case 'v5':
+        if (version.valid) validV5Count++
+        else invalidV5Count++
+        break
       case 'malformed':
         malformedCount++
         break
@@ -190,12 +197,17 @@ async function checkSnapshots(prisma: PrismaClient): Promise<ReadinessSection> {
   if (preV4Count > 0) blockers.push(`pre-V4 BacklogSnapshots remain: ${preV4Count}`)
   if (malformedCount > 0) blockers.push(`malformed/unsupported BacklogSnapshots: ${malformedCount}`)
   if (invalidV4Count > 0) blockers.push(`invalid V4 BacklogSnapshots: ${invalidV4Count}`)
+  if (invalidV5Count > 0) blockers.push(`invalid V5 BacklogSnapshots: ${invalidV5Count}`)
+
+  const notes: string[] = []
+  if (validV4Count > 0) notes.push(`valid V4 BacklogSnapshots: ${validV4Count}`)
+  if (validV5Count > 0) notes.push(`valid V5 BacklogSnapshots: ${validV5Count}`)
 
   return {
     name: 'snapshot version policy (V4 minimum)',
     passed: blockers.length === 0,
     blockers,
-    notes: validV4Count > 0 ? [`valid V4 BacklogSnapshots: ${validV4Count}`] : undefined,
+    notes: notes.length > 0 ? notes : undefined,
   }
 }
 

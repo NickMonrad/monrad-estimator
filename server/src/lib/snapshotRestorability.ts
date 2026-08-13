@@ -8,15 +8,16 @@
  * state, and reusable by listing, rollback, readiness, remediation and
  * retention pruning.
  *
- * Issue #444 policy (V4 minimum): the product accepts the deliberate loss of
- * pre-V4 rollback history. V1/V2/V3 snapshots are no longer restorable for
- * ANY payload — even a previously-approved historical shape — and carry one
- * stable retirement reason. Only structurally valid V4 snapshots are
- * restorable; invalid V4 payloads and malformed/unsupported payloads are
- * blocking defects. No historical translation or Class A/B quarantine
- * analysis runs here any more; the raw-value quarantine predicates
- * (`classifyV2QuarantineShape`, Class A/B reasons) remain exported only for
- * the retained historical evidence/remediation tooling.
+ * Issue #444 policy (V4 minimum, #405 V5 evolution): the product accepts the
+ * deliberate loss of pre-V4 rollback history. V1/V2/V3 snapshots are no
+ * longer restorable for ANY payload — even a previously-approved historical
+ * shape — and carry one stable retirement reason. Only structurally valid V4
+ * (historical pre-#405 legacy payload) and V5 (current explicit-provenance)
+ * snapshots are restorable; invalid V4/V5 payloads and malformed/unsupported
+ * payloads are blocking defects. No historical translation or Class A/B
+ * quarantine analysis runs here any more; the raw-value quarantine
+ * predicates (`classifyV2QuarantineShape`, Class A/B reasons) remain
+ * exported only for the retained historical evidence/remediation tooling.
  */
 
 import {
@@ -193,13 +194,14 @@ export function v2NamedResourceAliasConflict(
 
 /**
  * Classify a stored snapshot's restorability from its raw content only
- * (issue #444 policy).
+ * (issue #444 policy, #405 V5 evolution).
  *
  * Outcomes:
- *   - `restorable` — a structurally valid V4 payload;
+ *   - `restorable` — a structurally valid V4 (historical, pre-#405 legacy
+ *     payload) or V5 (current explicit-provenance) payload;
  *   - `retired` — any V1/V2/V3 payload (deliberate legacy retirement: V4 is
  *     the minimum supported snapshot version; the payload is NOT analysed);
- *   - `defect` — malformed/unsupported data, or a V4 payload failing
+ *   - `defect` — malformed/unsupported data, or a V4/V5 payload failing
  *     structural validation.
  *
  * Never throws; never rewrites the stored record.
@@ -220,6 +222,7 @@ export function classifySnapshotRestorability(
         restoreReason: RETIREMENT_REASON,
       }
     case 'v4':
+    case 'v5':
       if (version.valid) {
         return { kind: 'restorable', restoreStatus: 'restorable', restoreReason: null }
       }

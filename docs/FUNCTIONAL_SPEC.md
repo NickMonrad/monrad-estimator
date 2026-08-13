@@ -879,7 +879,7 @@ Rollback behaviour depends on the snapshot's schema version:
 4. Epics, Features, Stories, and Tasks are **recreated** from the snapshot JSON.
 5. Resource types are re-matched by name for task FKs.
 6. Timeline entries, story timeline entries, dependencies, and overheads are deleted and recreated from snapshot data.
-7. **All existing CapacityProfile and CapacitySegment rows are deleted** and recreated **exactly** from the snapshot's `capacityProfiles` array — preserving profile IDs, owner kinds, owner IDs, planning basis, source, default percent, profile window, legacy JSON, and every segment with its ID, weeks, capacity percent, and source.
+7. **All existing CapacityProfile and CapacitySegment rows are deleted** and recreated **exactly** from the snapshot's `capacityProfiles` array — preserving profile IDs, owner kinds, owner IDs, planning basis, source, default percent, profile window, provenance (schemaVersion 5 snapshots; V4 restore translates recognised legacy JSON payloads to the equivalent `CapacityProfileProvenance`), and every segment with its ID, weeks, capacity percent, and source.
 8. All writes share one `$transaction` — any failure rolls back every change including the pre-rollback capture.
 
 **V2 (schemaVersion: 2) — Full state + best-effort legacy profile reconstruction:**

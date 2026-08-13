@@ -206,15 +206,16 @@ describe('isLegacyPlannerProfile', () => {
   })
 })
 
-// ─── Mapper-provenance validation tests ──────────────────────────────────
+// ─── Mapper-provenance validation tests (issue #405) ─────────────────
 
 describe('isValidMapperProvenance', () => {
   const baseRole = {
     ownerKind: 'ROLE' as const,
     namedResourceId: null,
+    provenance: 'LEGACY_MAPPER' as const,
   }
 
-  it('accepts EFFORT mapper profile (FIXED/DEMAND_FOLLOWING with legacy)', () => {
+  it('accepts EFFORT mapper profile (FIXED/DEMAND_FOLLOWING)', () => {
     expect(isValidMapperProvenance({
       ...baseRole,
       resourceTypeId: 'rt-dev',
@@ -223,11 +224,10 @@ describe('isValidMapperProvenance', () => {
       endWeek: null,
       source: 'FIXED',
       planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
     })).toBe(true)
   })
 
-  it('accepts TIMELINE mapper profile (AVAILABILITY_WINDOW/AVAILABILITY_WINDOW with legacy)', () => {
+  it('accepts TIMELINE mapper profile (AVAILABILITY_WINDOW/AVAILABILITY_WINDOW)', () => {
     expect(isValidMapperProvenance({
       ...baseRole,
       resourceTypeId: 'rt-dev',
@@ -236,11 +236,10 @@ describe('isValidMapperProvenance', () => {
       endWeek: 12,
       source: 'AVAILABILITY_WINDOW',
       planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: 1, allocationEndWeek: 12, startWeek: null, endWeek: null },
     })).toBe(true)
   })
 
-  it('accepts FULL_PROJECT mapper profile (FIXED/WHOLE_PROJECT_ALLOCATION with legacy)', () => {
+  it('accepts FULL_PROJECT mapper profile (FIXED/WHOLE_PROJECT_ALLOCATION)', () => {
     expect(isValidMapperProvenance({
       ...baseRole,
       resourceTypeId: 'rt-dev',
@@ -249,11 +248,10 @@ describe('isValidMapperProvenance', () => {
       endWeek: null,
       source: 'FIXED',
       planningBasis: 'WHOLE_PROJECT_ALLOCATION',
-      legacy: { allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
     })).toBe(true)
   })
 
-  it('accepts CAPACITY_PLAN mapper profile (LEGACY/CAPACITY_PROFILE with legacy)', () => {
+  it('accepts CAPACITY_PLAN mapper profile (LEGACY/CAPACITY_PROFILE)', () => {
     expect(isValidMapperProvenance({
       ...baseRole,
       resourceTypeId: 'rt-dev',
@@ -262,73 +260,40 @@ describe('isValidMapperProvenance', () => {
       endWeek: null,
       source: 'LEGACY',
       planningBasis: 'CAPACITY_PROFILE',
-      legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
     })).toBe(true)
   })
 
-  it('rejects profile with null legacy', () => {
+  it('accepts null-mode mapper profile (LEGACY/DEMAND_FOLLOWING)', () => {
     expect(isValidMapperProvenance({
       ...baseRole,
       resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: null,
-    })).toBe(false)
-  })
-
-  it('rejects profile with undefined legacy', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-    })).toBe(false)
-  })
-
-  it('rejects profile with non-object legacy (array)', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: [],
-    })).toBe(false)
-  })
-
-  it('rejects profile with malformed legacy (missing allocationPercent)', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationStartWeek: 1, allocationEndWeek: 12 },
-    })).toBe(false)
-  })
-
-  it('rejects profile with mismatched allocationMode vs source/basis', () => {
-    // allocationMode=TIMELINE but source/basis is FIXED/DEMAND_FOLLOWING (EFFORT pair)
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'FIXED',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      source: 'LEGACY',
       planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationStartWeek: 1, allocationEndWeek: 12 },
+    })).toBe(true)
+  })
+
+  it('rejects profile with null provenance', () => {
+    expect(isValidMapperProvenance({
+      ...baseRole,
+      provenance: null,
+      resourceTypeId: 'rt-dev',
+      defaultPercent: null, startWeek: null, endWeek: null,
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
     })).toBe(false)
   })
 
-  it('rejects profile with unknown allocationMode', () => {
+  it('rejects profile with undefined provenance', () => {
     expect(isValidMapperProvenance({
-      ...baseRole,
+      ownerKind: 'ROLE',
+      namedResourceId: null,
       resourceTypeId: 'rt-dev',
       defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'FIXED',
-      planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'UNKNOWN', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null },
+      source: 'AVAILABILITY_WINDOW',
+      planningBasis: 'AVAILABILITY_WINDOW',
     })).toBe(false)
   })
 
@@ -339,220 +304,62 @@ describe('isValidMapperProvenance', () => {
       resourceTypeId: 'rt-dev',
       source: 'SQUAD_PLANNER',
       planningBasis: 'CAPACITY_PROFILE',
-      legacy: null,
+      provenance: 'LEGACY_MAPPER',
     })).toBe(false)
   })
 
-  it('rejects profile with missing allocationPct key', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'FIXED',
-      planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects profile with missing allocationPercent key', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'FIXED',
-      planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'EFFORT', allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects profile with missing startWeek key', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'FIXED',
-      planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects profile with string allocationPercent', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 'not-a-number', allocationPct: null, allocationStartWeek: 1, allocationEndWeek: 12, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects profile with object allocationStartWeek', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: {}, allocationEndWeek: 12, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects profile with mismatched defaultPercent vs allocationPercent', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: 80,
-      startWeek: null, endWeek: null,
-      source: 'FIXED',
-      planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects profile with mismatched startWeek vs allocationStartWeek', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: 50, startWeek: 5,
-      endWeek: 12,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: 1, allocationEndWeek: 12, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-  it('rejects profile with null defaultPercent when legacy allocationPercent is 100', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: null, startWeek: null, endWeek: null,
-      source: 'FIXED',
-      planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects profile with defaultPercent 100 when legacy allocationPercent is null', () => {
+  it('rejects a source/basis pair that is not a mapper pair', () => {
+    // MANUAL/CAPACITY_PROFILE is a planner/transfer shape, never mapper output.
     expect(isValidMapperProvenance({
       ...baseRole,
       resourceTypeId: 'rt-dev',
       defaultPercent: 100, startWeek: null, endWeek: null,
-      source: 'FIXED',
-      planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'EFFORT', allocationPercent: null, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+      source: 'MANUAL',
+      planningBasis: 'CAPACITY_PROFILE',
     })).toBe(false)
   })
 
-  it('rejects profile with null startWeek when legacy allocationStartWeek is 1', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: 50, startWeek: null, endWeek: 12,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: 1, allocationEndWeek: 12, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects profile with startWeek 1 when legacy allocationStartWeek is null', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: 50, startWeek: 1, endWeek: 12,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: null, allocationEndWeek: 12, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects profile with null endWeek when legacy allocationEndWeek is 12', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: 50, startWeek: 1, endWeek: null,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: 1, allocationEndWeek: 12, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects profile with endWeek 12 when legacy allocationEndWeek is null', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: 50, startWeek: 1, endWeek: 12,
-      source: 'AVAILABILITY_WINDOW',
-      planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: 1, allocationEndWeek: null, startWeek: null, endWeek: null },
-    })).toBe(false)
-  })
-
-  it('rejects ROLE profile with non-null legacy allocationPct', () => {
+  it('rejects SQUAD_PLANNER source with mapper provenance (planner-owned shape)', () => {
     expect(isValidMapperProvenance({
       ...baseRole,
       resourceTypeId: 'rt-dev',
       defaultPercent: 100, startWeek: null, endWeek: null,
-      source: 'FIXED',
-      planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: 50, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+      source: 'SQUAD_PLANNER',
+      planningBasis: 'CAPACITY_PROFILE',
     })).toBe(false)
   })
 
-  it('rejects ROLE profile with non-null legacy startWeek', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: 100, startWeek: null, endWeek: null,
-      source: 'FIXED',
-      planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: 5, endWeek: null },
-    })).toBe(false)
-  })
+  // ── Acceptance: project / ResourceType creation shapes (issue #405) ──
 
-  it('rejects ROLE profile with non-null legacy endWeek', () => {
-    expect(isValidMapperProvenance({
-      ...baseRole,
-      resourceTypeId: 'rt-dev',
-      defaultPercent: 100, startWeek: null, endWeek: null,
-      source: 'FIXED',
-      planningBasis: 'DEMAND_FOLLOWING',
-      legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: 12 },
-    })).toBe(false)
-  })
-
-  // ── Acceptance: project / ResourceType creation shapes ───────────────
-
-  it('accepts ROLE profile created by project creation (AVAILABILITY_WINDOW/TIMELINE with null allocationPct)', () => {
+  it('accepts ROLE profile created by project creation (AVAILABILITY_WINDOW/TIMELINE pair, LEGACY_MAPPER)', () => {
     expect(isValidMapperProvenance({
       ...baseRole,
       resourceTypeId: 'rt-dev',
       defaultPercent: 100, startWeek: null, endWeek: null,
       source: 'AVAILABILITY_WINDOW',
       planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
     })).toBe(true)
   })
 
-  it('accepts ROLE profile created by ResourceType POST (AVAILABILITY_WINDOW/TIMELINE with null allocationPct)', () => {
+  it('accepts ROLE profile created by ResourceType POST (AVAILABILITY_WINDOW/TIMELINE pair, LEGACY_MAPPER)', () => {
     expect(isValidMapperProvenance({
       ...baseRole,
       resourceTypeId: 'rt-dev',
       defaultPercent: 100, startWeek: null, endWeek: null,
       source: 'AVAILABILITY_WINDOW',
       planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
     })).toBe(true)
   })
 
   it('rejects explicit/manual ROLE profile with source MANUAL', () => {
-    // A manually created profile with non-mapper source is not planner-adoptable.
+    // A manually created/edited profile with non-mapper source is not
+    // planner-adoptable even when it once carried mapper provenance.
     expect(isValidMapperProvenance({
       ...baseRole,
       resourceTypeId: 'rt-dev',
       defaultPercent: 100, startWeek: null, endWeek: null,
       source: 'MANUAL',
       planningBasis: 'AVAILABILITY_WINDOW',
-      legacy: { allocationMode: 'TIMELINE', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
     })).toBe(false)
   })
 
@@ -1411,7 +1218,7 @@ describe('validatePlannerOwnerState — legacy role adoption (evidence-backed)',
         endWeek: 12,
         source: 'AVAILABILITY_WINDOW',
         planningBasis: 'AVAILABILITY_WINDOW',
-        legacy: { allocationMode: 'TIMELINE', allocationPercent: 50, allocationPct: null, allocationStartWeek: 1, allocationEndWeek: 12, startWeek: null, endWeek: null },
+        provenance: 'LEGACY_MAPPER',
       }]),
       'project-1',
       'rt-dev',
@@ -1433,7 +1240,7 @@ describe('validatePlannerOwnerState — legacy role adoption (evidence-backed)',
         endWeek: null,
         source: 'FIXED',
         planningBasis: 'DEMAND_FOLLOWING',
-        legacy: { allocationMode: 'EFFORT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+        provenance: 'LEGACY_MAPPER',
       }]),
       'project-1',
       'rt-dev',
@@ -1455,7 +1262,7 @@ describe('validatePlannerOwnerState — legacy role adoption (evidence-backed)',
         endWeek: null,
         source: 'FIXED',
         planningBasis: 'WHOLE_PROJECT_ALLOCATION',
-        legacy: { allocationMode: 'FULL_PROJECT', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+        provenance: 'LEGACY_MAPPER',
       }]),
       'project-1',
       'rt-dev',
@@ -1477,7 +1284,7 @@ describe('validatePlannerOwnerState — legacy role adoption (evidence-backed)',
         defaultPercent: 100,
         startWeek: null,
         endWeek: null,
-        legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 100, allocationPct: null, allocationStartWeek: null, allocationEndWeek: null, startWeek: null, endWeek: null },
+        provenance: 'LEGACY_MAPPER',
       }]),
       'project-1',
       'rt-dev',

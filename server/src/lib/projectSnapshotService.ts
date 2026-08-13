@@ -14,11 +14,13 @@ import {
   isSnapshotV2,
   isSnapshotV3,
   isSnapshotV4,
+  isSnapshotV5,
   SnapshotSchemaError,
   type SnapshotData,
   type SnapshotV2,
   type SnapshotV3,
   type SnapshotV4,
+  type SnapshotV5,
 } from './projectSnapshotTypes.js'
 import {
   validateSnapshotV3,
@@ -108,17 +110,18 @@ function parseWeeklyDemandCache(value: Prisma.JsonValue | null | undefined): Rec
 // ─── buildSnapshot (public) ───────────────────────────────────────────────────
 
 /**
- * Build the full project snapshot (schemaVersion 4) with ordered capacity
- * profiles.
+ * Build the full project snapshot (schemaVersion 5) with ordered capacity
+ * profiles (issue #405).
  *
- * v4 omits the candidate ResourceType/NamedResource legacy capacity columns:
- * all capacity state is captured by capacityProfiles/capacitySegments
- * (issue #418). v1/v2/v3 snapshots remain readable historical input.
+ * v5 is the current write format: the V4 project/profile contract with the
+ * explicit CapacityProfile `provenance` in place of the removed `legacy`
+ * JSON payload. v1/v2/v3 snapshots remain non-restorable historical input;
+ * v4 remains restorable as the minimum supported historical format.
  */
 export async function buildSnapshot(
   projectId: string,
   db: SnapshotDbClient = prisma,
-): Promise<SnapshotV4> {
+): Promise<SnapshotV5> {
   const [
     epics,
     project,
@@ -222,8 +225,8 @@ export async function buildSnapshot(
       }
     : null
 
-  const snapshot: SnapshotV4 = {
-    schemaVersion: 4 as const,
+  const snapshot: SnapshotV5 = {
+    schemaVersion: 5 as const,
     epics,
     project: projectFields,
     resourceTypes,
@@ -259,7 +262,7 @@ export async function buildSnapshot(
 export async function restoreSnapshotCommonState(
   tx: SnapshotDbClient,
   projectId: string,
-  data: Omit<SnapshotV2, 'schemaVersion'> | Omit<SnapshotV4, 'schemaVersion'>,
+  data: Omit<SnapshotV2, 'schemaVersion'> | Omit<SnapshotV4, 'schemaVersion'> | Omit<SnapshotV5, 'schemaVersion'>,
 ): Promise<void> {
   // 1. Restore ResourceTypes FIRST so task FKs resolve correctly when recreating epics
   const rtNameMap = new Map<string, string>()
@@ -539,7 +542,7 @@ async function restoreSnapshotCapacityPlans(
 async function loadAndValidateRetainedRoleProfiles(
   tx: SnapshotDbClient,
   projectId: string,
-  snapshot: SnapshotV2 | SnapshotV3 | SnapshotV4,
+  snapshot: SnapshotV2 | SnapshotV3 | SnapshotV4 | SnapshotV5,
 ): Promise<RetainedRoleProfile[]> {
   const { retainedResourceTypeIds, profiles } = await loadRetainedRoleProfiles(
     tx,
@@ -622,10 +625,10 @@ export async function rollbackProjectSnapshot({
   }
 
   // 3. Validation + pre-flight checks before any writes. The classifier
-  // above already translated V2 payloads and validated V3/V4 payloads; the
-  // remaining checks below are the cross-project owner-ID collision preflight
-  // (V3/V4 only).
-  if (isSnapshotV3(parsedData) || isSnapshotV4(parsedData)) {
+  // above already translated V2 payloads and validated V3/V4/V5 payloads;
+  // the remaining checks below are the cross-project owner-ID collision
+  // preflight (V3/V4/V5 only).
+  if (isSnapshotV3(parsedData) || isSnapshotV4(parsedData) || isSnapshotV5(parsedData)) {
     validateSnapshotV3(parsedData)
 
     // Cross-project owner ID collision check
@@ -758,7 +761,18 @@ export async function rollbackProjectSnapshot({
     } else if (isSnapshotV4(parsedData)) {
       // --- V4: full-state restore + exact profile/segment and plan replacement ---
       // Capacity state is exclusively profile-based; the candidate legacy
-      // columns are absent from v4 payloads (issue #418).
+      // columns are absent from v4 payloads (issue #418). The pre-#405
+      // `legacy` payload inside each profile is translated into explicit
+      // behavioural provenance during restore (issue #405).
+      const retained = await loadAndValidateRetainedRoleProfiles(tx, projectId, parsedData)
+      await restoreSnapshotCommonState(tx, projectId, parsedData)
+      await recreateV3CapacityProfiles(tx, projectId, parsedData, retained)
+      await restoreSnapshotCapacityPlans(tx, projectId, parsedData.capacityPlans)
+    } else if (isSnapshotV5(parsedData)) {
+      // --- V5: full-state restore + exact profile/segment and plan replacement ---
+      // The current write format (issue #405): explicit provenance replaces
+      // the removed legacy JSON; restore never references or recreates the
+      // dropped CapacityProfile.legacy column.
       const retained = await loadAndValidateRetainedRoleProfiles(tx, projectId, parsedData)
       await restoreSnapshotCommonState(tx, projectId, parsedData)
       await recreateV3CapacityProfiles(tx, projectId, parsedData, retained)

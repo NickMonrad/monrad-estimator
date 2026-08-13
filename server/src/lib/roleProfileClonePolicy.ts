@@ -4,11 +4,12 @@
  * NamedResource POST).
  *
  * Generated named-person profiles are system-derived, not user-authored:
- * they carry a persisted provenance marker in the existing `legacy` JSON
- * (`writer: 'ROLE_DEFAULT'`) and a non-protective `DERIVED` source so the
- * NR classifier recognises them as inherited and a later count reduction
- * may remove them. A user edit through the first-class capacity endpoint
- * flips `source` to `MANUAL`, which the classifier treats as protected.
+ * they carry explicit `provenance = ROLE_DEFAULT` (issue #405; previously
+ * `legacy.writer: 'ROLE_DEFAULT'`) and a non-protective `DERIVED` source so
+ * the NR classifier recognises them as inherited and a later count
+ * reduction may remove them. A user edit through the first-class capacity
+ * endpoint flips `source` to `MANUAL`, which the classifier treats as
+ * protected.
  *
  * ROLE profiles may represent aggregate capacity above 100% (the
  * authoritative validator only caps non-ROLE owners at 100). Such a shape
@@ -17,18 +18,16 @@
  */
 
 import type { Response } from 'express'
+import {
+  CapacityProfileProvenance,
+  isRoleDefaultClone,
+} from './capacityProfileProvenance.js'
 
 /** Persisted provenance marker written onto every generated named-person profile. */
-export const ROLE_DEFAULT_CLONE_LEGACY = { version: 1, writer: 'ROLE_DEFAULT' } as const
-
-export const ROLE_DEFAULT_CLONE_WRITER = 'ROLE_DEFAULT'
+export const ROLE_DEFAULT_CLONE_PROVENANCE = CapacityProfileProvenance.ROLE_DEFAULT
 
 /** Whether a persisted profile was generated from a ROLE default by the system. */
-export function isRoleDefaultClone(profile: { legacy?: unknown }): boolean {
-  const legacy = profile.legacy
-  if (typeof legacy !== 'object' || legacy === null) return false
-  return (legacy as { writer?: unknown }).writer === ROLE_DEFAULT_CLONE_WRITER
-}
+export { isRoleDefaultClone }
 
 /**
  * Typed 400 thrown when a ROLE profile's aggregate capacity cannot be

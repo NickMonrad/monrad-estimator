@@ -436,7 +436,8 @@ describeIf('profile-first runtime cutover (#364)', () => {
       expect(nrProfile!.planningBasis).toBe(roleProfile.planningBasis)
       // Generated profiles carry the shared generation provenance (#403 finding 1)
       expect(nrProfile!.source).toBe('DERIVED')
-      expect(nrProfile!.legacy).toMatchObject({ version: 1, writer: 'ROLE_DEFAULT' })
+      // Generated clones carry explicit ROLE_DEFAULT provenance (issue #405)
+      expect(nrProfile!.provenance).toBe('ROLE_DEFAULT')
       expect(nrProfile!.defaultPercent).toBe(roleProfile.defaultPercent)
       expect(nrProfile!.startWeek).toBe(roleProfile.startWeek)
       expect(nrProfile!.endWeek).toBe(roleProfile.endWeek)
@@ -1481,22 +1482,9 @@ describeIf('profile-first runtime cutover (#364)', () => {
     expect(roleProfile.startWeek).toBeNull()
     expect(roleProfile.endWeek).toBeNull()
 
-    // Verify legacy JSON field
-    const rawProfile = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-      'SELECT legacy FROM "CapacityProfile" WHERE id = $1',
-      roleProfile.id,
-    )
-    const legacy = rawProfile[0]?.legacy as Record<string, unknown> | null
-    expect(legacy).not.toBeNull()
-    expect(legacy).toMatchObject({
-      allocationMode: 'TIMELINE',
-      allocationPercent: 100,
-      allocationPct: null,
-      allocationStartWeek: null,
-      allocationEndWeek: null,
-      startWeek: null,
-      endWeek: null,
-    })
+    // The CSV seed reproduces the strict mapper ROLE pair, so it carries
+    // LEGACY_MAPPER provenance (issue #405).
+    expect(roleProfile.provenance).toBe('LEGACY_MAPPER')
 
     // Create a NR for the CSV-created RT (CSV import does not auto-create one)
     const nrResponse = await request(app)

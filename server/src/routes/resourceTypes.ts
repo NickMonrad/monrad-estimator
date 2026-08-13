@@ -13,7 +13,7 @@ import {
   isPlannerManagedIdentityError,
 } from '../lib/legacyCapacityFieldGuard.js'
 import {
-  ROLE_DEFAULT_CLONE_LEGACY,
+  ROLE_DEFAULT_CLONE_PROVENANCE,
   assertRoleProfileCloneableAsNamedPerson,
   isAggregateRoleCloneError,
   respondAggregateRoleCloneError,
@@ -78,7 +78,9 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     })
     await tx.resourceType.update({ where: { id: created.id }, data: { count: 1 } })
 
-    // Create authoritative ROLE profile with availability-window default (matches TIMELINE/100 compat)
+    // Create authoritative ROLE profile with availability-window default (matches TIMELINE/100 compat).
+    // The seed reproduces the strict mapper (source, planningBasis) shape, so it carries
+    // LEGACY_MAPPER provenance to preserve Squad Planner ROLE adoption parity (issue #405).
     await tx.capacityProfile.create({
       data: {
         ownerKind: 'ROLE',
@@ -90,19 +92,13 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         defaultPercent: 100,
         startWeek: null,
         endWeek: null,
-        legacy: {
-          allocationMode: 'TIMELINE',
-          allocationPercent: 100,
-          allocationPct: null,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          startWeek: null,
-          endWeek: null,
-        },
+        provenance: 'LEGACY_MAPPER',
       },
     })
 
-    // Create authoritative NAMED_PERSON profile for the default named resource
+    // Create authoritative NAMED_PERSON profile for the default named resource.
+    // Same strict-mapper parity: the seed is FIXED/DEMAND_FOLLOWING (EFFORT pair),
+    // so it carries LEGACY_MAPPER provenance.
     await tx.capacityProfile.create({
       data: {
         ownerKind: 'NAMED_PERSON',
@@ -114,15 +110,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         defaultPercent: 100,
         startWeek: null,
         endWeek: null,
-        legacy: {
-          allocationMode: 'EFFORT',
-          allocationPercent: 100,
-          allocationPct: 100,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          startWeek: null,
-          endWeek: null,
-        },
+        provenance: 'LEGACY_MAPPER',
       },
     })
 
@@ -238,13 +226,13 @@ router.patch('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
               namedResourceId: nr.id,
               planningBasis: roleProfile.planningBasis as any,
               // Generated profiles are system-derived: non-protective source
-              // plus a persisted provenance marker so the classifier treats
+              // plus explicit ROLE_DEFAULT provenance so the classifier treats
               // them as inherited and count reduction can remove them.
               source: 'DERIVED' as any,
               defaultPercent: roleProfile.defaultPercent,
               startWeek: roleProfile.startWeek,
               endWeek: roleProfile.endWeek,
-              legacy: ROLE_DEFAULT_CLONE_LEGACY,
+              provenance: ROLE_DEFAULT_CLONE_PROVENANCE as any,
               segments: segs && segs.length > 0
                 ? { create: segs.map((seg: any) => ({
                     startWeek: seg.startWeek,

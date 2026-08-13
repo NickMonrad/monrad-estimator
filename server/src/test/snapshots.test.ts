@@ -30,6 +30,9 @@ import {
 
   type SnapshotV2,
   type SnapshotV3,
+  type SnapshotV4,
+  type SnapshotV5,
+  type SnapshotCapacityProfileV5,
 } from '../lib/projectSnapshotTypes.js'
 import {
   validateSnapshotV3,
@@ -336,6 +339,141 @@ describe('validateSnapshotV3', () => {
     snap.resourceTypes.push(null as never)
     expect(() => validateSnapshotV3(snap)).toThrow(SnapshotValidationError)
   })
+
+  // ── Version-aware capacity-profile discriminator (issue #405) ──────────
+  // V3/V4 profiles carry the legacy SnapshotJsonValue; V5 profiles carry
+  // explicit provenance. Missing or cross-version shapes fail closed.
+
+  it('rejects a V4 profile without legacy', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV4
+    snap.schemaVersion = 4
+    delete (snap.capacityProfiles[0] as Record<string, unknown>).legacy
+    expect(() => validateSnapshotV3(snap)).toThrow(/requires legacy/)
+  })
+
+  it('rejects a V4 profile carrying only V5 provenance shape', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV4
+    snap.schemaVersion = 4
+    const profile = snap.capacityProfiles[0] as Record<string, unknown>
+    delete profile.legacy
+    profile.provenance = 'LEGACY_MAPPER'
+    expect(() => validateSnapshotV3(snap)).toThrow(SnapshotValidationError)
+  })
+
+  it('rejects a V5 profile without provenance', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV5
+    snap.schemaVersion = 5
+    snap.capacityProfiles = [
+      {
+        id: 'cp-1',
+        ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+        segments: [],
+      } as unknown as SnapshotCapacityProfileV5,
+    ]
+    expect(() => validateSnapshotV3(snap)).toThrow(/requires explicit provenance/)
+  })
+
+  it('rejects a V5 profile carrying legacy-shaped data instead of provenance', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV5
+    snap.schemaVersion = 5
+    snap.capacityProfiles = [
+      {
+        id: 'cp-1',
+        ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+        legacy: { kind: 'DB_NULL' },
+        segments: [],
+      } as unknown as SnapshotCapacityProfileV5,
+    ]
+    expect(() => validateSnapshotV3(snap)).toThrow(/legacy is not valid on a V5/)
+  })
+
+  it('rejects an unsupported provenance value on a V5 profile', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV5
+    snap.schemaVersion = 5
+    snap.capacityProfiles = [
+      {
+        id: 'cp-1',
+        ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+        provenance: 'NOT_A_PROVENANCE',
+        segments: [],
+      } as unknown as SnapshotCapacityProfileV5,
+    ]
+    expect(() => validateSnapshotV3(snap)).toThrow(/unsupported provenance/)
+  })
+
+  it('accepts a valid V4 snapshot (legacy discriminator)', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV4
+    snap.schemaVersion = 4
+    expect(() => validateSnapshotV3(snap)).not.toThrow()
+  })
+
+  it('accepts a valid V5 snapshot (provenance discriminator, all values + null)', () => {
+    const snap = makeBaseV3() as unknown as SnapshotV5
+    snap.schemaVersion = 5
+    snap.capacityProfiles = [
+      {
+        id: 'cp-1',
+        ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+        provenance: null,
+        segments: [],
+      },
+      {
+        id: 'cp-2',
+        ownerKind: 'NAMED_PERSON',
+        resourceTypeId: null,
+        namedResourceId: 'nr-alice',
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'SQUAD_PLANNER',
+        defaultPercent: 100,
+        startWeek: 0,
+        endWeek: 10,
+        provenance: 'TRANSFERRED_FROM_SQUAD_PLANNER',
+        segments: [],
+      },
+      {
+        id: 'cp-3',
+        ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev',
+        namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: null,
+        startWeek: null,
+        endWeek: null,
+        provenance: 'LEGACY_MAPPER',
+        segments: [],
+      },
+    ] as unknown as SnapshotCapacityProfileV5[]
+    expect(() => validateSnapshotV3(snap)).not.toThrow()
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -345,9 +483,9 @@ describe('validateSnapshotV3', () => {
 describe('sort helpers', () => {
   it('sortSnapshotProfiles: sorts by ownerKind, owner identity, profile ID', () => {
     const unsorted = [
-      { id: 'z', ownerKind: 'PLANNED_RESOURCE', resourceTypeId: null, namedResourceId: 'a' },
-      { id: 'b', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null },
-      { id: 'a', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null },
+      { id: 'z', ownerKind: 'PLANNED_RESOURCE', resourceTypeId: null, namedResourceId: 'a', planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL', defaultPercent: null, startWeek: null, endWeek: null, provenance: null, segments: [] },
+      { id: 'b', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: null, startWeek: null, endWeek: null, provenance: null, segments: [] },
+      { id: 'a', ownerKind: 'ROLE', resourceTypeId: 'rt-1', namedResourceId: null, planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: null, startWeek: null, endWeek: null, provenance: null, segments: [] },
       { id: 'c', ownerKind: 'NAMED_PERSON', resourceTypeId: null, namedResourceId: 'b' },
       { id: 'd', ownerKind: 'NAMED_PERSON', resourceTypeId: null, namedResourceId: 'a' },
     ] as Parameters<typeof sortSnapshotProfiles>[0]
@@ -392,7 +530,7 @@ describe('buildSnapshot', () => {
         resourceTypeId: null, namedResourceId: 'nr-bob',
         planningBasis: 'WHOLE_PROJECT_ALLOCATION', source: 'MANUAL',
         defaultPercent: null, startWeek: null, endWeek: null,
-        legacy: { oldField: 'value' },
+        provenance: null,
         segments: [
           { id: 'seg-3b', startWeek: 0, endWeek: 2, capacityPercent: 100, source: 'MANUAL' },
           { id: 'seg-3a', startWeek: 0, endWeek: 2, capacityPercent: 50, source: 'MANUAL' },
@@ -402,7 +540,7 @@ describe('buildSnapshot', () => {
         id: 'cp-1', ownerKind: 'ROLE',
         resourceTypeId: 'rt-dev', namedResourceId: null,
         planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-        defaultPercent: null, startWeek: null, endWeek: null, legacy: null,
+        defaultPercent: null, startWeek: null, endWeek: null, provenance: null,
         segments: [],
       },
       {
@@ -410,7 +548,7 @@ describe('buildSnapshot', () => {
         resourceTypeId: null, namedResourceId: 'nr-alice',
         planningBasis: 'AVAILABILITY_WINDOW', source: 'SQUAD_PLANNER',
         defaultPercent: 100, startWeek: 0, endWeek: 10,
-        legacy: { allocationMode: 'EFFORT' },
+        provenance: null,
         segments: [
           { id: 'seg-2c', startWeek: 8, endWeek: 12, capacityPercent: 80, source: 'SQUAD_PLANNER' },
           { id: 'seg-2a', startWeek: 0, endWeek: 4, capacityPercent: 100, source: 'SQUAD_PLANNER' },
@@ -459,17 +597,12 @@ describe('buildSnapshot', () => {
       featureDependency: { findMany: vi.fn().mockResolvedValue([]) },
       projectOverhead: { findMany: vi.fn().mockResolvedValue([]) },
       capacityProfile: { findMany: vi.fn().mockResolvedValue(rawProfiles) },
-      $queryRaw: vi.fn().mockResolvedValue([
-        { id: 'cp-3', legacy_is_null: false, legacy_typeof: 'object' },
-        { id: 'cp-1', legacy_is_null: false, legacy_typeof: 'null' },
-        { id: 'cp-2', legacy_is_null: false, legacy_typeof: 'object' },
-      ]),
     }
 
     const result = await buildSnapshot(projId, db as never)
-    // schemaVersion 4 — v4 snapshots omit the candidate legacy capacity
-    // columns (issue #418); capacity state lives in capacityProfiles.
-    expect(result.schemaVersion).toBe(4)
+    // schemaVersion 5 — the current write format with explicit provenance
+    // (issue #405).
+    expect(result.schemaVersion).toBe(5)
 
     // Project startDate converted to ISO string
     expect(result.project).not.toBeNull()
@@ -488,7 +621,7 @@ describe('buildSnapshot', () => {
     expect(cp2.defaultPercent).toBe(100)
     expect(cp2.startWeek).toBe(0)
     expect(cp2.endWeek).toBe(10)
-    expect(cp2.legacy).toEqual({ kind: 'VALUE', value: { allocationMode: 'EFFORT' } })
+    expect(cp2.provenance).toBeNull()
     expect(cp2.segments.map(s => s.id)).toEqual(['seg-2a', 'seg-2b', 'seg-2c'])
     expect(cp2.segments[0]).toEqual({ id: 'seg-2a', startWeek: 0, endWeek: 4, capacityPercent: 100, source: 'SQUAD_PLANNER' })
     expect(cp2.segments[1].startWeek).toBe(4)
@@ -500,7 +633,7 @@ describe('buildSnapshot', () => {
     expect(cp3.namedResourceId).toBe('nr-bob')
     expect(cp3.planningBasis).toBe('WHOLE_PROJECT_ALLOCATION')
     expect(cp3.source).toBe('MANUAL')
-    expect(cp3.legacy).toEqual({ kind: 'VALUE', value: { oldField: 'value' } })
+    expect(cp3.provenance).toBeNull()
     expect(cp3.segments.map(s => s.id)).toEqual(['seg-3a', 'seg-3b'])
     expect(cp3.segments[0].capacityPercent).toBe(50)
     expect(cp3.segments[1].capacityPercent).toBe(100)
@@ -515,25 +648,33 @@ describe('buildSnapshot', () => {
     expect(cp1.defaultPercent).toBeNull()
     expect(cp1.startWeek).toBeNull()
     expect(cp1.endWeek).toBeNull()
-    expect(cp1.legacy).toEqual({ kind: 'JSON_NULL' })
+    expect(cp1.provenance).toBeNull()
     expect(cp1.segments).toEqual([])
   })
-  it('distinguishes DB_NULL from JSON_NULL via legacy_is_null query', async () => {
+  it('round-trips explicit provenance values', async () => {
     const rawProfiles = [
       {
-        id: 'cp-dbn', ownerKind: 'ROLE',
-        resourceTypeId: 'rt-dev', namedResourceId: null,
-        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-        defaultPercent: null, startWeek: null, endWeek: null,
-        legacy: null,
+        id: 'cp-role-default', ownerKind: 'NAMED_PERSON',
+        resourceTypeId: null, namedResourceId: 'nr-alice',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'DERIVED',
+        defaultPercent: 100, startWeek: 0, endWeek: 10,
+        provenance: 'ROLE_DEFAULT',
         segments: [],
       },
       {
-        id: 'cp-jn', ownerKind: 'NAMED_PERSON',
-        resourceTypeId: null, namedResourceId: 'nr-alice',
-        planningBasis: 'AVAILABILITY_WINDOW', source: 'SQUAD_PLANNER',
+        id: 'cp-opt', ownerKind: 'NAMED_PERSON',
+        resourceTypeId: null, namedResourceId: 'nr-bob',
+        planningBasis: 'AVAILABILITY_WINDOW', source: 'DERIVED',
         defaultPercent: 100, startWeek: 0, endWeek: 10,
-        legacy: null,
+        provenance: 'RESOURCE_OPTIMISER',
+        segments: [],
+      },
+      {
+        id: 'cp-null', ownerKind: 'ROLE',
+        resourceTypeId: 'rt-dev', namedResourceId: null,
+        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
+        defaultPercent: null, startWeek: null, endWeek: null,
+        provenance: null,
         segments: [],
       },
     ]
@@ -556,6 +697,11 @@ describe('buildSnapshot', () => {
             allocationMode: 'EFFORT', allocationPercent: 100,
             allocationStartWeek: null, allocationEndWeek: null,
             pricingModel: 'ACTUAL_DAYS' },
+          { id: 'nr-bob', resourceTypeId: 'rt-dev', name: 'Bob',
+            startWeek: null, endWeek: null, allocationPct: 100,
+            allocationMode: 'EFFORT', allocationPercent: 100,
+            allocationStartWeek: null, allocationEndWeek: null,
+            pricingModel: 'ACTUAL_DAYS' },
         ]),
       },
       timelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
@@ -564,83 +710,23 @@ describe('buildSnapshot', () => {
       featureDependency: { findMany: vi.fn().mockResolvedValue([]) },
       projectOverhead: { findMany: vi.fn().mockResolvedValue([]) },
       capacityProfile: { findMany: vi.fn().mockResolvedValue(rawProfiles) },
-      // cp-dbn maps to DB_NULL (legacy_is_null=true), cp-jn to JSON_NULL (legacy_typeof='null')
-      $queryRaw: vi.fn().mockResolvedValue([
-        { id: 'cp-dbn', legacy_is_null: true, legacy_typeof: null },
-        { id: 'cp-jn', legacy_is_null: false, legacy_typeof: 'null' },
-      ]),
     }
 
     const result = await buildSnapshot(projId, db as never)
 
-    const cpDbn = result.capacityProfiles.find(p => p.id === 'cp-dbn')
-    expect(cpDbn).toBeDefined()
-    expect(cpDbn!.legacy).toEqual({ kind: 'DB_NULL' })
+    const cpRoleDefault = result.capacityProfiles.find(p => p.id === 'cp-role-default')
+    expect(cpRoleDefault).toBeDefined()
+    expect(cpRoleDefault!.provenance).toBe('ROLE_DEFAULT')
 
-    const cpJn = result.capacityProfiles.find(p => p.id === 'cp-jn')
-    expect(cpJn).toBeDefined()
-    expect(cpJn!.legacy).toEqual({ kind: 'JSON_NULL' })
+    const cpOpt = result.capacityProfiles.find(p => p.id === 'cp-opt')
+    expect(cpOpt).toBeDefined()
+    expect(cpOpt!.provenance).toBe('RESOURCE_OPTIMISER')
+
+    const cpNull = result.capacityProfiles.find(p => p.id === 'cp-null')
+    expect(cpNull).toBeDefined()
+    expect(cpNull!.provenance).toBeNull()
   })
 
-  it('rejects buildSnapshot on $queryRaw failure', async () => {
-    const db = {
-      epic: { findMany: vi.fn().mockResolvedValue([]) },
-      project: { findUnique: vi.fn().mockResolvedValue(null) },
-      resourceType: { findMany: vi.fn().mockResolvedValue([]) },
-      namedResource: { findMany: vi.fn().mockResolvedValue([]) },
-      timelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
-      storyTimelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
-      epicDependency: { findMany: vi.fn().mockResolvedValue([]) },
-      featureDependency: { findMany: vi.fn().mockResolvedValue([]) },
-      projectOverhead: { findMany: vi.fn().mockResolvedValue([]) },
-      capacityProfile: { findMany: vi.fn().mockResolvedValue([{
-        id: 'cp-1', ownerKind: 'ROLE',
-        resourceTypeId: 'rt-dev', namedResourceId: null,
-        planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-        defaultPercent: null, startWeek: null, endWeek: null,
-        legacy: null, segments: [],
-      }]) },
-      $queryRaw: vi.fn().mockRejectedValue(new Error('DB connection lost')),
-    }
-
-    await expect(buildSnapshot(projId, db as never)).rejects.toThrow('DB connection lost')
-  })
-
-  it('rejects buildSnapshot when null-state rows are fewer than profiles', async () => {
-    const db = {
-      epic: { findMany: vi.fn().mockResolvedValue([]) },
-      project: { findUnique: vi.fn().mockResolvedValue(null) },
-      resourceType: { findMany: vi.fn().mockResolvedValue([]) },
-      timelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
-      storyTimelineEntry: { findMany: vi.fn().mockResolvedValue([]) },
-      epicDependency: { findMany: vi.fn().mockResolvedValue([]) },
-      featureDependency: { findMany: vi.fn().mockResolvedValue([]) },
-      projectOverhead: { findMany: vi.fn().mockResolvedValue([]) },
-      capacityProfile: { findMany: vi.fn().mockResolvedValue([
-        { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: 'rt-dev', namedResourceId: null,
-          planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-          defaultPercent: null, startWeek: null, endWeek: null,
-          legacy: null, segments: [] },
-        { id: 'cp-2', ownerKind: 'NAMED_PERSON', resourceTypeId: null, namedResourceId: 'nr-alice',
-          planningBasis: 'AVAILABILITY_WINDOW', source: 'SQUAD_PLANNER',
-          defaultPercent: 100, startWeek: 0, endWeek: 10,
-          legacy: null, segments: [] },
-      ]) },
-      namedResource: { findMany: vi.fn().mockResolvedValue([
-        { id: 'nr-alice', resourceTypeId: 'rt-dev', name: 'Alice',
-          startWeek: null, endWeek: null, allocationPct: 100,
-          allocationMode: 'EFFORT', allocationPercent: 100,
-          allocationStartWeek: null, allocationEndWeek: null,
-          pricingModel: 'ACTUAL_DAYS' },
-      ]) },
-      // Only 1 row for 2 profiles — triggers missing profile error
-      $queryRaw: vi.fn().mockResolvedValue([
-        { id: 'cp-1', legacy_is_null: false, legacy_typeof: 'null' },
-      ]),
-    }
-
-    await expect(buildSnapshot(projId, db as never)).rejects.toThrow('Missing null-state row')
-  })
   it('rejects ROLE with null resourceTypeId', async () => {
     const rawProfiles = [
       {
@@ -756,14 +842,14 @@ describe('buildSnapshot', () => {
         resourceTypeId: 'rt-dev', namedResourceId: null,
         planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
         defaultPercent: null, startWeek: null, endWeek: null,
-        legacy: null, segments: [],
+        provenance: null, segments: [],
       },
       {
         id: 'cp-d2', ownerKind: 'ROLE',
         resourceTypeId: 'rt-dev', namedResourceId: null,
         planningBasis: 'AVAILABILITY_WINDOW', source: 'MANUAL',
         defaultPercent: 50, startWeek: 2, endWeek: 6,
-        legacy: null, segments: [],
+        provenance: null, segments: [],
       },
     ]
     const db = {
@@ -785,10 +871,6 @@ describe('buildSnapshot', () => {
       featureDependency: { findMany: vi.fn().mockResolvedValue([]) },
       projectOverhead: { findMany: vi.fn().mockResolvedValue([]) },
       capacityProfile: { findMany: vi.fn().mockResolvedValue(rawProfiles) },
-      $queryRaw: vi.fn().mockResolvedValue([
-        { id: 'cp-d1', legacy_is_null: false, legacy_typeof: 'null' },
-        { id: 'cp-d2', legacy_is_null: false, legacy_typeof: 'null' },
-      ]),
     }
     const result = await buildSnapshot(projId, db as never)
     expect(result.capacityProfiles).toHaveLength(2)
@@ -1294,7 +1376,7 @@ describe('POST /api/projects/:projectId/snapshots/:snapshotId/rollback', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('route persistence on buildSnapshot failure', () => {
-  it('manual POST persists nothing on $queryRaw failure', async () => {
+  it('manual POST persists nothing on profile-load failure', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({ id: projId, ownerId: userId } as never)
     // Provide minimal data for buildSnapshot queries
     vi.mocked(prisma.project.findUnique).mockResolvedValue({
@@ -1307,13 +1389,8 @@ describe('route persistence on buildSnapshot failure', () => {
     vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([])
     vi.mocked(prisma.featureDependency.findMany).mockResolvedValue([])
     vi.mocked(prisma.projectOverhead.findMany).mockResolvedValue([])
-    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
-      { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: null, namedResourceId: null,
-        legacy: null },
-    ] as never)
-    // $queryRaw rejects → buildSnapshot throws
-    const mockQueryRaw = vi.fn().mockRejectedValue(new Error('Query failure'))
-    ;(prisma as unknown as Record<string, unknown>).$queryRaw = mockQueryRaw
+    // profile load rejects → buildSnapshot throws
+    vi.mocked(prisma.capacityProfile.findMany).mockRejectedValue(new Error('Query failure'))
 
     const bsCreate = vi.mocked(prisma.backlogSnapshot.create)
     const bsDeleteMany = vi.mocked(prisma.backlogSnapshot.deleteMany)
@@ -1326,8 +1403,6 @@ describe('route persistence on buildSnapshot failure', () => {
     expect(res.status).toBe(500)
     expect(bsCreate).not.toHaveBeenCalled()
     expect(bsDeleteMany).not.toHaveBeenCalled()
-
-    delete (prisma as unknown as Record<string, unknown>).$queryRaw
   })
 
   it('rollback transaction aborts before destructive restore on buildSnapshot failure', async () => {
@@ -1362,15 +1437,11 @@ describe('route persistence on buildSnapshot failure', () => {
 
     vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
       const tx = makeRouteTx({
-        $queryRaw: vi.fn().mockRejectedValue(new Error('Null-state query failure')),
         backlogSnapshot: { create: bsCreate, findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
         capacityProfile: {
-          findMany: vi.fn().mockResolvedValue([
-            { id: 'cp-1', ownerKind: 'ROLE', resourceTypeId: null, namedResourceId: null,
-              planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED',
-              defaultPercent: null, startWeek: null, endWeek: null,
-              legacy: null, segments: [] },
-          ]),
+          // Profile load rejects → the pre-rollback buildSnapshot throws
+          // before any destructive restore (issue #405: no raw SQL involved).
+          findMany: vi.fn().mockRejectedValue(new Error('profile load failure')),
           deleteMany: cpDelete, create: vi.fn(),
         },
         epic: { findMany: vi.fn().mockResolvedValue([]), deleteMany: epicDel },

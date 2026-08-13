@@ -14,8 +14,8 @@
  * Transferred planned resources (Squad Planner → manual, #411) keep their
  * identity and preserved profile data but contribute zero capacity while a
  * manual ROLE CAPACITY_PROFILE profile is the scheduling authority. The
- * suppression is driven by the persisted transfer provenance marker
- * (legacy.writer === 'transfer-to-manual'), never by legacy column values.
+ * suppression is driven by the explicit TRANSFERRED_FROM_SQUAD_PLANNER
+ * provenance (issue #405), never by legacy column values.
  *
  * Keeps scheduler.ts pure (no Prisma dependency).
  */
@@ -292,15 +292,15 @@ export async function resolveSchedulerCapacity(
 
       // After Squad Planner → manual transfer (issue #411):
       // The ROLE profile is the sole scheduling authority. ONLY planned-resource
-      // profiles carrying the #411 transfer provenance marker (legacy writer
-      // 'transfer-to-manual') retain their identity and segment data but must
-      // not contribute independent capacity while a valid MANUAL ROLE
-      // CAPACITY_PROFILE exists. An independently authored manual planned-resource
-      // profile without that marker remains scheduler-authoritative.
+      // profiles carrying TRANSFERRED_FROM_SQUAD_PLANNER provenance retain
+      // their identity and segment data but must not contribute independent
+      // capacity while a valid MANUAL ROLE CAPACITY_PROFILE exists. An
+      // independently authored manual planned-resource profile without that
+      // provenance remains scheduler-authoritative.
       const isTransferredPlannedResource =
         nrProfile.resourceIdentity === 'PLANNED_RESOURCE' &&
         nrProfile.source === 'manual' &&
-        nrProfile.legacyWriter === 'transfer-to-manual' &&
+        nrProfile.provenance === 'TRANSFERRED_FROM_SQUAD_PLANNER' &&
         roleProfile?.source === 'manual' &&
         roleProfile?.planningBasis === 'capacityProfile' &&
         roleProfileValid

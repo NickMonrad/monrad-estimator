@@ -6,9 +6,12 @@
  *   v2 — Full project state with schemaVersion: 2
  *   v3 — V2 + capacityProfiles + optional exact capacityPlans/weeklyDemandCache
  *   v4 — V3 without the candidate ResourceType/NamedResource legacy capacity
- *        fields (issue #418). New snapshots are v4; v1/v2/v3 remain readable
- *        historical input. Capacity state lives exclusively in
- *        capacityProfiles/capacitySegments.
+ *        fields (issue #418). V4 remains the minimum supported/restorable
+ *        historical format; its capacityProfiles carry the pre-#405 `legacy`
+ *        payload which restore translates into explicit provenance.
+ *   v5 — the current write format (issue #405): V4 project/profile contract
+ *        with explicit CapacityProfile `provenance` replacing `legacy`.
+ *        V1/V2/V3 remain non-restorable historical input.
  *
  * All types mirror the shapes produced by buildSnapshot() selects and consumed
  * by the rollback restore code.
@@ -77,6 +80,13 @@ export type CapacityProfileSourceEnum =
   | 'IMPORTED'
   | 'DERIVED'
   | 'LEGACY'
+
+/** Explicit behavioural provenance (issue #405); mirrors $Enums.CapacityProfileProvenance. */
+export type CapacityProfileProvenanceEnum =
+  | 'LEGACY_MAPPER'
+  | 'ROLE_DEFAULT'
+  | 'RESOURCE_OPTIMISER'
+  | 'TRANSFERRED_FROM_SQUAD_PLANNER'
 
 // ─── Epic tree types (v1/v2/v3) ──────────────────────────────────────────────
 
@@ -240,6 +250,25 @@ export type SnapshotCapacityProfile = {
   legacy: SnapshotJsonValue
   segments: SnapshotCapacitySegment[]
 }
+
+/**
+ * V5 capacity profile (issue #405): the explicit behavioural provenance
+ * replaces the overloaded `legacy` payload. `null` when no special
+ * provenance applies.
+ */
+export type SnapshotCapacityProfileV5 = {
+  id: string
+  ownerKind: CapacityProfileOwnerKindEnum
+  resourceTypeId: string | null
+  namedResourceId: string | null
+  planningBasis: CapacityProfilePlanningBasisEnum
+  source: CapacityProfileSourceEnum
+  defaultPercent: number | null
+  startWeek: number | null
+  endWeek: number | null
+  provenance: CapacityProfileProvenanceEnum | null
+  segments: SnapshotCapacitySegment[]
+}
 export type SnapshotCapacityPlanEntry = {
   id: string
   resourceTypeId: string
@@ -323,7 +352,17 @@ export type SnapshotV4 = Omit<SnapshotV3, 'schemaVersion' | 'resourceTypes' | 'n
   namedResources: SnapshotNamedResourceV4[]
 }
 
-export type SnapshotData = SnapshotV1 | SnapshotV2 | SnapshotV3 | SnapshotV4
+/**
+ * V5 (issue #405): the current V4 project/profile snapshot contract with
+ * explicit `provenance` replacing the removed `legacy` JSON payload. All new
+ * snapshots are V5; V4 remains restorable as the minimum historical format.
+ */
+export type SnapshotV5 = Omit<SnapshotV4, 'schemaVersion' | 'capacityProfiles'> & {
+  schemaVersion: 5
+  capacityProfiles: SnapshotCapacityProfileV5[]
+}
+
+export type SnapshotData = SnapshotV1 | SnapshotV2 | SnapshotV3 | SnapshotV4 | SnapshotV5
 
 // ─── Error class ─────────────────────────────────────────────────────────────
 
@@ -404,6 +443,24 @@ export function isSnapshotV4(value: unknown): value is SnapshotV4 {
   )
 }
 
+export function isSnapshotV5(value: unknown): value is SnapshotV5 {
+  if (typeof value !== 'object' || value === null) return false
+  const obj = value as Record<string, unknown>
+  if (obj.schemaVersion !== 5) return false
+  return (
+    Array.isArray(obj.epics) &&
+    (obj.project === null || typeof obj.project === 'object') &&
+    Array.isArray(obj.resourceTypes) &&
+    Array.isArray(obj.namedResources) &&
+    Array.isArray(obj.timelineEntries) &&
+    Array.isArray(obj.storyTimelineEntries) &&
+    Array.isArray(obj.epicDependencies) &&
+    Array.isArray(obj.featureDependencies) &&
+    Array.isArray(obj.overheadItems) &&
+    Array.isArray(obj.capacityProfiles)
+  )
+}
+
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 
 /**
@@ -414,6 +471,7 @@ export function isSnapshotV4(value: unknown): value is SnapshotV4 {
  * - schemaVersion 2 → SnapshotV2.
  * - schemaVersion 3 → SnapshotV3.
  * - schemaVersion 4 → SnapshotV4.
+ * - schemaVersion 5 → SnapshotV5.
  * - Unknown schemaVersion → SnapshotSchemaError.
  * - Malformed → SnapshotSchemaError.
  *
@@ -443,6 +501,11 @@ export function parseSnapshotData(value: unknown): SnapshotData {
   }
 
   const sv = obj.schemaVersion
+
+  if (sv === 5) {
+    if (isSnapshotV5(value)) return value as SnapshotV5
+    throw new SnapshotSchemaError('Data has schemaVersion 5 but structure is invalid')
+  }
 
   if (sv === 4) {
     if (isSnapshotV4(value)) return value as SnapshotV4

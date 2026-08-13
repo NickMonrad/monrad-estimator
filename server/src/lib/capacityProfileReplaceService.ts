@@ -12,7 +12,6 @@
  * - `replaceCapacityProfile` — Replace/create a profile for a single owner (PUT handler).
  */
 
-import { projectCapacityProfileToLegacyAllocation } from './capacityProfileLegacyProjection.js'
 import { mapPersistedProfilesToDTOs } from './capacityProfileMapping.js'
 import type { CapacityProfileDTO } from './capacityProfileMapping.js'
 import { loadAndValidateOwnerProfile, type ValidatedOwnerProfile } from './ownerProfileLoader.js'
@@ -328,7 +327,7 @@ export async function replaceCapacityProfile(
   }
 
 
-  // Track persisted profile ID for legacy metadata
+  // Track the persisted profile ID for the provenance clear below
   const profileId = existingId ?? (ownerKind === 'ROLE'
     ? (await tx.capacityProfile.findFirstOrThrow({
         where: { resourceTypeId: ownerId, namedResourceId: null, projectId },
@@ -341,37 +340,18 @@ export async function replaceCapacityProfile(
         orderBy: { createdAt: 'desc' },
       })).id
   )
-  // ── 6. Project the new profile for provenance metadata ───────────────
-  const camelPlanningBasis = planningBasis.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
-
-  const projectionInput = {
-    planningBasis: camelPlanningBasis,
-    source: 'manual',
-    defaultPercent: defaultPercent ?? null,
-    startWeek: startWeek !== undefined ? startWeek : null,
-    endWeek: endWeek !== undefined ? endWeek : null,
-    segments: sortedSegments.map(s => ({
-      startWeek: s.startWeek,
-      endWeek: s.endWeek,
-      capacityPercent: s.capacityPercent,
-    })),
-  }
-
-  const projection = projectCapacityProfileToLegacyAllocation(projectionInput)
-
   // ── 7. Keep inherited named-resource profiles tracking the role default ─
-  // The profile-first equivalent of the retired legacy-column projection
-  // (issue #418): inherited system-generated clones (ROLE_DEFAULT marker)
+  // Inherited system-generated clones (ROLE_DEFAULT provenance)
   // mirror the new role profile shape so a later count reduction can still
   // classify them as inherited. Segment IDs are preserved by updating
-  // existing segments in place; provenance (source, legacy writer marker) is
+  // existing segments in place; the clone's ROLE_DEFAULT provenance is
   // untouched so generated clones remain removable. Sync-derived scalar
   // profiles without the marker are left untouched — their classification
   // follows the authoritative profile-shape comparison.
   if (ownerKind === 'ROLE' && inheritedNRProfiles.length > 0) {
     const sortedRoleSegments = [...sortedSegments].map((s, idx) => ({ ...s, idx }))
     for (const inheritedProfile of inheritedNRProfiles) {
-      if (!isRoleDefaultClone({ legacy: (inheritedProfile as { legacy?: unknown }).legacy })) continue
+      if (!isRoleDefaultClone({ provenance: (inheritedProfile as { provenance?: unknown }).provenance })) continue
       await tx.capacityProfile.update({
         where: { id: inheritedProfile.id },
         data: {
@@ -419,22 +399,15 @@ export async function replaceCapacityProfile(
     }
   }
 
-  // ── 8. Persist lossy projection metadata ──────────────────────────────
-  if (projection && profileId) {
+  // ── 8. Clear behavioural provenance on the manually replaced profile ──
+  // A manual replace is an ordinary user-authored write (issue #405): the
+  // profile no longer carries any special provenance (mapper-derived,
+  // optimiser-owned or transferred) even when it previously did. Inherited
+  // ROLE_DEFAULT clones keep their marker via step 7 above.
+  if (profileId) {
     await tx.capacityProfile.update({
       where: { id: profileId },
-      data: {
-        legacy: {
-          version: 1,
-          writer: 'manual-editor',
-          allocationMode: projection.allocationMode,
-          allocationPercent: projection.allocationPercent ?? 100,
-          allocationStartWeek: projection.allocationStartWeek,
-          allocationEndWeek: projection.allocationEndWeek,
-          lossy: projection.lossy,
-          lossReason: projection.lossReason ?? null,
-        },
-      },
+      data: { provenance: null },
     })
   }
 

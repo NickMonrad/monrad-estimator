@@ -294,15 +294,7 @@ async function createMapperRoleProfile(projectId: string, resourceTypeId: string
       defaultPercent: 100,
       startWeek: null,
       endWeek: null,
-      legacy: {
-        allocationMode: 'TIMELINE',
-        allocationPercent: 100,
-        allocationPct: null,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        startWeek: null,
-        endWeek: null,
-      },
+      provenance: 'LEGACY_MAPPER',
     },
   })
 }
@@ -323,15 +315,7 @@ async function createMapperPersonProfile(projectId: string, namedResourceId: str
       defaultPercent: 100,
       startWeek: null,
       endWeek: null,
-      legacy: {
-        allocationMode: 'EFFORT',
-        allocationPercent: 100,
-        allocationPct: 100,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-        startWeek: null,
-        endWeek: null,
-      },
+      provenance: 'LEGACY_MAPPER',
     },
   })
 }

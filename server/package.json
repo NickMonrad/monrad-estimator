@@ -28,7 +28,9 @@
     "test:transfer-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileTransfer.integration.test.ts",
     "postinstall": "prisma generate",
     "test:legacy-alias-removal-integration": "vitest run --config vitest.integration.config.ts src/test/legacyCapacityAliasRemoval.integration.test.ts",
-    "test:planning-reset-integration": "vitest run --config vitest.integration.config.ts src/test/planningReset.integration.test.ts"
+    "test:planning-reset-integration": "vitest run --config vitest.integration.config.ts src/test/planningReset.integration.test.ts",
+    "test:provenance-migration-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileProvenanceMigration.integration.test.ts",
+    "test:provenance-snapshot-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileProvenanceSnapshots.integration.test.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

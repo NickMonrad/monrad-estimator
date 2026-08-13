@@ -11,8 +11,8 @@
  */
 
 import { Prisma } from '@prisma/client'
-import type { SnapshotV2, SnapshotV3, SnapshotV4, SnapshotResourceType, SnapshotNamedResource } from './projectSnapshotTypes.js'
-import { snapshotJsonValueToPrisma } from './projectSnapshotTypes.js'
+import type { SnapshotV2, SnapshotV3, SnapshotV4, SnapshotV5, SnapshotResourceType, SnapshotNamedResource, SnapshotCapacityProfile, CapacityProfileProvenanceEnum } from './projectSnapshotTypes.js'
+import { legacyProvenanceOf } from './capacityProfileProvenance.js'
 import { validatePersistedCapacityProfiles } from './persistedCapacityProfileValidation.js'
 
 // ─── Narrow transaction interface ────────────────────────────────────────────
@@ -52,9 +52,8 @@ export interface RetainedRoleProfile {
   defaultPercent: number | null
   startWeek: number | null
   endWeek: number | null
-  /** Exact persisted legacy semantics (DB_NULL vs JSON_NULL vs VALUE). */
-  legacyKind: 'DB_NULL' | 'JSON_NULL' | 'VALUE'
-  legacy: unknown
+  /** Explicit behavioural provenance (issue #405); null when none applies. */
+  provenance: string | null
   segments: Array<{
     id: string
     startWeek: number
@@ -77,7 +76,7 @@ export interface RetainedRoleProfilesResult {
  * write so malformed surviving ownership fails before state changes.
  */
 export async function loadRetainedRoleProfiles(
-  tx: Pick<Prisma.TransactionClient, 'resourceType' | 'capacityProfile' | '$queryRaw'>,
+  tx: Pick<Prisma.TransactionClient, 'resourceType' | 'capacityProfile'>,
   projectId: string,
   snapshotResourceTypeIds: ReadonlySet<string>,
 ): Promise<RetainedRoleProfilesResult> {
@@ -104,21 +103,6 @@ export async function loadRetainedRoleProfiles(
       },
     },
   })
-  // Prisma collapses SQL NULL and jsonb 'null' to JS null; query the exact
-  // persisted legacy semantics so the round-trip preserves DB_NULL vs
-  // JSON_NULL vs VALUE (mirrors the ownership-audit null semantics).
-  const legacyKindById = new Map<string, 'DB_NULL' | 'JSON_NULL' | 'VALUE'>()
-  if (rows.length > 0) {
-    const raw = await tx.$queryRaw<Array<{ id: string; legacy_is_null: boolean; legacy_json_null: boolean }>>(
-      Prisma.sql`SELECT cp.id, cp.legacy IS NULL AS legacy_is_null, cp.legacy = 'null'::jsonb AS legacy_json_null FROM "CapacityProfile" cp WHERE cp.id IN (${Prisma.join(rows.map(row => row.id))})`,
-    )
-    for (const row of raw) {
-      legacyKindById.set(
-        row.id,
-        row.legacy_is_null ? 'DB_NULL' : row.legacy_json_null ? 'JSON_NULL' : 'VALUE',
-      )
-    }
-  }
   return {
     retainedResourceTypeIds,
     profiles: rows.map(row => ({
@@ -132,8 +116,7 @@ export async function loadRetainedRoleProfiles(
       defaultPercent: row.defaultPercent,
       startWeek: row.startWeek,
       endWeek: row.endWeek,
-      legacyKind: legacyKindById.get(row.id) ?? 'VALUE',
-      legacy: row.legacy,
+      provenance: row.provenance,
       segments: row.segments.map(seg => ({
         id: seg.id,
         startWeek: seg.startWeek,
@@ -227,7 +210,8 @@ export interface TranslatedV2Profile {
   defaultPercent: number | null
   startWeek: number | null
   endWeek: number | null
-  legacy: Record<string, unknown>
+  /** V2-translated profiles carry no behavioural provenance (issue #405). */
+  provenance: null
 }
 
 export interface V2TranslationResult {
@@ -735,12 +719,7 @@ export function translateV2SnapshotProfiles(
       defaultPercent: roleDefaultPercent,
       startWeek: roleStartWeek,
       endWeek: roleEndWeek,
-      legacy: {
-        allocationMode: rt.allocationMode,
-        allocationPercent: rt.allocationPercent,
-        allocationStartWeek: rt.allocationStartWeek,
-        allocationEndWeek: rt.allocationEndWeek,
-      },
+      provenance: null,
     })
   }
 
@@ -814,15 +793,7 @@ export function translateV2SnapshotProfiles(
       defaultPercent: namedDefaultPercent,
       startWeek: namedStartWeek,
       endWeek: namedEndWeek,
-      legacy: {
-        allocationMode: mode,
-        allocationPct: nr.allocationPct,
-        allocationPercent: nr.allocationPercent,
-        allocationStartWeek: nr.allocationStartWeek,
-        allocationEndWeek: nr.allocationEndWeek,
-        startWeek: nr.startWeek,
-        endWeek: nr.endWeek,
-      },
+      provenance: null,
     })
   }
 
@@ -874,7 +845,7 @@ export async function recreateV2CapacityProfiles(
         defaultPercent: profile.defaultPercent,
         startWeek: profile.startWeek,
         endWeek: profile.endWeek,
-        legacy: profile.legacy as never,
+        provenance: profile.provenance,
       },
     })
   }
@@ -887,18 +858,25 @@ export async function recreateV2CapacityProfiles(
 // ─── V3 rollback: exact profile/segment replacement ──────────────────────────
 
 /**
- * During V3/V4 rollback, after restoring all common v2 state (RTs, NRs, epics,
+ * During V3/V4/V5 rollback, after restoring all common v2 state (RTs, NRs, epics,
  * etc.), delete ALL current project capacity profiles/segments and recreate
  * each target profile with exact IDs, projectId forced to the route projectId,
- * owner IDs, enum values, nulls, and legacy. Every segment is recreated with
- * exact id, profile FK, values, and source.
+ * owner IDs, enum values, nulls, and explicit behavioural provenance
+ * (issue #405). Every segment is recreated with exact id, profile FK, values,
+ * and source.
+ *
+ * V3/V4 profiles carry the pre-#405 `legacy` payload; restore deterministically
+ * translates recognised legacy provenance with the same rules as the database
+ * migration (`snapshotLegacyToProvenance`) and discards JSON with no current
+ * behavioural contract. V5 profiles persist provenance directly. The removed
+ * `legacy` database column is never referenced or recreated.
  *
  * This is an exact replacement — no broad legacy sync afterward.
  */
 export async function recreateV3CapacityProfiles(
   tx: CapacityProfileTxClient,
   projectId: string,
-  v3: SnapshotV3 | SnapshotV4,
+  v3: SnapshotV3 | SnapshotV4 | SnapshotV5,
   retainedProfiles: RetainedRoleProfile[] = [],
 ): Promise<void> {
   // Delete existing segments then profiles (segments cascade but we delete both
@@ -920,7 +898,9 @@ export async function recreateV3CapacityProfiles(
         defaultPercent: profile.defaultPercent,
         startWeek: profile.startWeek,
         endWeek: profile.endWeek,
-        legacy: snapshotJsonValueToPrisma(profile.legacy),
+        provenance: 'legacy' in profile
+          ? snapshotLegacyToProvenance(profile)
+          : profile.provenance,
       },
     })
 
@@ -943,18 +923,29 @@ export async function recreateV3CapacityProfiles(
   await recreateRetainedRoleProfiles(tx, projectId, retainedProfiles)
 }
 
-/** Convert a retained profile's exact legacy semantics to the Prisma write value. */
-function retainedLegacyToPrisma(
-  profile: RetainedRoleProfile,
-): Prisma.NullableJsonNullValueInput | Prisma.InputJsonValue {
-  switch (profile.legacyKind) {
-    case 'DB_NULL':
-      return Prisma.DbNull
-    case 'JSON_NULL':
-      return Prisma.JsonNull
-    default:
-      return profile.legacy as Prisma.InputJsonValue
-  }
+/**
+ * Deterministically translate a V3/V4 snapshot profile's pre-#405 `legacy`
+ * payload into explicit behavioural provenance using the same rules as the
+ * #405 database migration. DB_NULL/JSON_NULL payloads and JSON with no
+ * current behavioural contract translate to null (discarded).
+ */
+export function snapshotLegacyToProvenance(
+  profile: SnapshotCapacityProfile,
+): CapacityProfileProvenanceEnum | null {
+  const legacy = profile.legacy
+  if (legacy.kind !== 'VALUE') return null
+  if (typeof legacy.value !== 'object' || legacy.value === null || Array.isArray(legacy.value)) return null
+  return legacyProvenanceOf({
+    ownerKind: profile.ownerKind,
+    source: profile.source,
+    planningBasis: profile.planningBasis,
+    resourceTypeId: profile.resourceTypeId,
+    namedResourceId: profile.namedResourceId,
+    defaultPercent: profile.defaultPercent,
+    startWeek: profile.startWeek,
+    endWeek: profile.endWeek,
+    legacy: legacy.value,
+  })
 }
 
 /** Re-create retained post-snapshot ROLE profiles with exact IDs and segments. */
@@ -976,7 +967,7 @@ async function recreateRetainedRoleProfiles(
         defaultPercent: profile.defaultPercent,
         startWeek: profile.startWeek,
         endWeek: profile.endWeek,
-        legacy: retainedLegacyToPrisma(profile),
+        provenance: profile.provenance as never,
       },
     })
     for (const seg of profile.segments) {

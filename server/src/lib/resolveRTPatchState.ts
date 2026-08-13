@@ -53,7 +53,7 @@ export interface CapacityProfileRecord {
   defaultPercent: number | null
   startWeek: number | null
   endWeek: number | null
-  legacy: unknown
+  provenance: string | null
   namedResourceId: string | null
   resourceTypeId: string | null
   segments: SegmentRecord[]

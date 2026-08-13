@@ -13,7 +13,7 @@ import {
   isPlannerManagedIdentityError,
 } from '../lib/legacyCapacityFieldGuard.js'
 import {
-  ROLE_DEFAULT_CLONE_LEGACY,
+  ROLE_DEFAULT_CLONE_PROVENANCE,
   assertRoleProfileCloneableAsNamedPerson,
   isAggregateRoleCloneError,
   respondAggregateRoleCloneError,
@@ -158,7 +158,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       // The new person inherits the authoritative ROLE profile (planning
       // basis, percentage, window, segments) with the same generation
       // provenance policy as ResourceType count increase: non-protective
-      // DERIVED source plus a persisted ROLE_DEFAULT writer marker.
+      // DERIVED source plus explicit ROLE_DEFAULT provenance.
       const segments = roleProfile.segments ?? []
       await tx.capacityProfile.create({
         data: {
@@ -171,7 +171,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           defaultPercent: roleProfile.defaultPercent,
           startWeek: roleProfile.startWeek,
           endWeek: roleProfile.endWeek,
-          legacy: ROLE_DEFAULT_CLONE_LEGACY,
+          provenance: ROLE_DEFAULT_CLONE_PROVENANCE as any,
           segments: segments.length > 0
             ? { create: segments.map((seg: any) => ({
                 startWeek: seg.startWeek,

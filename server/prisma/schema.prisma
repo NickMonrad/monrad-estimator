@@ -190,6 +190,24 @@ enum CapacityProfileSource {
   LEGACY
 }
 
+/// Explicit behavioural provenance of a capacity profile (issue #405).
+///
+/// Records why a profile receives special treatment beyond what `source`
+/// alone can express. Profiles with no special provenance store `null`.
+/// This is NOT a generic metadata bag — only these four meanings exist.
+enum CapacityProfileProvenance {
+  /// Recognised legacy mapper/backfill-derived profile (strict contract only).
+  LEGACY_MAPPER
+  /// System-generated NAMED_PERSON clone of a ROLE default (count increase /
+  /// NamedResource POST). Removable by count reduction; follows role edits.
+  ROLE_DEFAULT
+  /// Scalar profile written by Resource Optimiser apply; re-applicable by it.
+  RESOURCE_OPTIMISER
+  /// Squad Planner → manual transferred PLANNED_RESOURCE whose independent
+  /// capacity is suppressed while the manual ROLE profile is the authority.
+  TRANSFERRED_FROM_SQUAD_PLANNER
+}
+
 model Epic {
   id                String   @id @default(cuid())
   name              String
@@ -429,8 +447,9 @@ model CapacityProfile {
   startWeek       Float?
   endWeek         Float?
 
-  /// Original legacy field values for traceability.
-  legacy          Json?
+  /// Explicit behavioural provenance (issue #405); null when no special
+  /// provenance applies.
+  provenance      CapacityProfileProvenance?
 
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
