@@ -663,7 +663,7 @@ function addResourceType(
       defaultPercent: 100,
       startWeek: null,
       endWeek: null,
-      legacy: {},
+      provenance: null,
       createdAt: now,
       updatedAt: now,
       ...profileFields,
@@ -731,7 +731,7 @@ function addNamedResource(
       defaultPercent: 100,
       startWeek: null,
       endWeek: null,
-      legacy: {},
+      provenance: null,
       createdAt: now,
       updatedAt: now,
       ...profileFields,
@@ -1083,8 +1083,7 @@ describe('persisted capacity-profile DTO integration', () => {
       // Persisted profile IS structurally valid — returned as authority
       expect(dto.id).toBe(persistedId)
       expect(dto.planningBasis).toBe('availabilityWindow')
-      // Legacy fields are null for persisted-authority path
-      expect(dto.legacy.allocationMode).toBeNull()
+
     })
 
     it('fails closed when no persisted profiles exist (issue #418)', async () => {
@@ -1132,8 +1131,7 @@ describe('persisted capacity-profile DTO integration', () => {
       )
       expect(roleDto).toBeDefined()
       expect(roleDto!.id).toBe(roleProfileId)
-      // Legacy fields are null (persisted-authority path)
-      expect(roleDto!.legacy.allocationMode).toBeNull()
+
 
       // Phase 2: trigger a PATCH that runs sync → creates profiles for new NRs
       await request(app)
@@ -2848,7 +2846,7 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 25,
         startWeek: null,
         endWeek: null,
-        legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+        provenance: 'ROLE_DEFAULT',
       })
       storeRef.current.capacitySegments.push(
         { id: 'seg-inh-1', capacityProfileId: 'cp-inh-1', startWeek: 4, endWeek: 8, capacityPercent: 25, source: 'DERIVED', createdAt: new Date(), updatedAt: new Date() },
@@ -2871,7 +2869,7 @@ describe('persisted capacity-profile DTO integration', () => {
         startWeek: null,
         endWeek: null,
         // Populated legacy field ensures protection derives from segments, not null-legacy
-        legacy: { allocationMode: 'CAPACITY_PLAN', allocationPercent: 25, allocationPct: 25, allocationStartWeek: 4, allocationEndWeek: 8 },
+        provenance: null,
       })
       const segNow = new Date()
       storeRef.current.capacitySegments.push(
@@ -2995,7 +2993,7 @@ describe('persisted capacity-profile DTO integration', () => {
           defaultPercent: 25,
           startWeek: null,
           endWeek: null,
-          legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+          provenance: 'ROLE_DEFAULT',
         })
         storeRef.current.capacitySegments.push(
           { id: `seg-inh-${id}`, capacityProfileId: `cp-inh-${id}`, startWeek: 4, endWeek: 8, capacityPercent: 25, source: 'DERIVED', createdAt: new Date(), updatedAt: new Date() },
@@ -3050,7 +3048,7 @@ describe('persisted capacity-profile DTO integration', () => {
           defaultPercent: 25,
           startWeek: null,
           endWeek: null,
-          legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+          provenance: 'ROLE_DEFAULT',
         })
         storeRef.current.capacitySegments.push(
           { id: `seg-inh-${id}`, capacityProfileId: `cp-inh-${id}`, startWeek: 4, endWeek: 8, capacityPercent: 25, source: 'DERIVED', createdAt: new Date(), updatedAt: new Date() },
@@ -3218,7 +3216,7 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 75,
         startWeek: 1,
         endWeek: 12,
-        legacy: null,
+        provenance: null,
         createdAt: now,
         updatedAt: now,
       })
@@ -3240,7 +3238,7 @@ describe('persisted capacity-profile DTO integration', () => {
         startWeek: 1,
         resourceTypeId: null,
         endWeek: 12,
-        legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+        provenance: 'ROLE_DEFAULT',
         createdAt: now,
         updatedAt: now,
       })
@@ -3262,7 +3260,7 @@ describe('persisted capacity-profile DTO integration', () => {
         startWeek: null,
         resourceTypeId: null,
         endWeek: null,
-        legacy: { allocationMode: 'EFFORT', allocationPercent: 60, allocationPct: 60 },
+        provenance: null,
         createdAt: now,
         updatedAt: now,
       })
@@ -3439,7 +3437,7 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 70,
         startWeek: null,
         endWeek: null,
-        legacy: null,
+        provenance: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       })
@@ -3525,7 +3523,7 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 70,
         startWeek: null,
         endWeek: null,
-        legacy: null,
+        provenance: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       })
@@ -3591,7 +3589,7 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 25,
         startWeek: null,
         endWeek: null,
-        legacy: null,
+        provenance: null,
         createdAt: now,
         updatedAt: now,
       })
@@ -3641,7 +3639,7 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 25,
         startWeek: null,
         endWeek: null,
-        legacy: null,
+        provenance: null,
         createdAt: now,
         updatedAt: now,
       })
@@ -3660,7 +3658,7 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 60,
         startWeek: null,
         endWeek: null,
-        legacy: null,
+        provenance: null,
         createdAt: now,
         updatedAt: now,
       })
@@ -3703,7 +3701,7 @@ describe('persisted capacity-profile DTO integration', () => {
         defaultPercent: 70,
         startWeek: null,
         endWeek: null,
-        legacy: null,
+        provenance: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       })

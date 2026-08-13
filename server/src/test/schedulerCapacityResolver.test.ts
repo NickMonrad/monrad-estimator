@@ -1407,7 +1407,7 @@ describe('overlap suppression precision (remediation)', () => {
 })
 
 describe('transfer provenance suppression (issue #411)', () => {
-  function makeTransferredFixture(plannedResourceLegacy: { writer?: string } | null | undefined) {
+  function makeTransferredFixture(plannedResourceProvenance: string | null | undefined) {
     return mockClient({
       resourceTypes: [
         {
@@ -1432,7 +1432,7 @@ describe('transfer provenance suppression (issue #411)', () => {
           resourceTypeId: 'rt-xfr', namedResourceId: null,
           ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE',
           source: 'MANUAL', defaultPercent: 100,
-          startWeek: null, endWeek: null, legacy: { writer: 'transfer-to-manual' },
+          startWeek: null, endWeek: null, provenance: null,
           segments: [
             { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'MANUAL' },
           ],
@@ -1443,7 +1443,7 @@ describe('transfer provenance suppression (issue #411)', () => {
           resourceTypeId: null, namedResourceId: 'nr-xfr',
           ownerKind: 'PLANNED_RESOURCE', planningBasis: 'CAPACITY_PROFILE',
           source: 'MANUAL', defaultPercent: 100,
-          startWeek: null, endWeek: null, legacy: plannedResourceLegacy ?? null,
+          startWeek: null, endWeek: null, provenance: plannedResourceProvenance ?? null,
           segments: [
             { startWeek: 0, endWeek: 10, capacityPercent: 100, source: 'MANUAL' },
           ],
@@ -1453,7 +1453,7 @@ describe('transfer provenance suppression (issue #411)', () => {
   }
 
   it('1. transferred planned-resource with transfer provenance is suppressed (no double count)', async () => {
-    const client = makeTransferredFixture({ writer: 'transfer-to-manual' })
+    const client = makeTransferredFixture('TRANSFERRED_FROM_SQUAD_PLANNER')
     const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
 
@@ -1483,7 +1483,7 @@ describe('transfer provenance suppression (issue #411)', () => {
   })
 
   it('2. unrelated manual planned-resource WITHOUT transfer provenance remains authoritative', async () => {
-    const client = makeTransferredFixture({ writer: 'manual-editor' })
+    const client = makeTransferredFixture(null)
     const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const rt = result.resourceTypes[0]
     const nr = rt.namedResources[0]
@@ -1494,9 +1494,9 @@ describe('transfer provenance suppression (issue #411)', () => {
     expect(nr.capacitySegments![0]).toEqual({ startWeek: 0, endWeek: 10, allocationPercent: 100 })
   })
 
-  it('3. malformed/ambiguous provenance shape does not silently suppress', async () => {
-    // legacy present but writer missing → not transfer provenance
-    const client = makeTransferredFixture({})
+  it('3. unrelated provenance value does not silently suppress', async () => {
+    // A different explicit provenance is not transfer provenance
+    const client = makeTransferredFixture('LEGACY_MAPPER')
     const result = await resolveSchedulerCapacity(client as any, 'proj-1')
     const nr = result.resourceTypes[0].namedResources[0]
 

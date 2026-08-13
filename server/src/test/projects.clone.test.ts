@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
-import { Prisma } from '@prisma/client'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
 
@@ -88,7 +87,7 @@ function makeRawProfile(overrides?: {
   defaultPercent?: number | null
   startWeek?: number | null
   endWeek?: number | null
-  legacy?: unknown
+  provenance?: string | null
   segments?: Array<{
     id: string
     startWeek: number
@@ -113,7 +112,7 @@ function makeRawProfile(overrides?: {
     defaultPercent: overrides?.defaultPercent ?? 100,
     startWeek: overrides?.startWeek ?? 0,
     endWeek: overrides?.endWeek ?? 10,
-    legacy: overrides != null && 'legacy' in overrides ? overrides.legacy : Prisma.DbNull,
+    provenance: overrides != null && 'provenance' in overrides ? overrides.provenance : null,
     createdAt: new Date(),
     updatedAt: new Date(),
     segments: segments.map(s => ({
@@ -122,15 +121,6 @@ function makeRawProfile(overrides?: {
       createdAt: new Date(),
       updatedAt: new Date(),
     })),
-  }
-}
-
-/** Build a raw null-state row matching $queryRaw output. */
-function makeNullRow(profileId: string, isDBNull: boolean): Record<string, unknown> {
-  return {
-    id: profileId,
-    legacy_is_null: isDBNull,
-    legacy_typeof: isDBNull ? null : 'object',
   }
 }
 
@@ -762,7 +752,6 @@ describe('POST /api/projects/:id/clone', () => {
           namedResourceId: null,
         }),
       ]
-      const nullRows = [makeNullRow('cp-1', true)]
 
       const cpCreateData: Array<Record<string, unknown>> = []
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
@@ -774,8 +763,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         tx.capacityProfile.create = vi.fn((args: unknown) => {
           cpCreateData.push((args as { data: Record<string, unknown> }).data)
           return { id: 'new-cp-1' }
@@ -800,7 +788,6 @@ describe('POST /api/projects/:id/clone', () => {
           namedResourceId: 'nr-1',
         }),
       ]
-      const nullRows = [makeNullRow('cp-2', true)]
 
       const cpCreateData: Array<Record<string, unknown>> = []
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
@@ -812,8 +799,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         tx.namedResource.create = vi.fn(() => ({ id: 'nr-c-1' }))
         tx.capacityProfile.create = vi.fn((args: unknown) => {
           cpCreateData.push((args as { data: Record<string, unknown> }).data)
@@ -839,7 +825,6 @@ describe('POST /api/projects/:id/clone', () => {
           namedResourceId: 'nr-1',
         }),
       ]
-      const nullRows = [makeNullRow('cp-3', true)]
 
       const cpCreateData: Array<Record<string, unknown>> = []
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
@@ -851,8 +836,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         tx.namedResource.create = vi.fn(() => ({ id: 'nr-c-1' }))
         tx.capacityProfile.create = vi.fn((args: unknown) => {
           cpCreateData.push((args as { data: Record<string, unknown> }).data)
@@ -882,7 +866,6 @@ describe('POST /api/projects/:id/clone', () => {
           segments,
         }),
       ]
-      const nullRows = [makeNullRow('cp-1', true)]
 
       const segCreateData: Array<Record<string, unknown>> = []
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
@@ -894,8 +877,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         tx.capacityProfile.create = vi.fn(() => ({ id: 'new-cp-1' }))
         tx.capacitySegment.create = vi.fn((args: unknown) => {
           segCreateData.push((args as { data: Record<string, unknown> }).data)
@@ -920,18 +902,44 @@ describe('POST /api/projects/:id/clone', () => {
       expect(segCreateData[1].capacityProfileId).toBe('new-cp-1')
     })
 
-    it('legacy DB_NULL is preserved via Prisma.DbNull on create', async () => {
+    it('explicit provenance is preserved on create (issue #405)', async () => {
       const rawProfiles = [
         makeRawProfile({
           id: 'cp-1',
           ownerKind: 'ROLE',
           resourceTypeId: 'rt-1',
           namedResourceId: null,
-          legacy: Prisma.DbNull,       // DB-side NULL → isDBNull=true
+          provenance: 'LEGACY_MAPPER',
+        }),
+        makeRawProfile({
+          id: 'cp-2',
+          ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null,
+          namedResourceId: 'nr-1',
+          provenance: 'ROLE_DEFAULT',
+        }),
+        makeRawProfile({
+          id: 'cp-3',
+          ownerKind: 'PLANNED_RESOURCE',
+          resourceTypeId: null,
+          namedResourceId: 'nr-2',
+          provenance: 'TRANSFERRED_FROM_SQUAD_PLANNER',
+        }),
+        makeRawProfile({
+          id: 'cp-4',
+          ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null,
+          namedResourceId: 'nr-3',
+          provenance: 'RESOURCE_OPTIMISER',
+        }),
+        makeRawProfile({
+          id: 'cp-5',
+          ownerKind: 'NAMED_PERSON',
+          resourceTypeId: null,
+          namedResourceId: 'nr-4',
+          provenance: null,
         }),
       ]
-      // legacy_is_null = true → the reader maps to { kind: 'DB_NULL' }
-      const nullRows = [makeNullRow('cp-1', true)]
 
       const cpCreateData: Array<Record<string, unknown>> = []
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
@@ -939,12 +947,21 @@ describe('POST /api/projects/:id/clone', () => {
         tx.project.findFirst
           .mockResolvedValueOnce({
             ...mockSource,
-            resourceTypes: [{ id: 'rt-1', namedResources: [] }],
+            resourceTypes: [{
+              id: 'rt-1',
+              namedResources: [
+                { id: 'nr-1', name: 'A' },
+                { id: 'nr-2', name: 'B' },
+                { id: 'nr-3', name: 'C' },
+                { id: 'nr-4', name: 'D' },
+              ],
+            }],
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
         tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+        let nrIdx = 0
+        tx.namedResource.create = vi.fn(() => ({ id: `nr-c-${++nrIdx}` }))
         tx.capacityProfile.create = vi.fn((args: unknown) => {
           cpCreateData.push((args as { data: Record<string, unknown> }).data)
           return { id: 'new-cp-1' }
@@ -953,88 +970,15 @@ describe('POST /api/projects/:id/clone', () => {
       })
 
       await request(app).post('/api/projects/proj-1/clone').set('Authorization', authHeader)
-      expect(cpCreateData).toHaveLength(1)
-      // snapshotJsonValueToPrisma({ kind: 'DB_NULL' }) → Prisma.DbNull sentinel
-      expect(cpCreateData[0].legacy).toBe(Prisma.DbNull)
-    })
-
-    it('legacy JSON_NULL is preserved via Prisma.JsonNull on create', async () => {
-      const rawProfiles = [
-        makeRawProfile({
-          id: 'cp-2',
-          ownerKind: 'ROLE',
-          resourceTypeId: 'rt-1',
-          namedResourceId: null,
-          legacy: null,                // Prisma reads JsonNull as JS null
-        }),
-      ]
-      // legacy_is_null = false, p.legacy === null → { kind: 'JSON_NULL' }
-      const nullRows = [makeNullRow('cp-2', false)]
-
-      const cpCreateData: Array<Record<string, unknown>> = []
-      vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
-        const tx = baseTx()
-        tx.project.findFirst
-          .mockResolvedValueOnce({
-            ...mockSource,
-            resourceTypes: [{ id: 'rt-1', namedResources: [] }],
-          } as unknown as Record<string, unknown>)
-          .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
-        tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
-        tx.capacityProfile.create = vi.fn((args: unknown) => {
-          cpCreateData.push((args as { data: Record<string, unknown> }).data)
-          return { id: 'new-cp-2' }
-        })
-        return (fn as (tx: unknown) => Promise<unknown>)(tx)
-      })
-
-      await request(app).post('/api/projects/proj-1/clone').set('Authorization', authHeader)
-      expect(cpCreateData).toHaveLength(1)
-      // snapshotJsonValueToPrisma({ kind: 'JSON_NULL' }) → Prisma.JsonNull sentinel
-      expect(cpCreateData[0].legacy).toBe(Prisma.JsonNull)
-    })
-
-    it('legacy VALUE is preserved as original JSON on create', async () => {
-      const legacyValue = { hours: 100, notes: 'legacy data' }
-      const rawProfiles = [
-        makeRawProfile({
-          id: 'cp-3',
-          ownerKind: 'ROLE',
-          resourceTypeId: 'rt-1',
-          namedResourceId: null,
-          legacy: legacyValue,         // Non-null JSON value
-        }),
-      ]
-      // legacy_is_null = false, p.legacy !== null → { kind: 'VALUE', value: ... }
-      const nullRows = [makeNullRow('cp-3', false)]
-
-      const cpCreateData: Array<Record<string, unknown>> = []
-      vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
-        const tx = baseTx()
-        tx.project.findFirst
-          .mockResolvedValueOnce({
-            ...mockSource,
-            resourceTypes: [{ id: 'rt-1', namedResources: [] }],
-          } as unknown as Record<string, unknown>)
-          .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
-        tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
-        tx.capacityProfile.create = vi.fn((args: unknown) => {
-          cpCreateData.push((args as { data: Record<string, unknown> }).data)
-          return { id: 'new-cp-3' }
-        })
-        return (fn as (tx: unknown) => Promise<unknown>)(tx)
-      })
-
-      await request(app).post('/api/projects/proj-1/clone').set('Authorization', authHeader)
-      expect(cpCreateData).toHaveLength(1)
-      // snapshotJsonValueToPrisma({ kind: 'VALUE', value: ... }) → the value itself
-      const savedLegacy = cpCreateData[0].legacy as Record<string, unknown>
-      expect(savedLegacy.hours).toBe(100)
-      expect(savedLegacy.notes).toBe('legacy data')
+      expect(cpCreateData).toHaveLength(5)
+      // Every provenance value (and null) round-trips through clone with new
+      // clone-owned owner IDs; the removed legacy JSON is never copied
+      // (issue #405).
+      expect(cpCreateData.map(d => d.provenance).sort())
+        .toEqual(['LEGACY_MAPPER', 'RESOURCE_OPTIMISER', 'ROLE_DEFAULT', 'TRANSFERRED_FROM_SQUAD_PLANNER', null].sort())
+      for (const data of cpCreateData) {
+        expect(data.resourceTypeId ?? data.namedResourceId).toBeDefined()
+      }
     })
 
     it('profile scalars and window fields are preserved on create', async () => {
@@ -1051,7 +995,6 @@ describe('POST /api/projects/:id/clone', () => {
           endWeek: 14,
         }),
       ]
-      const nullRows = [makeNullRow('cp-1', true)]
 
       const cpCreateData: Array<Record<string, unknown>> = []
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
@@ -1063,8 +1006,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         tx.capacityProfile.create = vi.fn((args: unknown) => {
           cpCreateData.push((args as { data: Record<string, unknown> }).data)
           return { id: 'new-cp-1' }
@@ -1098,7 +1040,6 @@ describe('POST /api/projects/:id/clone', () => {
           segments,
         }),
       ]
-      const nullRows = [makeNullRow('src-cp-1', true)]
 
       const cpCreateData: Array<Record<string, unknown>> = []
       const segCreateData: Array<Record<string, unknown>> = []
@@ -1111,8 +1052,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         tx.capacityProfile.create = vi.fn((args: unknown) => {
           cpCreateData.push((args as { data: Record<string, unknown> }).data)
           return { id: 'generated-cp-id' }
@@ -1153,7 +1093,6 @@ describe('POST /api/projects/:id/clone', () => {
           segments: [{ id: 'seg-b1', startWeek: 4, endWeek: 8, capacityPercent: 50, source: 'MANUAL' }],
         }),
       ]
-      const nullRows = [makeNullRow('cp-a', true), makeNullRow('cp-b', true)]
 
       const cpCreateCalls: Array<Record<string, unknown>> = []
       const segCreateCalls: Array<Record<string, unknown>> = []
@@ -1166,8 +1105,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         tx.capacityProfile.create = vi.fn((args: unknown) => {
           cpCreateCalls.push((args as { data: Record<string, unknown> }).data)
           return { id: `new-${cpCreateCalls.length}` }
@@ -1198,7 +1136,6 @@ describe('POST /api/projects/:id/clone', () => {
           namedResourceId: null,
         }),
       ]
-      const nullRows = [makeNullRow('cp-bad', true)]
 
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
         const tx = baseTx()
@@ -1209,8 +1146,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         return (fn as (tx: unknown) => Promise<unknown>)(tx)
       })
 
@@ -1228,7 +1164,6 @@ describe('POST /api/projects/:id/clone', () => {
           namedResourceId: 'nr-missing',
         }),
       ]
-      const nullRows = [makeNullRow('cp-bad', true)]
 
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
         const tx = baseTx()
@@ -1239,8 +1174,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         tx.namedResource.create = vi.fn(() => ({ id: 'nr-c-1' }))
         return (fn as (tx: unknown) => Promise<unknown>)(tx)
       })
@@ -1258,7 +1192,6 @@ describe('POST /api/projects/:id/clone', () => {
           namedResourceId: 'nr-1',  // ROLE must have null namedResourceId
         }),
       ]
-      const nullRows = [makeNullRow('cp-invalid', true)]
 
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
         const tx = baseTx()
@@ -1269,8 +1202,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         tx.namedResource.create = vi.fn(() => ({ id: 'nr-c-1' }))
         return (fn as (tx: unknown) => Promise<unknown>)(tx)
       })
@@ -1288,7 +1220,6 @@ describe('POST /api/projects/:id/clone', () => {
           namedResourceId: 'nr-1',
         }),
       ]
-      const nullRows = [makeNullRow('cp-invalid', true)]
 
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
         const tx = baseTx()
@@ -1299,8 +1230,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         tx.namedResource.create = vi.fn(() => ({ id: 'nr-c-1' }))
         return (fn as (tx: unknown) => Promise<unknown>)(tx)
       })
@@ -1318,7 +1248,6 @@ describe('POST /api/projects/:id/clone', () => {
           namedResourceId: null,
         }),
       ]
-      const nullRows = [makeNullRow('cp-unknown', true)]
 
       vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
         const tx = baseTx()
@@ -1329,8 +1258,7 @@ describe('POST /api/projects/:id/clone', () => {
           } as unknown as Record<string, unknown>)
           .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
         tx.capacityProfile.findMany.mockResolvedValue(rawProfiles)
-        tx.$queryRaw.mockResolvedValue(nullRows)
-        tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
+          tx.resourceType.create = vi.fn(() => ({ id: 'rt-c-1' }))
         return (fn as (tx: unknown) => Promise<unknown>)(tx)
       })
 

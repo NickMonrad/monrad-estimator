@@ -373,6 +373,22 @@ function v4SnapshotFixture(_projectId: string) {
   }
 }
 
+/** V5 (issue #405): capacity profiles carry explicit provenance, no legacy. */
+function v5SnapshotFixture(projectId: string) {
+  const v4 = v4SnapshotFixture(projectId) as unknown as {
+    schemaVersion: number
+    capacityProfiles: Array<Record<string, unknown>>
+  }
+  return {
+    ...v4,
+    schemaVersion: 5,
+    capacityProfiles: v4.capacityProfiles.map(profile => {
+      const { legacy: _legacy, ...rest } = profile
+      return { ...rest, provenance: null }
+    }),
+  }
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Scenario 1 — valid representative database passes
 // ═════════════════════════════════════════════════════════════════════════════
@@ -621,6 +637,33 @@ describeIf('readiness — blockers fail closed', () => {
     expect(text).toContain('pre-V4 BacklogSnapshots remain: 1')
     expect(text).not.toContain('quarantined')
     expect(text).not.toContain('Class A')
+  })
+
+  it('a valid V5 snapshot passes (issue #405)', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'V5 Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'V5 Person')
+    await createBacklogSnapshot(projectId, v5SnapshotFixture(projectId))
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(true)
+    expect(formatReadinessReport(report)).toContain('READINESS PASSED')
+  })
+
+  it('an invalid V5 snapshot blocks with an aggregate count (issue #405)', async () => {
+    const { projectId } = await createUserProjectPair()
+    const rtId = await createRoleWithProfile(projectId, 'Invalid V5 Role')
+    await createNamedPersonWithProfile(projectId, rtId, 'Invalid V5 Person')
+    // V5 profile missing the provenance discriminator fails structural
+    // validation and must block readiness.
+    const badV5 = v5SnapshotFixture(projectId) as unknown as {
+      capacityProfiles: Array<Record<string, unknown>>
+    }
+    delete badV5.capacityProfiles[0]!.provenance
+    await createBacklogSnapshot(projectId, badV5)
+    const report = await runProductionMigrationReadiness(prisma)
+    expect(report.passed).toBe(false)
+    const text = formatReadinessReport(report)
+    expect(text).toContain('invalid V5 BacklogSnapshots: 1')
   })
 
   it('multiple pre-V4 snapshots reconcile to one aggregate count', async () => {

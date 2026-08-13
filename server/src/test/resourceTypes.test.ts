@@ -27,7 +27,7 @@ function roleProfile(overrides: Record<string, unknown> = {}) {
     startWeek: null,
     endWeek: null,
     segments: [],
-    legacy: {},
+    provenance: null,
     ...overrides,
   }
 }
@@ -45,7 +45,7 @@ function namedProfile(namedResourceId: string, overrides: Record<string, unknown
     startWeek: null,
     endWeek: null,
     segments: [],
-    legacy: {},
+    provenance: null,
     ...overrides,
   }
 }
@@ -908,7 +908,7 @@ describe('capacity profile profile-first writes (no sync)', () => {
         planningBasis: 'CAPACITY_PROFILE',
         source: 'DERIVED',
         defaultPercent: 60,
-        legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+        provenance: 'ROLE_DEFAULT',
       }),
     }))
   })
@@ -1068,7 +1068,7 @@ describe('PATCH regression coverage', () => {
               defaultPercent: 50,
               startWeek: 10,
               endWeek: 20,
-              legacy: null,
+              provenance: null,
             }),
           ],
         ),
@@ -1208,13 +1208,13 @@ describe('PATCH regression coverage', () => {
               defaultPercent: 50,
               startWeek: 5,
               endWeek: 10,
-              legacy: null,
+              provenance: null,
             }),
-            namedProfile('nr-old-inh'),
+            namedProfile('nr-old-inh', { provenance: 'LEGACY_MAPPER' }),
             namedProfile('nr-exp-2', {
               source: 'MANUAL',
               defaultPercent: 75,
-              legacy: null,
+              provenance: null,
             }),
           ],
         ),

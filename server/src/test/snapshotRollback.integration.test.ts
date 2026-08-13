@@ -45,6 +45,7 @@ import type {
   SnapshotV1,
   SnapshotV2,
   SnapshotV4,
+  SnapshotV5,
 } from '../lib/projectSnapshotTypes.js'
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
@@ -187,8 +188,8 @@ async function createProfile(
     defaultPercent: number | null
     startWeek: number | null
     endWeek: number | null
+    provenance: $Enums.CapacityProfileProvenance | null
   }> = {},
-  legacyValue: Prisma.NullableJsonNullValueInput | Prisma.InputJsonValue = Prisma.DbNull,
 ): Promise<string> {
   await prisma.capacityProfile.create({
     data: {
@@ -202,7 +203,7 @@ async function createProfile(
       defaultPercent: overrides.defaultPercent ?? null,
       startWeek: overrides.startWeek ?? null,
       endWeek: overrides.endWeek ?? null,
-      legacy: legacyValue,
+      provenance: overrides.provenance ?? null,
     },
   })
   return id
@@ -309,7 +310,7 @@ interface CanonicalProfileRow {
   defaultPercent: number | null
   startWeek: number | null
   endWeek: number | null
-  legacy: unknown
+  provenance: string | null
   segments: Array<{ id: string; startWeek: number; endWeek: number; capacityPercent: number; source: string }>
 }
 
@@ -323,7 +324,6 @@ interface CanonicalProjectState {
   timelineEntries: Array<{ startWeek: number; durationWeeks: number; isManual: boolean }>
   storyTimelineEntries: Array<{ startWeek: number; durationWeeks: number; isManual: boolean }>
   overheadItems: Array<{ name: string; type: string; value: number; resourceTypeId: string | null; order: number }>
-  dbNullProfileIds: string[]
 }
 
 /**
@@ -348,7 +348,6 @@ async function captureCanonicalState(projectId: string): Promise<CanonicalProjec
     prisma.storyTimelineEntry.findMany({ where: { projectId }, orderBy: { id: 'asc' } }),
     prisma.projectOverhead.findMany({ where: { projectId }, orderBy: { id: 'asc' } }),
   ])
-  const dbNullIds = Array.from(await detectDbNullProfileIds(projectId))
   return {
     resourceTypes,
     // Issue #418: the candidate legacy capacity columns no longer exist —
@@ -364,7 +363,6 @@ async function captureCanonicalState(projectId: string): Promise<CanonicalProjec
     timelineEntries: timelineEntries.map(e => ({ startWeek: e.startWeek, durationWeeks: e.durationWeeks, isManual: e.isManual })),
     storyTimelineEntries: storyTimelineEntries.map(e => ({ startWeek: e.startWeek, durationWeeks: e.durationWeeks, isManual: e.isManual })),
     overheadItems: overheadItems.map(o => ({ name: o.name, type: o.type, value: o.value, resourceTypeId: o.resourceTypeId, order: o.order })),
-    dbNullProfileIds: dbNullIds,
   }
 }
 
@@ -398,23 +396,6 @@ async function createEpicBacklog(
     },
   })
   return { epicId: epic.id, featureId: feature.id, storyId: story.id }
-}
-
-
-/**
- * Run a raw SQL query to detect which capacity profiles have database-NULL
- * legacy (as opposed to JSON null). Returns a Set of profile IDs where
- * legacy IS NULL at the storage level.
- */
-async function detectDbNullProfileIds(projectId: string): Promise<Set<string>> {
-  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-    SELECT cp.id FROM "CapacityProfile" cp WHERE cp."projectId" = ${projectId} AND cp.legacy IS NULL
-  `)
-  const seen = new Set<string>()
-  for (const r of rows) {
-    seen.add(r.id)
-  }
-  return seen
 }
 
 
@@ -517,8 +498,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: null,
         endWeek: null,
       },
-      { allocationMode: 'TIMELINE', allocationPercent: 100 },
-    )
+      )
     // ── 3rd named resource for PLANNED_RESOURCE ownership ──────────
     nrCharlieId = await createNamedResource(
       projectId, rtDevId, 'nr-charlie', 'Charlie',
@@ -542,8 +522,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: null,
         endWeek: null,
       },
-      Prisma.DbNull,
-    )
+      )
     segmentRole1 = 'seg-role-1'
     segmentRole2 = 'seg-role-2'
     await createSegment(profileRoleId, segmentRole1, 0, 4, 100)
@@ -559,8 +538,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: 2,
         endWeek: 8,
       },
-      { allocationMode: 'EFFORT', allocationPercent: 80 },
-    )
+      )
     segmentNamed1 = 'seg-named-1'
     await createSegment(profileNamedId, segmentNamed1, 2, 5, 100)
 
@@ -576,8 +554,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: null,
         endWeek: null,
       },
-      42,
-    )
+      )
     segmentPlanned1 = 'seg-planned-1'
     segmentPlanned2 = 'seg-planned-2'
     segmentPlanned3 = 'seg-planned-3'
@@ -594,8 +571,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: null,
         endWeek: null,
       },
-      Prisma.DbNull,
-    )
+      )
     await createSegment(profilePlannedNrId, 'seg-planned-nr-1', 0, 2, 100)
     await createSegment(profilePlannedNrId, 'seg-planned-nr-2', 3, 5, 75)
     await createSegment(profilePlannedNrId, 'seg-planned-nr-3', 6, 10, 50)
@@ -626,8 +602,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     profileJsonNullId = await createProfile(
       projectId, 'prof-json-null', 'ROLE', rtDesId, null,
       { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL' },
-      Prisma.JsonNull,
-    )
+      )
     segmentJsonNull1 = 'seg-json-null-1'
     await createSegment(profileJsonNullId, segmentJsonNull1, 3, 7, 80)
 
@@ -643,7 +618,6 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: 1,
         endWeek: 6,
       },
-      { nested: { value: null, items: [1, null, 3] }, mode: null },
     )
     segmentNestedObj1 = 'seg-nested-obj-1'
     await createSegment(profileNestedObjId, segmentNestedObj1, 1, 4, 100)
@@ -658,7 +632,6 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: null,
         endWeek: null,
       },
-      [1, null, 'text', null, false],
     )
     segmentArrayNull1 = 'seg-array-null-1'
     await createSegment(profileArrayNullId, segmentArrayNull1, 4, 8, 60)
@@ -673,7 +646,6 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: null,
         endWeek: null,
       },
-      'hello-world',
     )
     segmentString1 = 'seg-string-1'
     await createSegment(profileStringId, segmentString1, 0, 2, 100)
@@ -688,7 +660,6 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: null,
         endWeek: null,
       },
-      true,
     )
     segmentBool1 = 'seg-bool-1'
     await createSegment(profileBoolId, segmentBool1, 2, 5, 75)
@@ -792,10 +763,10 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
   it('captured snapshot has all domains and exact values', async () => {
     const raw = await prisma.backlogSnapshot.findUnique({ where: { id: snapshotId } })
     expect(raw).not.toBeNull()
-    // Snapshots are emitted as v4 since issue #418 (candidate legacy columns
-    // omitted; capacity state lives in capacityProfiles).
-    const data = raw!.snapshot as unknown as SnapshotV4
-    expect(data.schemaVersion).toBe(4)
+    // Snapshots are emitted as v5 since issue #405 (explicit provenance
+    // replaces the removed legacy JSON payload).
+    const data = raw!.snapshot as unknown as SnapshotV5
+    expect(data.schemaVersion).toBe(5)
 
     // Resource types
     expect(data.resourceTypes).toHaveLength(2)
@@ -819,7 +790,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(roleP!.planningBasis).toBe('CAPACITY_PROFILE')
     expect(roleP!.source).toBe('MANUAL')
     expect(roleP!.defaultPercent).toBeNull()
-    expect(roleP!.legacy.kind).toBe('DB_NULL')
+    expect(roleP!.provenance).toBeNull()
     expect(roleP!.segments).toHaveLength(2)
     expect(roleP!.segments[0].startWeek).toBe(0)
     expect(roleP!.segments[1].capacityPercent).toBe(50)
@@ -829,21 +800,16 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(namedP).toBeDefined()
     expect(namedP!.id).toBe(profileNamedId)
     expect(namedP!.namedResourceId).toBe(nrAliceId)
-    expect(namedP!.legacy.kind).toBe('VALUE')
-    if (namedP!.legacy.kind === 'VALUE') {
-      const val = namedP!.legacy.value as Record<string, unknown>
-      expect(val.allocationMode).toBe('EFFORT')
-    }
+    // The legacy payload was {allocationMode:'EFFORT',...} — no behavioural
+    // provenance contract, discarded (issue #405).
+    expect(namedP!.provenance).toBeNull()
     expect(namedP!.segments).toHaveLength(1)
 
     // PLANNED_RESOURCE — VALUE(number), 3 segments
     const plannedP = data.capacityProfiles.find(p => p.id === profilePlannedId)
     expect(plannedP).toBeDefined()
     expect(plannedP!.ownerKind).toBe('PLANNED_RESOURCE')
-    expect(plannedP!.legacy.kind).toBe('VALUE')
-    if (plannedP!.legacy.kind === 'VALUE') {
-      expect(plannedP!.legacy.value).toBe(42)
-    }
+    expect(plannedP!.provenance).toBeNull()
     expect(plannedP!.segments).toHaveLength(3)
     expect(plannedP!.segments[0].capacityPercent).toBe(100)
     expect(plannedP!.segments[2].startWeek).toBe(8)
@@ -855,7 +821,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(jsonNullP).toBeDefined()
     expect(jsonNullP!.ownerKind).toBe('ROLE')
     expect(jsonNullP!.resourceTypeId).toBe(rtDesId)
-    expect(jsonNullP!.legacy.kind).toBe('JSON_NULL')
+    expect(jsonNullP!.provenance).toBeNull()
     expect(jsonNullP!.segments).toHaveLength(1)
     expect(jsonNullP!.segments[0].startWeek).toBe(3)
     expect(jsonNullP!.segments[0].capacityPercent).toBe(80)
@@ -865,53 +831,29 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(nestedP).toBeDefined()
     expect(nestedP!.ownerKind).toBe('NAMED_PERSON')
     expect(nestedP!.namedResourceId).toBe(nrEveId)
-    expect(nestedP!.legacy.kind).toBe('VALUE')
-    if (nestedP!.legacy.kind === 'VALUE') {
-      const val = nestedP!.legacy.value as Record<string, unknown>
-      expect(val).toHaveProperty('nested')
-      const nested = val.nested as Record<string, unknown>
-      expect(nested.value).toBeNull()
-      expect((nested.items as unknown[])[0]).toBe(1)
-      expect((nested.items as unknown[])[1]).toBeNull()
-      expect(nested.items).toHaveLength(3)
-      expect(val.mode).toBeNull()
-    }
+    // Unknown JSON is discarded (issue #405): no behavioural provenance.
+    expect(nestedP!.provenance).toBeNull()
     expect(nestedP!.segments).toHaveLength(1)
 
     // ── (7) PLANNED_RESOURCE (Frank) — VALUE(null-containing array) legacy ──
     const arrayNullP = data.capacityProfiles.find(p => p.id === profileArrayNullId)
     expect(arrayNullP).toBeDefined()
     expect(arrayNullP!.ownerKind).toBe('PLANNED_RESOURCE')
-    expect(arrayNullP!.legacy.kind).toBe('VALUE')
-    if (arrayNullP!.legacy.kind === 'VALUE') {
-      const arr = arrayNullP!.legacy.value as unknown[]
-      expect(arr[0]).toBe(1)
-      expect(arr[1]).toBeNull()
-      expect(arr[2]).toBe('text')
-      expect(arr[3]).toBeNull()
-      expect(arr[4]).toBe(false)
-      expect(arr).toHaveLength(5)
-    }
+    expect(arrayNullP!.provenance).toBeNull()
     expect(arrayNullP!.segments).toHaveLength(1)
 
     // ── (8) PLANNED_RESOURCE (Grace) — VALUE(string) legacy ──────
     const stringP = data.capacityProfiles.find(p => p.id === profileStringId)
     expect(stringP).toBeDefined()
     expect(stringP!.ownerKind).toBe('PLANNED_RESOURCE')
-    expect(stringP!.legacy.kind).toBe('VALUE')
-    if (stringP!.legacy.kind === 'VALUE') {
-      expect(stringP!.legacy.value).toBe('hello-world')
-    }
+    expect(stringP!.provenance).toBeNull()
     expect(stringP!.segments).toHaveLength(1)
 
     // ── (9) PLANNED_RESOURCE (Heidi) — VALUE(boolean) legacy ────
     const boolP = data.capacityProfiles.find(p => p.id === profileBoolId)
     expect(boolP).toBeDefined()
     expect(boolP!.ownerKind).toBe('PLANNED_RESOURCE')
-    expect(boolP!.legacy.kind).toBe('VALUE')
-    if (boolP!.legacy.kind === 'VALUE') {
-      expect(boolP!.legacy.value).toBe(true)
-    }
+    expect(boolP!.provenance).toBeNull()
     expect(boolP!.segments).toHaveLength(1)
     // Backlog, timeline, overhead present
     expect(data.epics).toHaveLength(1)
@@ -944,8 +886,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: 2,
         endWeek: 7,
       },
-      Prisma.DbNull,
-    )
+      )
     extraProfileId = await createProfile(
       projectId, 'prof-extra-owner', 'ROLE', extraRtId, null,
       {
@@ -955,8 +896,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
         startWeek: 2,
         endWeek: 7,
       },
-      Prisma.DbNull,
-    )
+      )
     await createSegment(extraProfileId, 'seg-extra-owner', 2, 7, 45)
 
     extraRoleDiscountId = await createDiscount(
@@ -1014,8 +954,7 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     await createProfile(
       projectId, 'prof-extra', 'NAMED_PERSON', null, tempExtraNr,
       { defaultPercent: 100 },
-      Prisma.DbNull,
-    )
+      )
     // Mutate backlog: delete and create new epics
     await prisma.epic.deleteMany({ where: { projectId } })
     const newEpic = await prisma.epic.create({
@@ -1386,98 +1325,20 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(boolRow.segments[0].startWeek).toBe(2)
     expect(boolRow.segments[0].capacityPercent).toBe(75)
 
-    // ── DB_NULL legacy preserved at storage level ────────────────
-    const dbNullIds = await detectDbNullProfileIds(projectId)
-    expect(dbNullIds.has(profileRoleId)).toBe(true)
-    expect(dbNullIds.has(profileNamedId)).toBe(false)
-    expect(dbNullIds.has(profilePlannedId)).toBe(false)
-    expect(dbNullIds.has(profilePlannedNrId)).toBe(true)
-    // New profiles: none are DB_NULL at storage level
-    expect(dbNullIds.has(profileJsonNullId)).toBe(false)
-    expect(dbNullIds.has(profileNestedObjId)).toBe(false)
-    expect(dbNullIds.has(profileArrayNullId)).toBe(false)
-    expect(dbNullIds.has(profileStringId)).toBe(false)
-    expect(dbNullIds.has(profileBoolId)).toBe(false)
-
-    // ── Parameterized SQL: verify jsonb storage semantics and nested nulls ──
-    const rawRows = await prisma.$queryRaw<Array<{
-      id: string
-      legacy_type: string
-      legacy_is_null: boolean
-      legacyJsonType: string | null
-      null_kind: string
-      nested_nulls_preserved: boolean
-    }>>(Prisma.sql`
-      SELECT
-        cp.id,
-        pg_typeof(cp.legacy)::text AS legacy_type,
-        cp.legacy IS NULL AS legacy_is_null,
-        jsonb_typeof(cp.legacy) AS "legacyJsonType",
-        CASE
-          WHEN cp.legacy IS NULL THEN 'DB_NULL'
-          WHEN cp.legacy = 'null'::jsonb THEN 'JSON_NULL'
-          ELSE 'VALUE'
-        END AS null_kind,
-        CASE
-          WHEN cp.id = ${profileNestedObjId}
-            AND cp.legacy IS NOT NULL
-            AND cp.legacy::jsonb #>> '{nested,value}' IS NULL
-            AND cp.legacy::jsonb #>> '{mode}' IS NULL
-            AND jsonb_array_length(cp.legacy::jsonb #> '{nested,items}') = 3
-            AND cp.legacy::jsonb #>> '{nested,items,1}' IS NULL
-          THEN true
-          WHEN cp.id <> ${profileNestedObjId} THEN true
-          ELSE false
-        END AS nested_nulls_preserved
-      FROM "CapacityProfile" cp
-      WHERE cp."projectId" = ${projectId}
-      ORDER BY cp.id
-    `)
-
-    // All profiles have jsonb type
-    for (const row of rawRows) {
-      expect(row.legacy_type).toBe('jsonb')
+    // ── Explicit provenance preserved at storage level (issue #405) ──
+    // Every fixture profile carried a legacy payload with no behavioural
+    // provenance contract (DB_NULL/JSON_NULL/raw/unknown JSON), so all of
+    // them restore with provenance NULL; the column no longer exists.
+    const provenanceRows = await prisma.capacityProfile.findMany({
+      where: { projectId },
+      select: { id: true, provenance: true },
+      orderBy: { id: 'asc' },
+    })
+    // 10 captured snapshot profiles + 1 retained post-snapshot role profile
+    expect(provenanceRows).toHaveLength(11)
+    for (const row of provenanceRows) {
+      expect(row.provenance).toBeNull()
     }
-
-    // Confirm per-profile null_kind
-    const nullKindMap = new Map(rawRows.map(r => [r.id, r.null_kind]))
-    expect(nullKindMap.get(profileRoleId)).toBe('DB_NULL')
-    expect(nullKindMap.get(profilePlannedNrId)).toBe('DB_NULL')
-    expect(nullKindMap.get(profileJsonNullId)).toBe('JSON_NULL')
-    expect(nullKindMap.get(profileNamedId)).toBe('VALUE')
-    expect(nullKindMap.get(profilePlannedId)).toBe('VALUE')
-    expect(nullKindMap.get(profileNestedObjId)).toBe('VALUE')
-    expect(nullKindMap.get(profileArrayNullId)).toBe('VALUE')
-    expect(nullKindMap.get(profileStringId)).toBe('VALUE')
-    expect(nullKindMap.get(profileBoolId)).toBe('VALUE')
-    // Confirm per-profile storage nullness independently from null_kind
-    const legacyIsNullMap = new Map(rawRows.map(r => [r.id, r.legacy_is_null]))
-    expect(legacyIsNullMap.get(profileRoleId)).toBe(true)
-    expect(legacyIsNullMap.get(profilePlannedNrId)).toBe(true)
-    expect(legacyIsNullMap.get(profileJsonNullId)).toBe(false)
-    expect(legacyIsNullMap.get(profileNamedId)).toBe(false)
-    expect(legacyIsNullMap.get(profilePlannedId)).toBe(false)
-    expect(legacyIsNullMap.get(profileNestedObjId)).toBe(false)
-    expect(legacyIsNullMap.get(profileArrayNullId)).toBe(false)
-    expect(legacyIsNullMap.get(profileStringId)).toBe(false)
-    expect(legacyIsNullMap.get(profileBoolId)).toBe(false)
-
-
-    // Nested nulls are preserved in jsonb
-    const nestedRow = rawRows.find(r => r.id === profileNestedObjId)!
-    expect(nestedRow.nested_nulls_preserved).toBe(true)
-
-    // Per-profile jsonb_typeof value-type assertions
-    const jsonTypeMap = new Map(rawRows.map(r => [r.id, r.legacyJsonType]))
-    expect(jsonTypeMap.get(profileRoleId)).toBeNull()
-    expect(jsonTypeMap.get(profilePlannedNrId)).toBeNull()
-    expect(jsonTypeMap.get(profileJsonNullId)).toBe('null')
-    expect(jsonTypeMap.get(profileNamedId)).toBe('object')
-    expect(jsonTypeMap.get(profilePlannedId)).toBe('number')
-    expect(jsonTypeMap.get(profileNestedObjId)).toBe('object')
-    expect(jsonTypeMap.get(profileArrayNullId)).toBe('array')
-    expect(jsonTypeMap.get(profileStringId)).toBe('string')
-    expect(jsonTypeMap.get(profileBoolId)).toBe('boolean')
 
     // Backlog restored
     const epics = await prisma.epic.findMany({ where: { projectId } })
@@ -1513,10 +1374,6 @@ describeIf('Scenario A — v3 round trip with full canonical state', () => {
     expect(canonicalAfter.timelineEntries).toEqual(canonicalBefore.timelineEntries)
     expect(canonicalAfter.storyTimelineEntries).toEqual(canonicalBefore.storyTimelineEntries)
     expect(canonicalAfter.overheadItems).toEqual(canonicalBefore.overheadItems)
-    // prof-extra-owner was stored with DB_NULL legacy and is preserved by
-    // rollback; every other DB_NULL profile is a captured snapshot profile.
-    expect(canonicalAfter.dbNullProfileIds.filter(id => id !== extraProfileId).sort())
-      .toEqual(canonicalBefore.dbNullProfileIds.sort())
 
     // ── HTTP read-parity assertions (real auth, real ownership, real PostgreSQL) ──
     // Re-fetch Resource Profile after rollback
@@ -1677,8 +1534,7 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     await createProfile(
       projectId, 'prof-b-eve', 'NAMED_PERSON', null, 'nr-b-chain',
       { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
-      Prisma.DbNull,
-    )
+      )
 
     // State A: ROLE profile, 100% TIMELINE, no segments
     await createProfile(
@@ -1690,8 +1546,7 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
         startWeek: 0,
         endWeek: 10,
       },
-      Prisma.DbNull,
-    )
+      )
 
     // Snapshot A
     const dataA = await buildSnapshot(projectId, prisma)
@@ -1772,9 +1627,9 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     // Its label includes reference to the rolled-back snapshot
     expect(preSnaps[0].label).toContain('State A')
 
-    // Pre_rollback data contains B's state at v4
-    const preData = preSnaps[0].snapshot as unknown as SnapshotV4
-    expect(preData.schemaVersion).toBe(4)
+    // Pre_rollback data contains B's state at v5 (current write format)
+    const preData = preSnaps[0].snapshot as unknown as SnapshotV5
+    expect(preData.schemaVersion).toBe(5)
     const bProfile = preData.capacityProfiles.find(p => p.id === 'prof-b-a')
     expect(bProfile).toBeDefined()
     expect(bProfile!.planningBasis).toBe('CAPACITY_PROFILE')
@@ -1806,10 +1661,6 @@ describeIf('Scenario B — rollback chaining (A→B→rollback A→pre_rollback 
     })
     expect(allProfiles).toHaveLength(2)
     expect(allProfiles.map((p: { id: string }) => p.id).sort()).toEqual(['prof-b-a', 'prof-b-eve'])
-
-    // DB_NULL semantics preserved
-    const dbNullIds = await detectDbNullProfileIds(projectId)
-    expect(dbNullIds.has('prof-b-a')).toBe(true)
 
     // Pre_rollback snapshots survive retention pruning
     const finalPreRollbacks = await prisma.backlogSnapshot.count({
@@ -1852,8 +1703,7 @@ describeIf('Scenario C — transactional FK failure after pre_rollback creation'
     await createProfile(
       projectId, 'prof-c', 'ROLE', rtId, null,
       {},
-      Prisma.DbNull,
-    )
+      )
 
     // Build and persist v3 snapshot
     const data = await buildSnapshot(projectId, prisma)
@@ -1920,8 +1770,7 @@ describeIf('Scenario D — invalid v3 validation is non-destructive', () => {
     await createProfile(
       projectId, 'prof-d-valid', 'ROLE', rtId, null,
       {},
-      Prisma.DbNull,
-    )
+      )
     const counts = await Promise.all([
       prisma.capacityProfile.count({ where: { projectId } }),
       prisma.backlogSnapshot.count({ where: { projectId } }),
@@ -2293,8 +2142,7 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
         startWeek: 0,
         endWeek: 5,
       },
-      Prisma.DbNull,
-    )
+      )
     await createSegment('prof-e-stale-role', 'seg-e-stale', 0, 5, 100)
 
     await createProfile(
@@ -2306,8 +2154,7 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
         startWeek: 1,
         endWeek: 6,
       },
-      { allocationMode: 'EFFORT' },
-    )
+      )
     // Add a PLANNED_RESOURCE that should NOT survive v2 rollback
     // Use a separate NR to avoid owner FK conflict with prof-e-stale-nr
     const tempPlannedNr = await createNamedResource(
@@ -2316,8 +2163,7 @@ describeIf('Scenario E — v2 rollback replaces stale persisted profiles', () =>
     await createProfile(
       projectId, 'prof-e-planned', 'PLANNED_RESOURCE', null, tempPlannedNr,
       { planningBasis: 'CAPACITY_PROFILE', source: 'DERIVED' },
-      Prisma.DbNull,
-    )
+      )
     const v4Data = await buildSnapshot(projectId, prisma)
     // A faithful historical v2 snapshot carries the candidate legacy capacity
     // columns on ResourceType/NamedResource rows (the v2 restore path derives
@@ -2414,8 +2260,7 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
         startWeek: null,
         endWeek: null,
       },
-      Prisma.DbNull,
-    )
+      )
     await createSegment('prof-g-stale-role', 'seg-g-stale', 0, 5, 100)
     await createProfile(
       projectId, 'prof-g-stale-nr', 'NAMED_PERSON', null, nrId,
@@ -2426,8 +2271,7 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
         startWeek: null,
         endWeek: null,
       },
-      Prisma.DbNull,
-    )
+      )
     await createSegment('prof-g-stale-nr', 'seg-g-stale-nr', 0, 10, 80)
 
     const v4Data = await buildSnapshot(projectId, prisma)
@@ -2498,13 +2342,11 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     await createProfile(
       projectId2, 'prof-g-bad-role', 'ROLE', rtId2, null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
-      Prisma.DbNull,
-    )
+      )
     await createProfile(
       projectId2, 'prof-g-bad-nr', 'NAMED_PERSON', null, 'nr-g-bad',
       { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
-      Prisma.DbNull,
-    )
+      )
 
     const v4Data = await buildSnapshot(projectId2, prisma)
     const v2Data = {
@@ -2569,8 +2411,7 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     await createProfile(
       projectId2, 'prof-g-p80-role', 'ROLE', rtId2, null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
-      Prisma.DbNull,
-    )
+      )
 
     const v4Data = await buildSnapshot(projectId2, prisma)
     const v2Data = {
@@ -2634,8 +2475,7 @@ describeIf('Scenario G — v2 CAPACITY_PLAN rollback translates to valid window 
     await createProfile(
       projectId2, 'prof-g-min1-role', 'ROLE', rtId2, null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
-      Prisma.DbNull,
-    )
+      )
 
     const v4Data = await buildSnapshot(projectId2, prisma)
     const v2Data = {
@@ -2717,23 +2557,19 @@ describeIf('Scenario H — v2 EFFORT/FULL_PROJECT discard stale windows', () => 
     await createProfile(
       projectId, 'prof-h-stale-effort', 'ROLE', effortRtId, null,
       { planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW', defaultPercent: 60, startWeek: 0, endWeek: 4 },
-      Prisma.DbNull,
-    )
+      )
     await createProfile(
       projectId, 'prof-h-stale-full', 'ROLE', fullRtId, null,
       { planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW', defaultPercent: 40, startWeek: 1, endWeek: 3 },
-      Prisma.DbNull,
-    )
+      )
     await createProfile(
       projectId, 'prof-h-stale-effort-nr', 'NAMED_PERSON', null, effortNrId,
       { planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW', defaultPercent: 60, startWeek: 0, endWeek: 4 },
-      Prisma.DbNull,
-    )
+      )
     await createProfile(
       projectId, 'prof-h-stale-full-nr', 'NAMED_PERSON', null, fullNrId,
       { planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW', defaultPercent: 40, startWeek: 1, endWeek: 3 },
-      Prisma.DbNull,
-    )
+      )
 
     const v4Data = await buildSnapshot(projectId, prisma)
     const v2Data: SnapshotV2 = {
@@ -2810,13 +2646,11 @@ describeIf('Scenario I — orphan v2 owner rejection and fail-closed reads', () 
     await createProfile(
       projectId, 'prof-i-role', 'ROLE', rtId, null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
-      Prisma.DbNull,
-    )
+      )
     await createProfile(
       projectId, 'prof-i-nr', 'NAMED_PERSON', null, 'nr-i-present',
       { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
-      Prisma.DbNull,
-    )
+      )
 
     const v4Data = await buildSnapshot(projectId, prisma)
     const v2Data = {
@@ -2898,13 +2732,11 @@ describeIf('Scenario I — orphan v2 owner rejection and fail-closed reads', () 
     const badProfileId = await createProfile(
       projectId, 'prof-i-bad', 'ROLE', rtId, null,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
-      Prisma.DbNull,
-    )
+      )
     await createProfile(
       projectId, 'prof-i-bad-nr', 'NAMED_PERSON', null, 'nr-i-bad',
       { planningBasis: 'DEMAND_FOLLOWING', source: 'FIXED', defaultPercent: 100, startWeek: null, endWeek: null },
-      Prisma.DbNull,
-    )
+      )
     // Corrupt the persisted ROLE profile: DEMAND_FOLLOWING must not carry windows.
     await prisma.capacityProfile.update({
       where: { id: badProfileId },
@@ -2952,8 +2784,7 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
         startWeek: 0,
         endWeek: 10,
       },
-      Prisma.DbNull,
-    )
+      )
     await createSegment('prof-f-role', 'seg-f-1', 0, 4, 100)
     await createSegment('prof-f-role', 'seg-f-2', 5, 10, 50)
 
@@ -2967,8 +2798,7 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
         startWeek: 2,
         endWeek: 8,
       },
-      { allocationMode: 'EFFORT' },
-    )
+      )
     // ── 6 extra profiles covering all Prisma JSON null states ──
     // Use NAMED_PERSON with unique NRs to avoid owner FK conflicts under #361 constraints
     const nrJsonNull = await createNamedResource(
@@ -2992,32 +2822,26 @@ describeIf('Scenario F — v1 rollback preserves profiles, restores backlog', ()
     await createProfile(
       projectId, 'prof-f-jsonnull', 'NAMED_PERSON', null, nrJsonNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
-      Prisma.JsonNull,
-    )
+      )
     await createProfile(
       projectId, 'prof-f-obj-null', 'NAMED_PERSON', null, nrObjNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
-      { outer: 'value', inner: null, nested: { deep: null } },
-    )
+      )
     await createProfile(
       projectId, 'prof-f-arr-null', 'NAMED_PERSON', null, nrArrNull,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
-      ['a', null, 'c'],
-    )
+      )
     await createProfile(
       projectId, 'prof-f-string', 'NAMED_PERSON', null, nrString,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
-      'hello-legacy',
-    )
+      )
     await createProfile(
       projectId, 'prof-f-number', 'NAMED_PERSON', null, nrNumber,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
-      12345,
-    )
+      )
     await createProfile(
       projectId, 'prof-f-bool', 'NAMED_PERSON', null, nrBool,
       { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 50 },
-      true,
     )
 
     // Backlog for v1 snapshot
@@ -3153,8 +2977,7 @@ describeIf('Scenario K — V4 restores scope and scheduling fields', () => {
         startWeek: 2,
         endWeek: 6,
       },
-      { allocationMode: 'TIMELINE', allocationPercent: 60 },
-    )
+      )
     const backlog = await createEpicBacklog(projectId, rtId, null)
     epicId = backlog.epicId
     featureId = backlog.featureId

@@ -109,15 +109,7 @@ async function createScenario(
         defaultPercent: allocationPercent,
         startWeek,
         endWeek,
-        legacy: {
-          allocationMode: options.allocationMode ?? 'TIMELINE',
-          allocationPercent,
-          allocationPct: allocationPercent,
-          allocationStartWeek: startWeek,
-          allocationEndWeek: endWeek,
-          startWeek,
-          endWeek,
-        },
+        provenance: 'LEGACY_MAPPER',
       },
     })
   }
@@ -217,11 +209,11 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
       defaultPercent: 80,
       startWeek: 4,
       endWeek: 12,
-      legacy: RESOURCE_OPTIMISER_PROFILE_PROVENANCE,
+      provenance: RESOURCE_OPTIMISER_PROFILE_PROVENANCE,
       segments: [],
     })
-    // Issue #418: the optimiser writes the profile only — the legacy
-    // columns no longer exist.
+    // Issue #418/#405: the optimiser writes the profile only; the legacy
+    // JSON column no longer exists.
     expect(namedResource).not.toBeNull()
     expect(project.weeklyDemandCache).toEqual({})
 
@@ -229,13 +221,13 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
     const snapResourceTypes = snapshotData.resourceTypes as Array<Record<string, unknown>>
     const snapNamedResources = snapshotData.namedResources as Array<Record<string, unknown>>
     const snapCapacityProfiles = snapshotData.capacityProfiles as Array<Record<string, unknown>>
-    expect(snapshotData.schemaVersion).toBe(4)
+    expect(snapshotData.schemaVersion).toBe(5)
     expect(snapResourceTypes.find(row => row.id === scenario.resourceTypeId)?.count).toBe(2)
-    // V4 snapshots omit the candidate legacy capacity columns (issue #418) —
-    // capacity state lives in capacityProfiles.
+    // V5 snapshots omit the candidate legacy capacity columns; capacity
+    // state lives in capacityProfiles with explicit provenance.
     expect(snapNamedResources.find(row => row.id === scenario.namedResourceId)?.startWeek).toBeUndefined()
     expect(snapCapacityProfiles).toHaveLength(1)
-    // V4 snapshots store the raw persisted profile rows (restore writes them
+    // V5 snapshots store the raw persisted profile rows (restore writes them
     // back verbatim) — enums are the persisted form, not DTO-cased.
     expect(snapCapacityProfiles[0]).toMatchObject({
       ownerKind: 'NAMED_PERSON',
@@ -261,7 +253,7 @@ describeIf('Resource Optimiser profile-first apply — PostgreSQL', () => {
       id: firstProfileId,
       startWeek: 6,
       endWeek: 12,
-      legacy: RESOURCE_OPTIMISER_PROFILE_PROVENANCE,
+      provenance: RESOURCE_OPTIMISER_PROFILE_PROVENANCE,
       segments: [],
     })
   })

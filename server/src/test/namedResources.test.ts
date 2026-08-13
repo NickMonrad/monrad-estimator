@@ -790,7 +790,7 @@ describe('planner-owned named-resource identity conflicts (#403)', () => {
         defaultPercent: 75,
         startWeek: 4,
         endWeek: 12,
-        legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+        provenance: 'ROLE_DEFAULT',
       }),
     }))
     // Count synced to the new total

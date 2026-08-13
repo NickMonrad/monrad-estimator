@@ -1,4 +1,10 @@
 import { resolveSchedulerCapacity } from './schedulerCapacityResolver.js'
+import {
+  CapacityProfileProvenance,
+  isEffortMapperSourceBasisPair,
+  isLegacyMapperProfile,
+  isOptimiserDerivedProfile as isSharedOptimiserDerivedProfile,
+} from './capacityProfileProvenance.js'
 
 /**
  * Profile-first Resource Optimiser apply orchestration.
@@ -40,7 +46,7 @@ export interface PersistedOptimiserProfile {
   defaultPercent: number | null
   startWeek: number | null
   endWeek: number | null
-  legacy: unknown
+  provenance: string | null
   segments: Array<{ id: string }>
 }
 
@@ -134,10 +140,8 @@ export function isOptimiserApplyConflictError(error: unknown): error is Optimise
   return Array.isArray(error.conflicts)
 }
 
-export const RESOURCE_OPTIMISER_PROFILE_PROVENANCE = Object.freeze({
-  writer: 'RESOURCE_OPTIMISER',
-  version: 1,
-})
+/** Explicit provenance value written onto every optimiser-created scalar profile. */
+export const RESOURCE_OPTIMISER_PROFILE_PROVENANCE = CapacityProfileProvenance.RESOURCE_OPTIMISER
 
 /**
  * Validate the optimiser scope sent with an apply request.
@@ -168,101 +172,25 @@ export function isValidOptimiserScopeForApply(
   return candidate.every(entry => entry.suggestedStartWeek <= 0 || scopeSet.has(entry.resourceTypeId))
 }
 
-const MAPPER_PAIRS: Record<string, readonly [string, string]> = {
-  EFFORT: ['FIXED', 'DEMAND_FOLLOWING'],
-  TIMELINE: ['AVAILABILITY_WINDOW', 'AVAILABILITY_WINDOW'],
-  FULL_PROJECT: ['FIXED', 'WHOLE_PROJECT_ALLOCATION'],
-  CAPACITY_PLAN: ['LEGACY', 'CAPACITY_PROFILE'],
-}
-
-const MAPPER_KEYS = [
-  'allocationMode',
-  'allocationPercent',
-  'allocationPct',
-  'allocationStartWeek',
-  'allocationEndWeek',
-  'startWeek',
-  'endWeek',
-] as const
-
-function isNullableFinite(value: unknown): value is number | null {
-  return value === null || (typeof value === 'number' && Number.isFinite(value))
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function readNullableFiniteLegacyValue(record: Record<string, unknown>, key: string): number | null {
-  const value = record[key]
-  if (!isNullableFinite(value)) throw new TypeError(`Expected ${key} to be a finite number or null`)
-  return value
-}
-
-function hasValidAvailabilityWindow(profile: Pick<PersistedOptimiserProfile, 'defaultPercent' | 'startWeek' | 'endWeek'>): boolean {
-  return Number.isFinite(profile.defaultPercent)
-    && isNullableFinite(profile.startWeek)
-    && isNullableFinite(profile.endWeek)
-    && (profile.startWeek == null || profile.endWeek == null || profile.startWeek <= profile.endWeek)
-}
-
 /**
- * Proves that a scalar NAMED_PERSON profile came from the legacy mapper.
- *
- * The check is profile-internal (issue #418): the persisted `legacy` payload
- * carries the mapper's source values and the profile shape must agree with
- * them. Candidate NamedResource columns are never consulted.
+ * Proves that a scalar NAMED_PERSON profile carries the strict mapper-derived
+ * provenance (issue #405): explicit LEGACY_MAPPER provenance plus the
+ * authoritative mapper shape (owner kind, FKs, mapper source/basis pair,
+ * valid availability window). Candidate NamedResource columns are never
+ * consulted and the removed legacy payload is never read.
  */
 export function isValidNamedResourceMapperProvenance(
   profile: PersistedOptimiserProfile,
 ): boolean {
-  if (profile.ownerKind !== 'NAMED_PERSON') return false
-  if (profile.namedResourceId == null || profile.resourceTypeId != null) return false
-  if (!hasValidAvailabilityWindow(profile)) return false
-  if (!isRecord(profile.legacy)) return false
-
-  for (const key of MAPPER_KEYS) {
-    if (!(key in profile.legacy)) return false
-  }
-
-  const mode = profile.legacy.allocationMode
-  const expectedPair = mode == null
-    ? (['LEGACY', 'DEMAND_FOLLOWING'] as const)
-    : typeof mode === 'string'
-      ? MAPPER_PAIRS[mode]
-      : undefined
-  if (!expectedPair) return false
-  if (profile.source !== expectedPair[0] || profile.planningBasis !== expectedPair[1]) return false
-
-  for (const key of MAPPER_KEYS.slice(1)) {
-    if (!isNullableFinite(profile.legacy[key])) return false
-  }
-
-  const expectedPercent = readNullableFiniteLegacyValue(profile.legacy, 'allocationPercent')
-    ?? readNullableFiniteLegacyValue(profile.legacy, 'allocationPct')
-    ?? 100
-  const expectedStart = readNullableFiniteLegacyValue(profile.legacy, 'allocationStartWeek')
-    ?? readNullableFiniteLegacyValue(profile.legacy, 'startWeek')
-    ?? null
-  const expectedEnd = readNullableFiniteLegacyValue(profile.legacy, 'allocationEndWeek')
-    ?? readNullableFiniteLegacyValue(profile.legacy, 'endWeek')
-    ?? null
-
-  return profile.defaultPercent === expectedPercent
-    && profile.startWeek === expectedStart
-    && profile.endWeek === expectedEnd
+  return isLegacyMapperProfile(profile)
 }
 
 function isOptimiserDerivedProfile(profile: PersistedOptimiserProfile): boolean {
-  return profile.ownerKind === 'NAMED_PERSON'
-    && profile.namedResourceId != null
-    && profile.resourceTypeId == null
-    && profile.source === 'DERIVED'
-    && profile.planningBasis === 'AVAILABILITY_WINDOW'
-    && hasValidAvailabilityWindow(profile)
-    && isRecord(profile.legacy)
-    && profile.legacy.writer === RESOURCE_OPTIMISER_PROFILE_PROVENANCE.writer
-    && profile.legacy.version === RESOURCE_OPTIMISER_PROFILE_PROVENANCE.version
+  return isSharedOptimiserDerivedProfile(profile)
 }
 
 /**
@@ -270,7 +198,7 @@ function isOptimiserDerivedProfile(profile: PersistedOptimiserProfile): boolean 
  *
  * Missing profile state fails closed (issue #418): a named resource without a
  * persisted profile is an integrity violation — the optimiser never promotes
- * scalar legacy state into a profile.
+ * historical mapper state into a profile.
  */
 export function classifyOptimiserRampUpOwner(
   profiles: readonly PersistedOptimiserProfile[],
@@ -321,10 +249,17 @@ function effectiveCurrentStart(
 function effectiveScalarPercent(
   profile: PersistedOptimiserProfile | undefined,
 ): number {
-  const mapperMode = profile && isRecord(profile.legacy)
-    ? profile.legacy.allocationMode
-    : undefined
-  if (mapperMode === 'EFFORT') return 100
+  // Issue #405: the legacy allocationMode==='EFFORT' special case survives
+  // via its authoritative shape evidence. A strict mapper EFFORT profile
+  // (FIXED/DEMAND_FOLLOWING pair) always ramps at a fixed 100% — even when
+  // the migrated row persisted a different defaultPercent — because the
+  // legacy mapper treated EFFORT as full-effort capacity.
+  if (
+    profile?.provenance === CapacityProfileProvenance.LEGACY_MAPPER
+    && isEffortMapperSourceBasisPair(profile.source, profile.planningBasis)
+  ) {
+    return 100
+  }
   return profile?.defaultPercent ?? 100
 }
 
@@ -516,7 +451,7 @@ async function loadOptimiserApplyPlan(
       defaultPercent: true,
       startWeek: true,
       endWeek: true,
-      legacy: true,
+      provenance: true,
       segments: { select: { id: true } },
     },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -618,7 +553,7 @@ async function writeRampUpProfile(
     defaultPercent: write.defaultPercent,
     startWeek: write.startWeek,
     endWeek: write.endWeek,
-    legacy: { ...RESOURCE_OPTIMISER_PROFILE_PROVENANCE },
+    provenance: RESOURCE_OPTIMISER_PROFILE_PROVENANCE,
   }
 
   if (write.profileId) {

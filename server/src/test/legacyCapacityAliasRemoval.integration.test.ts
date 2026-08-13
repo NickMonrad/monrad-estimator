@@ -382,7 +382,7 @@ describeIf('legacy capacity alias removal (#403)', () => {
       defaultPercent: 75,
       startWeek: 4,
       endWeek: 12,
-      legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+      provenance: 'ROLE_DEFAULT',
     })
     expect(await prisma.capacityProfile.findUniqueOrThrow({ where: { id: roleProfile.id }, include: { segments: true } }))
       .toEqual(beforeRole)
@@ -403,7 +403,7 @@ describeIf('legacy capacity alias removal (#403)', () => {
       defaultPercent: 75,
       startWeek: 4,
       endWeek: 12,
-      legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+      provenance: 'ROLE_DEFAULT',
     })
     const rtAfterAdd = await prisma.resourceType.findUniqueOrThrow({ where: { id: rt.id } })
     expect(rtAfterAdd.count).toBe(3)
@@ -470,7 +470,7 @@ describeIf('legacy capacity alias removal (#403)', () => {
       defaultPercent: 60,
       startWeek: null,
       endWeek: null,
-      legacy: { version: 1, writer: 'ROLE_DEFAULT' },
+      provenance: 'ROLE_DEFAULT',
     })
     expect(cloned.segments.map(s => [s.startWeek, s.endWeek, s.capacityPercent, s.source])).toEqual([
       [0, 2, 100, 'MANUAL'],

@@ -204,8 +204,8 @@ async function createProfile(
     defaultPercent: number | null
     startWeek: number | null
     endWeek: number | null
+    provenance: $Enums.CapacityProfileProvenance | null
   }> = {},
-  legacyValue: Prisma.NullableJsonNullValueInput | Prisma.InputJsonValue = Prisma.DbNull,
 ): Promise<string> {
   await prisma.capacityProfile.create({
     data: {
@@ -219,7 +219,7 @@ async function createProfile(
       defaultPercent: overrides.defaultPercent ?? null,
       startWeek: overrides.startWeek ?? null,
       endWeek: overrides.endWeek ?? null,
-      legacy: legacyValue,
+      provenance: overrides.provenance ?? null,
     },
   })
   return id
@@ -352,40 +352,6 @@ async function createEpicBacklog(
   return { epicId: epic.id, featureId: feature.id, storyId: story.id }
 }
 
-/**
- * Detect which capacity profiles have database-NULL legacy (as opposed to
- * JSON null).  Returns a Set of profile IDs where legacy IS NULL at the
- * storage level.
- */
-async function detectDbNullProfileIds(projectId: string): Promise<Set<string>> {
-  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-    SELECT cp.id FROM "CapacityProfile" cp WHERE cp."projectId" = ${projectId} AND cp.legacy IS NULL
-  `)
-  return new Set(rows.map(r => r.id))
-}
-
-interface LegacyTypeRow {
-  id: string
-  legacy_is_null: boolean
-  legacy_typeof: string | null
-}
-
-/**
- * Fetch raw sql-level null and jsonb_typeof state for every capacity profile
- * in the project. Returns a Map of profile id → { isDbNull, typeOf }.
- */
-async function detectLegacyTypeInfo(projectId: string): Promise<Map<string, { isDbNull: boolean; typeOf: string | null }>> {
-  const rows = await prisma.$queryRaw<LegacyTypeRow[]>(Prisma.sql`
-    SELECT id, "legacy" IS NULL AS legacy_is_null, jsonb_typeof("legacy") AS legacy_typeof
-    FROM "CapacityProfile"
-    WHERE "projectId" = ${projectId}
-    ORDER BY id
-  `)
-  return new Map(rows.map(r => [r.id, { isDbNull: r.legacy_is_null, typeOf: r.legacy_typeof }]))
-}
-
-// ─── Normalised comparison types ────────────────────────────────────────────
-
 interface NormalisedSegment {
   startWeek: number
   endWeek: number
@@ -402,7 +368,7 @@ interface NormalisedProfile {
   defaultPercent: number | null
   startWeek: number | null
   endWeek: number | null
-  legacy: unknown
+  provenance: string | null
   segments: NormalisedSegment[]
 }
 
@@ -414,7 +380,6 @@ interface NormalisedProjectState {
   capacityPlans: Array<{ name: string; targetWeeks: number; periodWeeks: number; isActive: boolean }>
   capacityPlanEntries: Array<{ resourceTypeName: string; headcount: number; demandFTE: number; utilisationPct: number }>
   epicCount: number
-  dbNullProfileIds: string[]
 }
 
 async function captureNormalisedState(projectId: string): Promise<NormalisedProjectState> {
@@ -451,7 +416,6 @@ async function captureNormalisedState(projectId: string): Promise<NormalisedProj
   })
 
   const epicCount = await prisma.epic.count({ where: { projectId } })
-  const dbNullIds = Array.from(await detectDbNullProfileIds(projectId))
 
   const normalisedProfiles: NormalisedProfile[] = profiles.map(p => {
     let ownerName: string
@@ -469,7 +433,7 @@ async function captureNormalisedState(projectId: string): Promise<NormalisedProj
       defaultPercent: p.defaultPercent,
       startWeek: p.startWeek,
       endWeek: p.endWeek,
-      legacy: p.legacy,
+      provenance: p.provenance,
       segments: p.segments.map(s => ({
         startWeek: s.startWeek,
         endWeek: s.endWeek,
@@ -534,7 +498,6 @@ async function captureNormalisedState(projectId: string): Promise<NormalisedProj
     })).sort((a, b) => a.name.localeCompare(b.name)),
     capacityPlanEntries: normalisedPlanEntries,
     epicCount,
-    dbNullProfileIds: dbNullIds,
   }
 }
 
@@ -569,11 +532,23 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     rtGovId = await createResourceType(srcProjectId, crypto.randomUUID(), 'Governance',
       { category: 'GOVERNANCE', count: 1 })
 
-    // Named resources under Engineering (2 — one of each billing model)
+    // Named resources under Engineering (2 — one of each billing model).
+    // createdAt is pinned to distinct timestamps: the clone preserves them and
+    // the scheduler/resource-profile order (createdAt asc) is deterministic —
+    // otherwise a created-at tie defers order to a random id tiebreak and the
+    // A16/A17 assignment/CSV parity becomes order-flaky.
     nrJohnId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'John Developer',
       { pricingModel: 'ACTUAL_DAYS' })
+    await prisma.namedResource.update({
+      where: { id: nrJohnId },
+      data: { createdAt: new Date('2026-01-01T00:00:00.000Z') },
+    })
     nrJaneId = await createNamedResource(srcProjectId, rtEngId, crypto.randomUUID(), 'Jane Architect',
       { pricingModel: 'PRO_RATA' })
+    await prisma.namedResource.update({
+      where: { id: nrJaneId },
+      data: { createdAt: new Date('2026-01-01T00:00:01.000Z') },
+    })
 
     // ── Capacity profiles (11) ───────────────────────────────────────────
     // ROLE — scalar shape (single segment, same window). Segmented with
@@ -606,8 +581,7 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       data: { id: cpDbNullNrId, name: 'Temp Clone dbnull', resourceTypeId: rtEngId },
     })
     const cpDbNullId = await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, cpDbNullNrId,
-      { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL' },
-      Prisma.DbNull)
+      { planningBasis: 'CAPACITY_PROFILE', source: 'MANUAL' })
     await createSegment(cpDbNullId, crypto.randomUUID(), 0, 5, 30, 'MANUAL')
 
     // Additional JSON legacy profiles must use unique owner FKs due to #361 constraints.
@@ -622,33 +596,27 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
 
     // ROLE — JSON null legacy
     await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('jsonnull'),
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
-      Prisma.JsonNull)
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' })
 
     // ROLE — complex legacy values
     await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('complex'),
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'IMPORTED' },
-      { nestedField: { inner: null }, items: [1, null, 'hello'], flag: true, count: 42, label: 'test-value' })
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'IMPORTED' })
 
     // ROLE — top-level array containing null
     await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('arrnull'),
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
-      [null, 'item', 3])
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' })
 
     // ROLE — string legacy value
     await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('string'),
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
-      'plain-string-value')
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' })
 
     // ROLE — finite number legacy value
     await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('number'),
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
-      42)
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' })
 
     // ROLE — boolean legacy value
     await createProfile(srcProjectId, crypto.randomUUID(), 'NAMED_PERSON', null, await makeTempNr('bool'),
-      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' },
-      true)
+      { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL' })
 
     // ── Backlog (for epic count parity) ──────────────────────────────────
     const backlog = await createEpicBacklog(srcProjectId, rtEngId)
@@ -811,6 +779,7 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       expect(sp.defaultPercent).toBe(cp.defaultPercent)
       expect(sp.startWeek).toBe(cp.startWeek)
       expect(sp.endWeek).toBe(cp.endWeek)
+      expect(sp.provenance).toBe(cp.provenance)
       // Compare segment arrays
       expect(sp.segments.length).toBe(cp.segments.length)
       for (let si = 0; si < sp.segments.length; si++) {
@@ -822,11 +791,11 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
     }
   })
 
-  // ── Test A5: Legacy null/type state preservation ─────────────────────
-  it('A5 — DB_NULL, JSON null, and complex nested values preserved exactly', async () => {
+  // ── Test A5: Explicit provenance preservation (issue #405) ───────────
+  it('A5 — provenance is cloned exactly for every profile', async () => {
     const cloneProjectId = cloneResponse.body.id
 
-    // 1. Business-value parity for every profile
+    // 1. Business-value + provenance parity for every profile
     const srcState = await captureNormalisedState(srcProjectId)
     const cloneState = await captureNormalisedState(cloneProjectId)
     expect(srcState.profiles.length).toBe(cloneState.profiles.length)
@@ -836,68 +805,24 @@ describeIf('Scenario A — full clone with capacity profiles, null semantics, an
       const cp = cloneState.profiles[i]
       expect(sp.ownerKind).toBe(cp.ownerKind)
       expect(sp.ownerName).toBe(cp.ownerName)
-      if (sp.legacy === null) {
-        expect(cp.legacy).toBeNull()
-      } else {
-        expect(cp.legacy).toEqual(sp.legacy)
-      }
+      // The legacy JSON payload no longer exists; the explicit provenance is
+      // the behavioural marker and must round-trip through clone.
+      expect(cp.provenance).toBe(sp.provenance)
     }
 
-    // 2. Raw SQL level: jsonb_typeof for every profile.
-    //    Count profiles by their SQL-level legacy type to prove exact
-    //    storage semantics (DB_NULL ≠ JSON_NULL) are preserved.
-    const srcInfo = await detectLegacyTypeInfo(srcProjectId)
-    const cloneInfo = await detectLegacyTypeInfo(cloneProjectId)
-
-    function countByType(info: Map<string, { isDbNull: boolean; typeOf: string | null }>): Map<string, number> {
-      const counts = new Map<string, number>()
-      for (const { isDbNull, typeOf } of info.values()) {
-        const key = isDbNull ? 'DB_NULL' : `JSON_${typeOf}`
-        counts.set(key, (counts.get(key) ?? 0) + 1)
-      }
-      return counts
-    }
-
-    const srcCounts = countByType(srcInfo)
-    const cloneCounts = countByType(cloneInfo)
-    expect(cloneCounts.size).toBe(srcCounts.size)
-    for (const [key, count] of srcCounts) {
-      expect(cloneCounts.get(key), `count for type "${key}"`).toBe(count)
-    }
-
-    // 3. For DB_NULL profiles specifically: verify isDbNull=true and typeOf is null
-    const srcDbNull = Array.from(srcInfo.values()).filter(i => i.isDbNull)
-    const cloneDbNull = Array.from(cloneInfo.values()).filter(i => i.isDbNull)
-    expect(cloneDbNull.length).toBe(srcDbNull.length)
-    expect(cloneDbNull.every(i => i.typeOf === null)).toBe(true)
-
-    // 4. For the complex object profile: verify nested null and array-null
-    //    are preserved at the JSONB value level (not just type).
-    //    Find it by its unique source type (IMPORTED, object typeOf).
-    const srcProfiles = await prisma.capacityProfile.findMany({
-      where: { projectId: srcProjectId, source: 'IMPORTED' },
-      select: { id: true },
+    // 2. ORM-level provenance values match source exactly
+    const srcRows = await prisma.capacityProfile.findMany({
+      where: { projectId: srcProjectId },
+      select: { provenance: true },
+      orderBy: { id: 'asc' },
     })
-    const cloneProfiles = await prisma.capacityProfile.findMany({
-      where: { projectId: cloneProjectId, source: 'IMPORTED' },
-      select: { id: true },
+    const cloneRows = await prisma.capacityProfile.findMany({
+      where: { projectId: cloneProjectId },
+      select: { provenance: true },
+      orderBy: { id: 'asc' },
     })
-    expect(srcProfiles.length).toBe(1)
-    expect(cloneProfiles.length).toBe(1)
-
-    const [srcComplexRow] = await prisma.$queryRaw<Array<{ id: string; legacy: unknown }>>(Prisma.sql`
-      SELECT id, "legacy" FROM "CapacityProfile" WHERE id = ${srcProfiles[0].id}
-    `)
-    const [cloneComplexRow] = await prisma.$queryRaw<Array<{ id: string; legacy: unknown }>>(Prisma.sql`
-      SELECT id, "legacy" FROM "CapacityProfile" WHERE id = ${cloneProfiles[0].id}
-    `)
-    expect(cloneComplexRow.legacy).toEqual(srcComplexRow.legacy)
-    // Verify the complex structure includes a nested null and null in array
-    const obj = cloneComplexRow.legacy as Record<string, unknown>
-    expect(obj).toHaveProperty('nestedField')
-    expect((obj.nestedField as Record<string, unknown> | null)?.inner).toBeNull()
-    expect(Array.isArray(obj.items)).toBe(true)
-    expect((obj.items as unknown[]).includes(null)).toBe(true)
+    expect(cloneRows.map(r => r.provenance).sort())
+      .toEqual(srcRows.map(r => r.provenance).sort())
   })
 
   // ── Test A6: Planning identity (planningBasis, source, etc.) ─────────

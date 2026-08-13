@@ -3,7 +3,6 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { loadExactCapacityProfiles } from '../lib/exactCapacityProfileReader.js'
-import { snapshotJsonValueToPrisma } from '../lib/projectSnapshotTypes.js'
 
 const router = Router()
 router.use(authenticate)
@@ -167,13 +166,18 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
       rtIdMap.set(rt.id, newRt.id)
 
       // Copy named resources (identity and independent metadata only;
-      // capacity state is cloned losslessly via capacity profiles below)
+      // capacity state is cloned losslessly via capacity profiles below).
+      // createdAt is preserved so scheduler/resource-profile ordering (which
+      // sorts named resources by createdAt) matches the source exactly —
+      // otherwise a transaction-stamped identical createdAt defers the order
+      // to a random id tiebreak and assignment parity breaks.
       for (const nr of rt.namedResources) {
         const newNr = await tx.namedResource.create({
           data: {
             name: nr.name,
             pricingModel: nr.pricingModel,
             resourceTypeId: newRt.id,
+            createdAt: nr.createdAt,
           },
         })
         nrIdMap.set(nr.id, newNr.id)
@@ -439,7 +443,7 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
           defaultPercent: profile.defaultPercent,
           startWeek: profile.startWeek,
           endWeek: profile.endWeek,
-          legacy: snapshotJsonValueToPrisma(profile.legacy),
+          provenance: profile.provenance,
         },
       })
 
@@ -535,7 +539,9 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       include: { resourceTypes: true, org: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } },
     })
 
-    // Create authoritative role-owned capacity profiles for each seeded resource type
+    // Create authoritative role-owned capacity profiles for each seeded resource type.
+    // The seed reproduces the strict mapper (source, planningBasis) shape, so it carries
+    // LEGACY_MAPPER provenance to preserve Squad Planner ROLE adoption parity (issue #405).
     for (const rt of p.resourceTypes) {
       await tx.capacityProfile.create({
         data: {
@@ -548,15 +554,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           defaultPercent: 100,
           startWeek: null,
           endWeek: null,
-          legacy: {
-            allocationMode: 'TIMELINE',
-            allocationPercent: 100,
-            allocationPct: null,
-            allocationStartWeek: null,
-            allocationEndWeek: null,
-            startWeek: null,
-            endWeek: null,
-          },
+          provenance: 'LEGACY_MAPPER',
         },
       })
     }

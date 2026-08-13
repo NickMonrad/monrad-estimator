@@ -23,7 +23,7 @@ export interface NRToClassify {
 
 export interface NRProfileState {
   namedResourceId: string | null
-  legacy: unknown
+  provenance?: unknown
   ownerKind?: string
   source?: string | null
   segments?: unknown[]
@@ -105,16 +105,18 @@ function profileMatchesOldRoleDefault(
  * persisted profiles has authoritative evidence:
  *
  * 1. `ownerKind === 'PLANNED_RESOURCE'` — synthetic/planned resource.
- * 2. `source === 'MANUAL'` — user-authored or transferred, even with legacy metadata.
+ * 2. `source === 'MANUAL'` — user-authored or transferred.
  * 3. `source === 'SQUAD_PLANNER'` — planner-owned (defensive; routes guard earlier).
- * 4. `legacy === null | undefined` — profile-first write, never sync-derived.
+ * 4. `provenance === null | undefined` — ordinary profile-first write with no
+ *    special behavioural provenance, never a system-derived clone.
  * 5. Non-empty `segments` — fine-grained explicit allocation, UNLESS the
- *    profile is a system-generated role-default clone (persisted
- *    `legacy.writer === 'ROLE_DEFAULT'`): generated segmented resources must
- *    remain removable by a later count reduction, so they fall through to
- *    profile-shape comparison instead.
+ *    profile is a system-generated role-default clone (`provenance ===
+ *    'ROLE_DEFAULT'`): generated segmented resources must remain removable
+ *    by a later count reduction, so they fall through to profile-shape
+ *    comparison instead.
  *
- * When ALL profiles are sync-derived (populated legacy) the profile-shape
+ * When ALL profiles lack protective evidence (system-derived clones with
+ * ROLE_DEFAULT provenance, or legacy mapper-derived rows) the profile-shape
  * equality of the NR's authoritative profile against the old role profile
  * decides:
  *
@@ -130,7 +132,7 @@ function profileMatchesOldRoleDefault(
  * duplicates or mixed-origin rows is sufficient to protect the NR.
  *
  * This prevents data loss during PATCH safe reduction when sync-derived
- * (populated-legacy) duplicates coexist with authoritative profiles.
+ * duplicates coexist with authoritative profiles.
  *
  * When provenance is uncertain, the classifier prefers to preserve NR data.
  */
@@ -168,13 +170,15 @@ export function classifyNRsForRoleUpdate(
           break
         }
 
-        // Manual/transferred profiles are protected — even with legacy metadata
+        // Manual/transferred profiles are protected
         if (profile.source === 'MANUAL' || profile.source === 'SQUAD_PLANNER') {
           hasProtectedEvidence = true
           break
         }
 
-        if (profile.legacy === null || profile.legacy === undefined) {
+        // Ordinary profile-first writes carry no behavioural provenance and
+        // are never sync-derived clones.
+        if (profile.provenance === null || profile.provenance === undefined) {
           hasProtectedEvidence = true
           break
         }
@@ -191,7 +195,7 @@ export function classifyNRsForRoleUpdate(
       if (hasProtectedEvidence) {
         explicitNRIds.push(nr.id)
       } else {
-        // Sync-derived (or role-default clone) state: authoritative profile
+        // System-derived clone / mapper-derived state: authoritative profile
         // shape decides inherited vs explicit.
         if (profiles.some(profile => profileMatchesOldRoleDefault(profile, oldRoleProfile))) {
           inheritedNRIds.push(nr.id)

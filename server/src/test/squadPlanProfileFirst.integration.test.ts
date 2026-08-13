@@ -604,6 +604,88 @@ describeIf('Scenario 1 — Activated apply writes ROLE and PLANNED_RESOURCE prof
     expect(resolved.resourceTypes).toEqual(resolved2.resourceTypes)
   })
 })
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 1b — Planner adoption clears stale mapper provenance (issue #405)
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario 1b — Squad Planner adoption clears stale LEGACY_MAPPER provenance', () => {
+  let projectId: string
+  let rtId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    rtId = await createResourceType(projectId, 'rt-adopt-s1', 'Adopt Engineer')
+    await createEpicBacklog(projectId, rtId)
+    const fillEpic = await prisma.epic.create({ data: { name: 'Adopt Fill Epic', projectId, order: 1 } })
+    const fillFeature = await prisma.feature.create({ data: { name: 'Adopt Fill Feature', epicId: fillEpic.id, order: 0 } })
+    for (let i = 0; i < 6; i++) {
+      const fillStory = await prisma.userStory.create({
+        data: { name: `Adopt Fill Story ${i}`, featureId: fillFeature.id, order: i },
+      })
+      await prisma.task.create({
+        data: {
+          name: `Adopt Fill Task ${i}`,
+          userStoryId: fillStory.id, order: 0,
+          hoursEffort: 60,
+          resourceTypeId: rtId,
+          durationDays: 8,
+        },
+      })
+    }
+
+    // Seed a strict mapper ROLE profile (EFFORT pair: FIXED/DEMAND_FOLLOWING)
+    // carrying LEGACY_MAPPER provenance — the adoptable pre-#405 shape.
+    await prisma.capacityProfile.create({
+      data: {
+        projectId,
+        resourceTypeId: rtId,
+        namedResourceId: null,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'FIXED',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        provenance: 'LEGACY_MAPPER',
+      },
+    })
+
+    const applyRes = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildApplyPayload(rtId, [
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+      ]))
+
+    expect(applyRes.status).toBe(201)
+  })
+
+  it('adopts the strict mapper ROLE profile with planner source/basis and provenance cleared', async () => {
+    const roleProfiles = await prisma.capacityProfile.findMany({
+      where: { projectId, ownerKind: 'ROLE', resourceTypeId: rtId },
+    })
+    expect(roleProfiles).toHaveLength(1)
+    expect(roleProfiles[0]!.planningBasis).toBe('CAPACITY_PROFILE')
+    expect(roleProfiles[0]!.source).toBe('SQUAD_PLANNER')
+    // Issue #405: the profile is planner-owned now — stale mapper provenance
+    // must not survive the adoption.
+    expect(roleProfiles[0]!.provenance).toBeNull()
+  })
+
+  it('planner-created PLANNED_RESOURCE profiles carry no provenance', async () => {
+    const plannedProfiles = await prisma.capacityProfile.findMany({
+      where: { projectId, ownerKind: 'PLANNED_RESOURCE' },
+    })
+    expect(plannedProfiles.length).toBeGreaterThan(0)
+    for (const profile of plannedProfiles) {
+      expect(profile.planningBasis).toBe('CAPACITY_PROFILE')
+      expect(profile.source).toBe('SQUAD_PLANNER')
+      expect(profile.provenance).toBeNull()
+    }
+  })
+})
 describeIf('Scenario 2 — Equivalent reapply is idempotent', () => {
   let projectId: string
   let rtId: string
@@ -1670,8 +1752,7 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     expect(explicitDto!.source).toBe('manual')
     expect(explicitDto!.defaultPercent).toBe(80)
 
-    // Legacy fields are null on persisted-authority path
-    expect(explicitDto!.legacy).toBeDefined()
+
   })
 
   it('fails closed when planner ROLE profile is removed', async () => {
@@ -1738,8 +1819,7 @@ describeIf('Scenario 11 — Endpoint-level completeness for /capacity-profiles',
     expect(roleDto).toBeDefined()
     expect(roleDto!.planningBasis).toBe('capacityProfile')
     expect(roleDto!.source).toBe('squadPlanner')
-    // Legacy fields are null on authority path
-    expect((roleDto!.legacy as Record<string, unknown>)?.allocationMode).toBeNull()
+
 
     // Planned resources should still be authoritative
     const plannedDtos = profiles.filter(
@@ -2309,16 +2389,7 @@ describeIf('Scenario 19 — Fresh CAPACITY_PLAN mapper-produced profile adopted 
         defaultPercent: 100,
         startWeek: 0,
         endWeek: 10,
-        legacy: {
-          version: 1,
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: 100,
-          allocationPct: null,
-          allocationStartWeek: 0,
-          allocationEndWeek: 10,
-          startWeek: null,
-          endWeek: null,
-        },
+        provenance: 'LEGACY_MAPPER',
       },
     })
     const mapperRoleId = mapperRole.id
@@ -2541,18 +2612,12 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
         namedResourceId: null,
         source: 'LEGACY',
         planningBasis: 'CAPACITY_PROFILE',
-        defaultPercent: null,            // ← profile defaultPercent is null
+        defaultPercent: null,            // ← diverged profile shape
         startWeek: 0,
         endWeek: 10,
-        legacy: {
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: 100,          // ← but legacy allocationPercent is 100
-          allocationPct: null,
-          allocationStartWeek: 0,
-          allocationEndWeek: 10,
-          startWeek: null,
-          endWeek: null,
-        },
+        // Issue #405: a row that failed the strict mapper contract migrates
+        // to provenance NULL and is not planner-adoptable (fail closed).
+        provenance: null,
       },
     })
  
@@ -2603,15 +2668,8 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
         defaultPercent: 100,
         startWeek: null,
         endWeek: null,
-        legacy: {
-          allocationMode: 'EFFORT',
-          allocationPercent: 100,
-          allocationPct: 50,    // ← ROLE should have null allocationPct
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          startWeek: null,
-          endWeek: null,
-        },
+        // Issue #405: no mapper provenance → not planner-adoptable (409).
+        provenance: null,
       },
     })
  
@@ -2648,17 +2706,10 @@ describeIf('Scenario 20 — Malformed mapper-provenance rejection preserves stat
         source: 'LEGACY',
         planningBasis: 'CAPACITY_PROFILE',
         defaultPercent: 100,
-        startWeek: null,              // ← profile startWeek is null
+        startWeek: null,              // ← diverged profile shape
         endWeek: 10,
-        legacy: {
-          allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: 100,
-          allocationPct: null,
-          allocationStartWeek: 1,      // ← but legacy allocationStartWeek is 1 (non-null)
-          allocationEndWeek: 10,
-          startWeek: null,
-          endWeek: null,
-        },
+        // Issue #405: no mapper provenance → not planner-adoptable (409).
+        provenance: null,
       },
     })
  
