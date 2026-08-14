@@ -1655,3 +1655,29 @@ describe('POST /api/projects/:projectId/timeline/level — buildSnapshot rejecti
     expect(prisma.$transaction).not.toHaveBeenCalled()
   })
 })
+
+describe('error classification (issue #387)', () => {
+  it('unexpected planning derivation failure reaches the central error handler (500, not 404)', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.timelineEntry.findMany).mockRejectedValue(new Error('boom'))
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(500)
+    expect(res.body.error).toContain('boom')
+  })
+
+  it('malformed startDate on schedule returns an actionable 400', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/timeline/schedule')
+      .set('Authorization', authHeader)
+      .send({ startDate: 'not-a-real-date' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('startDate')
+  })
+})

@@ -267,7 +267,7 @@ describe('canonical cross-surface consistency', () => {
         }],
       }],
       overheads: [],
-      timelineEntries: [{ featureId: 'feat-auth', startWeek: 0, durationWeeks: 4 }],
+      timelineEntries: [{ featureId: 'feat-auth', feature: { id: 'feat-auth', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 4 }],
       storyTimelineEntries: [],
       capacityPlans: [],
       capacityProfiles: capacityProfileFixture(),
@@ -373,7 +373,7 @@ describe('canonical cross-surface consistency', () => {
         }],
       }],
       overheads: [],
-      timelineEntries: [{ featureId: 'feat-auth', startWeek: 0, durationWeeks: 4 }],
+      timelineEntries: [{ featureId: 'feat-auth', feature: { id: 'feat-auth', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 4 }],
       storyTimelineEntries: [],
       capacityPlans: [],
       capacityProfiles: capacityProfileFixture(),
@@ -435,5 +435,88 @@ describe('canonical cross-surface consistency', () => {
     // Section 2 is the Resource Demand section: ResourceType,Week,DemandDays,CapacityDays,Status
     const demandSection = sections[1]
     expect(demandSection).toContain('Developer,0,5,')
+  })
+})
+
+describe('canonical planning model — schedule and GET agree (issue #387)', () => {
+  it('POST /timeline/schedule and GET /timeline return the same canonical planning fields', async () => {
+    const epics = [{
+      id: 'epic-1',
+      name: 'Platform',
+      order: 0,
+      isActive: true,
+      featureMode: 'sequential',
+      scheduleMode: 'auto',
+      timelineStartWeek: null,
+      features: [{
+        id: 'feat-auth',
+        name: 'Authentication',
+        order: 0,
+        isActive: true,
+        timelineStartWeek: null,
+        dependencies: [],
+        userStories: [{
+          id: 'story-auth',
+          order: 0,
+          isActive: true,
+          dependencies: [],
+          tasks: [{
+            id: 'task-auth',
+            resourceTypeId: 'rt-dev',
+            hoursEffort: 40,
+            durationDays: null,
+            resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8, count: 2 },
+          }],
+        }],
+      }],
+    }]
+
+    const scheduledEntries = [{
+      id: 'entry-auth',
+      projectId: 'proj-1',
+      featureId: 'feat-auth',
+      startWeek: 0,
+      durationWeeks: 1,
+      isManual: false,
+      feature: timelineEntryFixture()[0].feature,
+    }]
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...baseProjectFixture(),
+      weeklyDemandCache: null,
+    } as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue(capacityProfileFixture() as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue(epics as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue(resourceTypeWithNamedResources() as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
+    // Clear any unconsumed once-queue left by earlier tests (clearAllMocks
+    // does not reset once queues), so this test's call sequence is exact.
+    vi.mocked(prisma.timelineEntry.findMany).mockReset()
+    vi.mocked(prisma.timelineEntry.findMany)
+      .mockResolvedValueOnce([]) // manual entries for the scheduler
+      .mockResolvedValueOnce(scheduledEntries as never) // canonical model reload after persist
+      .mockResolvedValue(scheduledEntries as never) // subsequent GET
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
+
+    const postRes = await request(app)
+      .post('/api/projects/proj-1/timeline/schedule')
+      .set('Authorization', authHeader)
+      .send({})
+    expect(postRes.status).toBe(200)
+
+    const getRes = await request(app)
+      .get('/api/projects/proj-1/timeline')
+      .set('Authorization', authHeader)
+    expect(getRes.status).toBe(200)
+
+    // The post-schedule response is produced by the same canonical model and
+    // DTO mapping path as GET — no separate calculation implementation.
+    expect(getRes.body.weeklyDemand).toEqual(postRes.body.weeklyDemand)
+    expect(getRes.body.weeklyCapacity).toEqual(postRes.body.weeklyCapacity)
+    expect(getRes.body.namedResources).toEqual(postRes.body.namedResources)
+    expect(getRes.body.entries).toEqual(postRes.body.entries)
+    expect(getRes.body.parallelWarnings).toEqual(postRes.body.parallelWarnings)
+    expect(getRes.body.projectedEndDate).toEqual(postRes.body.projectedEndDate)
+    expect(getRes.body.storyEntries).toEqual(postRes.body.storyEntries)
   })
 })

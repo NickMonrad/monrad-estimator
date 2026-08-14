@@ -306,55 +306,61 @@ erDiagram
 
 ## Scheduling data flow
 
-At a high level, the schedule endpoint does four things:
+The schedule endpoint is one focused command (`scheduleProject`), which:
 
-1. **Load** the project settings, active backlog, dependencies, manual overrides, resource types, named resources, and the active capacity plan.
-2. **Run the scheduler** (`runScheduler`) to decide each feature's start week and duration, each story's placement, and the weekly demand per resource type.
-3. **Save** the resulting `TimelineEntry` and `StoryTimelineEntry` records, plus the week-by-week demand cache (`Project.weeklyDemandCache`).
-4. **Combine** the saved timeline data with the materialized capacity plan to build the shared planning read model, which feeds the Timeline UI, Resource Profile, commercial summaries, and CSV/PDF exports.
+1. **Verify and validate** — ownership check (missing/unauthorised project → 404), planning state guard (NEEDS_REPLAN → 409 REPLAN_REQUIRED), and request input validation (400 on a malformed start date).
+2. **Load** the project settings, active backlog, dependencies, manual overrides, resource types, named resources, and the active capacity plan.
+3. **Run the scheduler** (`runScheduler`) to decide each feature's start week and duration, each story's placement, and the weekly demand per resource type.
+4. **Save atomically** — feature and story `TimelineEntry`/`StoryTimelineEntry` upserts, removal of inactive/superseded generated entries, the applicable project start-date change, and the week-by-week demand cache (`Project.weeklyDemandCache`) all commit in one Prisma transaction. Any failure rolls back the entire update and leaves the previous persisted schedule and cache intact.
+5. **Reload** the canonical planning read model (`buildProjectPlanningModel`) and return it, so the post-schedule response is produced by exactly the same derivation and DTO mapping path as `GET /timeline`.
 
 The Mermaid diagram below shows the same flow in more detail.
 
 ```mermaid
 flowchart TD
   Request[POST /api/projects/:id/timeline/schedule]
+  Guard[scheduleProject: ownership + planning state + input validation]
   Project[Load Project<br/>hoursPerDay, startDate, buffer/onboarding]
   Backlog[Load active Epics, Features, Stories, Tasks]
   Deps[Load EpicDependency + FeatureDependency + StoryDependency]
   Manual[Load manual TimelineEntry + StoryTimelineEntry]
   ResourceTypes[Load ResourceType + NamedResource]
   CapacityPlan[Load active CapacityPlan + periods + entries]
-  Materialize[materializeCapacityPlanResources]
+  Resolve[resolveSchedulerCapacity — profile-first DTOs]
   SchedulerInput[SchedulerInput]
   Scheduler[runScheduler]
   FeatureSchedule[featureSchedule]
   StorySchedule[storySchedule]
   Consumption[weeklyConsumptionMap]
-  Persist[Upsert TimelineEntry + StoryTimelineEntry<br/>write Project.weeklyDemandCache]
-  Response[buildResponse / buildProjectPlanningModel]
+  Tx[One Prisma transaction: upsert feature + story entries,<br/>remove inactive entries, project start date, weeklyDemandCache]
+  Reload[buildProjectPlanningModel = loadProjectPlanningInputs + deriveProjectPlanningModel]
+  Response[mapPlanningModelToTimelineResponse]
   Consumers[Timeline UI + Resource Profile + Commercial + CSV/PDF]
 
-  Request --> Project
+  Request --> Guard
+  Guard --> Project
   Project --> Backlog
   Project --> Deps
   Project --> Manual
   Project --> ResourceTypes
   Project --> CapacityPlan
-  CapacityPlan --> Materialize
+  CapacityPlan --> Resolve
+  ResourceTypes --> Resolve
   Backlog --> SchedulerInput
   Deps --> SchedulerInput
   Manual --> SchedulerInput
-  ResourceTypes --> SchedulerInput
+  Resolve --> SchedulerInput
   SchedulerInput --> Scheduler
   Scheduler --> FeatureSchedule
   Scheduler --> StorySchedule
   Scheduler --> Consumption
-  FeatureSchedule --> Persist
-  StorySchedule --> Persist
-  Consumption --> Persist
-  Persist --> Response
-  ResourceTypes --> Response
-  Materialize --> Response
+  FeatureSchedule --> Tx
+  StorySchedule --> Tx
+  Consumption --> Tx
+  Tx --> Reload
+  Reload --> Response
+  Response --> Consumers
+```
   Response --> Consumers
 ```
 
@@ -506,19 +512,22 @@ The sparse-sliver regression from #283 came from proportional allocation leaving
 
 ## Shared planning read model
 
-`buildProjectPlanningModel` is the shared place where Timeline, Resource Profile, Commercial, and exports get the same calculated planning view. It does not own commercial pricing rules and it does not change the backlog effort source records.
+`loadProjectPlanningInputs` + `deriveProjectPlanningModel` (composed by `buildProjectPlanningModel`) is the single place where Timeline, Resource Profile, Commercial, and exports get the same calculated planning view. The pure derivation (`deriveProjectPlanningModel`) imports no Prisma or Express and computes the planning window, weekly demand, weekly capacity, named-resource assignments, and planning warnings from plain inputs; database loading is a thin adapter. The post-schedule response reuses the exact same derivation and DTO mapping path as `GET /timeline`. It does not own commercial pricing rules and it does not change the backlog effort source records.
 
 ```mermaid
 flowchart TD
+  Load[loadProjectPlanningInputs<br/>project, resource types, capacity, entries, deps]
   TimelineEntries[TimelineEntry + StoryTimelineEntry]
   Cache[Project.weeklyDemandCache]
-  Fallback[Fallback uniform demand<br/>from entries if cache missing]
+  Fallback[Fallback demand from feature entries<br/>buildFallbackWeeklyDemand]
   Convert[convertWeeklyDemandCache<br/>ID/name compatible]
   Merge[mergeWeeklyDemand<br/>cache wins over fallback horizon]
   Capacity[computeWeeklyCapacity]
   Assign[deriveNamedResourceAssignments]
   Model[ProjectPlanningModel]
 
+  Load --> TimelineEntries
+  Load --> Cache
   TimelineEntries --> Fallback
   Cache --> Convert
   Convert --> Merge
@@ -530,7 +539,7 @@ flowchart TD
   TimelineEntries --> Model
 ```
 
-Consumers should prefer this read model or its helpers instead of duplicating demand/capacity derivation.
+Consumers should prefer this read model or its helpers instead of duplicating demand/capacity derivation. Timeline and Resource Profile map the same canonical model into their own DTOs.
 
 ## Named-resource assignment derivation
 
@@ -625,7 +634,8 @@ When changing scheduling/resource code, verify the following path explicitly:
 | Pure scheduler | `server/src/lib/scheduler.ts` |
 | Greedy leveller / optimiser support | `server/src/lib/leveller.ts`, `server/src/lib/optimiser.ts` |
 | Timeline API and persistence | `server/src/routes/timeline.ts` |
-| Shared planning read model | `server/src/lib/projectPlanningModel.ts` |
+| Transactional scheduling command | `server/src/lib/scheduleProject.ts` |
+| Shared planning read model | `server/src/lib/projectPlanningModel.ts` (`loadProjectPlanningInputs` / `deriveProjectPlanningModel` / `buildProjectPlanningModel`) |
 | Capacity-plan materialisation | `server/src/lib/capacityPlanMaterialisation.ts` |
 | Named-resource assignment derivation | `server/src/lib/namedResourceAssignments.ts` |
 | Resource profile/commercial calculations | `server/src/routes/resourceProfile.ts` |
