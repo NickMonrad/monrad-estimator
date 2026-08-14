@@ -138,16 +138,23 @@ export function checkPersistedCompleteness(
         profile => profile.namedResourceId === namedResource.id,
       )
       if (ownerProfiles.length === 0) {
-        errors.push(`Named resource "${namedResource.id}" for RT "${resourceType.id}" lacks persisted profile`)
+        errors.push(
+          `Named resource "${namedResource.name}" lacks persisted profile ` +
+          `(named resource ${namedResource.id}, resource type ${resourceType.id})`,
+        )
       }
     }
 
     if (hasPlannerOwnership && roleProfiles.length !== 1) {
       errors.push(
-        `Resource type "${resourceType.id}" has planner-owned profiles but requires exactly one ROLE profile`,
+        `Resource type "${resourceType.name}" has planner-owned profiles but requires exactly one ROLE profile ` +
+        `(resource type ${resourceType.id})`,
       )
     } else if (resourceType.namedResources.length === 0 && roleProfiles.length !== 1) {
-      errors.push(`Resource type "${resourceType.id}" lacks exactly one persisted ROLE profile`)
+      errors.push(
+        `Resource type "${resourceType.name}" lacks exactly one persisted ROLE profile ` +
+        `(resource type ${resourceType.id})`,
+      )
     }
   }
 

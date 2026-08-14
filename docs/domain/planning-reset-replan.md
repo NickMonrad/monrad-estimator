@@ -99,6 +99,12 @@ readiness and `GET /capacity-profiles` enforce). Validation runs inside the same
 transaction that flips the state, so the flag is never cleared without a canonical
 plan, and no profile is ever fabricated. `CURRENT` projects are a no-op.
 
+Findings identify the affected resource by its human-readable name (issue #456) —
+e.g. `Resource type "Business Analyst" lacks exactly one persisted ROLE profile
+(resource type <id>)` — with the internal ID kept only as secondary diagnostic
+context. Machine-readable error codes (`REPLAN_INCOMPLETE`, `REPLAN_REQUIRED`) are
+unchanged.
+
 ## Planning-dependent guards
 
 While `NEEDS_REPLAN`, capacity-dependent operations return
@@ -157,6 +163,25 @@ historical timeline viewer is out of scope for this issue.
   before exporting planning data." (the timeline CSV endpoint inside the full
   export is additionally protected by the server-side `REPLAN_REQUIRED` guard).
   `CURRENT` export is unchanged.
+- **Missing persisted ROLE profiles are marked (issue #456).** While
+  `NEEDS_REPLAN`, a role row that requires a persisted ROLE profile (role-only
+  types, or roles with planner-owned profiles) but does not have one renders a
+  distinct amber **Needs capacity profile** badge that opens the existing
+  capacity editor (create path). The effective/fallback As-needed draft is never
+  presented as if it were persisted canonical state. `CURRENT` Resource Profile
+  behaviour is unchanged.
+- **Bulk "Use role counts as As needed" (issue #456).** Resource Profile exposes
+  one explicit user-triggered action (only while `NEEDS_REPLAN`) that persists a
+  canonical demand-following (`DEMAND_FOLLOWING`, 100%, `MANUAL` source) ROLE
+  profile for EVERY eligible missing role-only ResourceType in one atomic batch
+  (`lib/bulkAsNeededProfiles.ts` + `POST
+  /api/projects/:projectId/capacity-profiles/bulk-as-needed`). It reuses the
+  existing authoritative writer (`replaceCapacityProfile`): it never overwrites
+  an existing persisted profile, never guesses named-person/planned-resource/
+  segmented authority, is idempotent, and rolls the whole batch back on any
+  failure. The project stays `NEEDS_REPLAN` — the existing completion operation
+  remains the only path back to `CURRENT` — and the response reports any
+  remaining completeness findings by human-readable resource name.
 - No planning option is automatically selected because of migration history; the
   user picks the approach (As needed, fixed whole project, fixed selected weeks,
   manually shaped, Squad Planner) in the existing surfaces.

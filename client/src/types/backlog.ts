@@ -292,6 +292,10 @@ export interface ResourceProfileRow {
   derivedStartWeek: number | null
   derivedEndWeek: number | null
   estimatedCost: number | null
+  /** While NEEDS_REPLAN (issue #456): true when this role requires a persisted
+   *  ROLE profile for completion but does not have one. Distinguishes the
+   *  missing state from a valid persisted As-needed profile. */
+  missingCapacityProfile?: boolean
   epics: ResourceProfileEpic[]
   namedResources?: Array<{
     id: string

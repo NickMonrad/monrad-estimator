@@ -190,3 +190,29 @@ export const completeReplanning = (projectId: string): Promise<CompleteReplannin
   api
     .post<CompleteReplanningResult>(`/projects/${projectId}/planning/complete`)
     .then(r => r.data)
+
+// ---------------------------------------------------------------------------
+// Bulk "Use role counts as As needed" (issue #456)
+// ---------------------------------------------------------------------------
+
+export interface BulkAsNeededResult {
+  projectId: string
+  /** The bulk action never transitions planning state — completion owns that. */
+  planningState: 'NEEDS_REPLAN'
+  /** Number of canonical ROLE profiles created by this call. */
+  created: number
+  /** Remaining canonical completeness findings (human-readable names). */
+  remainingFindings: string[]
+}
+
+/**
+ * Persist a canonical demand-following (As needed) ROLE profile for every
+ * eligible missing role-only ResourceType while the project NEEDS_REPLAN.
+ * Explicit user planning choice only; never overwrites existing profiles and
+ * never transitions the project state — the existing Replan project
+ * completion performs the canonical validation and state change.
+ */
+export const applyRoleCountsAsNeeded = (projectId: string): Promise<BulkAsNeededResult> =>
+  api
+    .post<BulkAsNeededResult>(`/projects/${projectId}/capacity-profiles/bulk-as-needed`)
+    .then(r => r.data)

@@ -18,6 +18,10 @@ import {
   transferToManualCapacity,
   TransferError,
 } from '../lib/capacityProfileTransferService.js'
+import {
+  applyRoleCountsAsNeeded,
+  BulkAsNeededError,
+} from '../lib/bulkAsNeededProfiles.js'
 import { ownedProject } from '../lib/ownership.js'
 
 
@@ -144,6 +148,23 @@ router.post('/transfer-to-manual', asyncHandler(async (req: AuthRequest, res: Re
   } catch (err) {
     if (err instanceof TransferError) {
       res.status(err.status).json({ error: err.message })
+      return
+    }
+    throw err
+  }
+}))
+
+// ─── POST bulk-as-needed (must be registered before parameterised routes) ──
+
+router.post('/bulk-as-needed', asyncHandler(async (req: AuthRequest, res: Response) => {
+  const projectId = req.params.projectId as string
+
+  try {
+    const result = await applyRoleCountsAsNeeded(prisma, projectId, req.userId!)
+    res.status(200).json(result)
+  } catch (err) {
+    if (err instanceof BulkAsNeededError) {
+      res.status(err.status).json({ error: err.message, code: err.code })
       return
     }
     throw err

@@ -20,6 +20,7 @@ try {
       'test:transfer-integration',
       'test:legacy-alias-removal-integration',
       'test:planning-reset-integration',
+      'test:replan-repair-integration',
       'test:provenance-migration-integration',
       'test:provenance-snapshot-integration',
     ]) {
