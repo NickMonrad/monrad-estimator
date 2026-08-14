@@ -48,6 +48,7 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
       storyTimelineEntries: [] as any[],
       epicDependencies: [] as any[],
       storyDependencies: [] as any[],
+      featureDependencies: [] as any[],
       projectOverheads: [] as any[],
     }
   }
@@ -553,6 +554,7 @@ const { storeRef, createStore, makeStoreClient } = vi.hoisted(() => {
       },
       epicDependency: { findMany: () => [...store().epicDependencies] },
       storyDependency: { findMany: () => [...store().storyDependencies] },
+      featureDependency: { findMany: () => [...store().featureDependencies] },
       timelineEntry: {
         findMany: (args: any) => findMany('timelineEntries', args ?? {}),
         deleteMany: (args: any) => deleteWhere('timelineEntries', args.where ?? {}),

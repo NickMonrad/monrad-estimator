@@ -31,7 +31,8 @@
     "test:planning-reset-integration": "vitest run --config vitest.integration.config.ts src/test/planningReset.integration.test.ts",
     "test:replan-repair-integration": "vitest run --config vitest.integration.config.ts src/test/replanProfileRepair.integration.test.ts",
     "test:provenance-migration-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileProvenanceMigration.integration.test.ts",
-    "test:provenance-snapshot-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileProvenanceSnapshots.integration.test.ts"
+    "test:provenance-snapshot-integration": "vitest run --config vitest.integration.config.ts src/test/capacityProfileProvenanceSnapshots.integration.test.ts",
+    "test:schedule-transaction-integration": "vitest run --config vitest.integration.config.ts src/test/scheduleTransaction.integration.test.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

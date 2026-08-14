@@ -25,6 +25,7 @@ import {
   type SchedulerResourceType,
 } from './scheduler.js'
 import {
+  shouldFallbackToActiveCapacityPlan,
   type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
 import { deriveNamedResourceAssignments } from './namedResourceAssignments.js'
@@ -151,6 +152,25 @@ export interface FeatureEntryDetail {
   startWeek: number
   durationWeeks: number
   isManual: boolean
+  /** Epic presentation metadata */
+  epicOrder: number | null
+  epicFeatureMode: string | null
+  epicScheduleMode: string | null
+  epicTimelineStartWeek: number | null
+  /** Feature presentation metadata */
+  featureOrder: number | null
+  timelineColour: string | null
+  /** Per-resource-type effort breakdown for the feature */
+  resourceBreakdown: Array<{ name: string; days: number }>
+  /** Engineer-equivalent presentation rows */
+  effectiveEngineers: Array<{
+    name: string
+    engineerEquivalent: number
+    totalEngineers: number
+  }>
+  /** Entry dates shifted by onboarding weeks */
+  startDate: string | null
+  endDate: string | null
 }
 
 /** A resolved story timeline entry with display metadata */
@@ -199,6 +219,118 @@ export interface ProjectPlanningModel {
   storyDependencies: Array<{ storyId: string; dependsOnId: string }>
   /** Epic-level dependency edges */
   epicDependencies: Array<{ epicId: string; dependsOnId: string }>
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Planning input types (pure structural shapes — no Prisma dependency)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PlanningInputTask {
+  resourceTypeId: string | null
+  hoursEffort: number
+  durationDays: number | null
+  resourceType: {
+    id: string
+    name: string
+    hoursPerDay: number | null
+  } | null
+}
+
+export interface PlanningInputStory {
+  id: string
+  isActive: boolean | null
+  tasks: PlanningInputTask[]
+}
+
+/** A feature with full scheduling/effort metadata (as loaded from the backlog) */
+export interface PlanningInputFeature {
+  id: string
+  name: string
+  order: number | null
+  isActive: boolean | null
+  timelineColour: string | null
+  epic: {
+    id: string
+    name: string
+    order: number | null
+    isActive: boolean | null
+    featureMode: string | null
+    scheduleMode: string | null
+    timelineStartWeek: number | null
+  }
+  userStories: PlanningInputStory[]
+}
+
+/** A persisted feature timeline entry with its feature loaded */
+export interface PlanningInputFeatureEntry {
+  featureId: string
+  startWeek: number
+  durationWeeks: number
+  isManual: boolean
+  feature: PlanningInputFeature
+}
+
+/** A persisted story timeline entry with its story loaded */
+export interface PlanningInputStoryEntry {
+  storyId: string
+  startWeek: number
+  durationWeeks: number
+  isManual: boolean
+  story: { name: string; featureId: string }
+}
+
+/** A resource type with named resources (display metadata; capacity fields
+ * come from the resolved scheduler DTOs, not legacy columns — issue #418) */
+export interface PlanningInputResourceType {
+  id: string
+  name: string
+  category: string
+  count: number
+  hoursPerDay: number | null
+  dayRate: number | null
+  namedResources: Array<{
+    id: string
+    name: string
+    pricingModel: string | null
+  }>
+}
+
+/** All inputs the pure planning derivation needs (loaded by loadProjectPlanningInputs). */
+export interface ProjectPlanningInputs {
+  project: {
+    id: string
+    startDate: Date | null
+    hoursPerDay: number
+    bufferWeeks: number | null
+    onboardingWeeks: number | null
+    weeklyDemandCache: Record<string, number> | null
+  }
+  /** Prisma resource types with named resources (display metadata) */
+  resourceTypes: PlanningInputResourceType[]
+  /** Profile-first resolved scheduler capacity DTOs (authoritative availability) */
+  capacityResourceTypes: SchedulerResourceType[]
+  /** Materialised capacity plan map (rtId → materialised data) */
+  capacityPlanByRt: Map<string, MaterializedCapacityPlanResource>
+  /** Named resources whose capacity resolved from a valid persisted profile */
+  profileBackedNamedResourceIds: string[]
+  /** Feature timeline entries with full feature metadata */
+  timelineEntries: PlanningInputFeatureEntry[]
+  /** Story timeline entries with story metadata */
+  storyTimelineEntries: PlanningInputStoryEntry[]
+  featureDependencies: Array<{ featureId: string; dependsOnId: string }>
+  storyDependencies: Array<{ storyId: string; dependsOnId: string }>
+  epicDependencies: Array<{ epicId: string; dependsOnId: string }>
+}
+
+/** Explicit not-found error for a missing/unauthorised project (maps to HTTP 404). */
+export class ProjectNotFoundError extends Error {
+  readonly status = 404
+  readonly userMessage = 'Project not found'
+
+  constructor() {
+    super('Project not found')
+    this.name = 'ProjectNotFoundError'
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -505,115 +637,83 @@ export function computeWeeklyCapacity(
   return result
 }
 
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Data-loading wrapper
+// Pure planning derivation
 // ─────────────────────────────────────────────────────────────────────────────
+
+function addWeeksToDate(startDate: Date | null, offsetWeeks: number): string | null {
+  if (!startDate) return null
+  const d = new Date(startDate)
+  d.setDate(d.getDate() + offsetWeeks * 7)
+  return d.toISOString()
+}
 
 /**
- * Load project planning data from the database and compute the shared
- * planning read model. This is the main entry point for routes that
- * need planning-derived facts.
+ * Derive the shared planning read model from loaded inputs.
+ *
+ * Pure: performs no I/O and imports no Prisma or Express. All database
+ * loading happens in {@link loadProjectPlanningInputs};
+ * {@link buildProjectPlanningModel} composes the two.
  */
-export async function buildProjectPlanningModel(
-  projectId: string,
-  userId: string,
-): Promise<ProjectPlanningModel> {
-  // ── 1. Load project with ownership check ───────────────────────────────
-  const project = await prisma.project.findFirst({
-    where: { id: projectId, ownerId: userId },
-  })
+export function deriveProjectPlanningModel(
+  inputs: ProjectPlanningInputs,
+): ProjectPlanningModel {
+  const {
+    project,
+    resourceTypes: prismaResourceTypes,
+    capacityResourceTypes,
+    capacityPlanByRt,
+    profileBackedNamedResourceIds,
+    timelineEntries,
+    storyTimelineEntries,
+    featureDependencies,
+    storyDependencies,
+    epicDependencies,
+  } = inputs
 
-  if (!project) {
-    throw new NotFoundError('Project not found')
-  }
-
-  // ── 2. Load Prisma resource types (for display fields) ────────────────
-  const prismaResourceTypes = await prisma.resourceType.findMany({
-    where: { projectId },
-    include: {
-      namedResources: { orderBy: { createdAt: 'asc' } },
-    },
-  })
-
-  // ── 3. Resolve scheduler capacity (profile-first) ─────────────────────
-  const resolved = await resolveSchedulerCapacity(prisma, projectId)
-  const capacityResourceTypes = resolved.resourceTypes
-  const capacityPlanByRt = resolved.capacityPlanByRt
-  const profileBackedNamedResourceIds = new Set(resolved.meta.profileBackedNamedResourceIds)
-
-  // A resource type is "profile-backed" when every named resource has a valid profile
-  const capacityProfileBackedResourceTypeIds = new Set(
-    prismaResourceTypes
-      .filter(rt =>
-        rt.namedResources.length > 0 &&
-        rt.namedResources.every(nr => profileBackedNamedResourceIds.has(nr.id)),
-      )
-      .map(rt => rt.id),
-  )
-
-  // ── 4. Load timeline entries ──────────────────────────────────────────
-  const [timelineEntries, storyTimelineEntries] = await Promise.all([
-    prisma.timelineEntry.findMany({
-      where: { projectId },
-      include: {
-        feature: {
-          include: {
-            epic: true,
-            userStories: {
-              include: {
-                tasks: { include: { resourceType: true } },
-              },
-            },
-          },
-        },
-      },
-      orderBy: { startWeek: 'asc' },
-    }),
-    prisma.storyTimelineEntry.findMany({
-      where: { projectId },
-      include: { story: { select: { name: true, featureId: true } } },
-    }),
-  ])
-
-  // ── 5. Filter active entries ──────────────────────────────────────────
+  // ── 1. Filter active entries ───────────────────────────────────────────
   const activeEntries = timelineEntries.filter(
     e => e.feature.isActive !== false && e.feature.epic.isActive !== false,
   )
   const activeFeatureIds = activeEntries.map(e => e.featureId)
   const activeFeatureIdSet = new Set(activeFeatureIds)
-  const activeStoryIds = storyTimelineEntries
-    .filter(e => activeFeatureIdSet.has(e.story.featureId))
-    .map(e => e.storyId)
   const activeStoryEntries = storyTimelineEntries.filter(e =>
     activeFeatureIdSet.has(e.story.featureId),
   )
 
-  // ── 6. Load dependencies (active-only) ────────────────────────────────
-  const [featureDeps, storyDeps, epicDeps] = await Promise.all([
-    prisma.featureDependency.findMany({
-      where: { featureId: { in: activeFeatureIds } },
-      select: { featureId: true, dependsOnId: true },
-    }),
-    prisma.storyDependency.findMany({
-      where: { storyId: { in: activeStoryIds } },
-      select: { storyId: true, dependsOnId: true },
-    }),
-    prisma.epicDependency.findMany({
-      where: { epic: { projectId } },
-      select: { epicId: true, dependsOnId: true },
-    }),
-  ])
+  // ── 2. Resolved entries (display metadata + presentation) ──────────────
+  const onboardingWeeks = project.onboardingWeeks ?? 0
+  const rtCountByName = new Map(capacityResourceTypes.map(rt => [rt.name, rt.count]))
 
-  // ── 7. Resolved entries (with display metadata) ──────────────────────
-  const resolvedEntries: FeatureEntryDetail[] = activeEntries.map(e => ({
-    featureId: e.featureId,
-    featureName: e.feature.name,
-    epicId: e.feature.epic.id,
-    epicName: e.feature.epic.name,
-    startWeek: e.startWeek,
-    durationWeeks: e.durationWeeks,
-    isManual: e.isManual,
-  }))
+  const resolvedEntries: FeatureEntryDetail[] = activeEntries.map(e => {
+    const breakdown = computeResourceBreakdown(e.feature, project.hoursPerDay)
+    const durationWeeksActual = Math.max(e.durationWeeks, 0.01)
+    const effectiveEngineers = breakdown.map(({ name, days }) => ({
+      name,
+      engineerEquivalent: Math.round((days / (durationWeeksActual * 5)) * 100) / 100,
+      totalEngineers: rtCountByName.get(name) ?? 1,
+    }))
+    return {
+      featureId: e.featureId,
+      featureName: e.feature.name,
+      epicId: e.feature.epic.id,
+      epicName: e.feature.epic.name,
+      startWeek: e.startWeek,
+      durationWeeks: e.durationWeeks,
+      isManual: e.isManual,
+      epicOrder: e.feature.epic.order ?? null,
+      epicFeatureMode: e.feature.epic.featureMode ?? null,
+      epicScheduleMode: e.feature.epic.scheduleMode ?? null,
+      epicTimelineStartWeek: e.feature.epic.timelineStartWeek ?? null,
+      featureOrder: e.feature.order ?? null,
+      timelineColour: e.feature.timelineColour ?? null,
+      resourceBreakdown: breakdown,
+      effectiveEngineers,
+      startDate: addWeeksToDate(project.startDate, e.startWeek + onboardingWeeks),
+      endDate: addWeeksToDate(project.startDate, e.startWeek + e.durationWeeks + onboardingWeeks),
+    }
+  })
 
   const resolvedStoryEntries: StoryEntryDetail[] = activeStoryEntries.map(e => ({
     storyId: e.storyId,
@@ -624,7 +724,18 @@ export async function buildProjectPlanningModel(
     isManual: e.isManual,
   }))
 
-  // ── 8. Build resource type planning facts ────────────────────────────
+  // ── 3. Resource type planning facts ────────────────────────────────────
+  const profileBackedNamedResourceIdSet = new Set(profileBackedNamedResourceIds)
+  const capacityProfileBackedResourceTypeIds = new Set(
+    prismaResourceTypes
+      .filter(
+        rt =>
+          (rt.namedResources ?? []).length > 0 &&
+          rt.namedResources.every(nr => profileBackedNamedResourceIdSet.has(nr.id)),
+      )
+      .map(rt => rt.id),
+  )
+
   // Capacity-bearing fact fields (allocationMode/allocationPercent/windows and
   // per-NR availability) come from the profile-derived scheduler DTOs, never
   // from ResourceType/NamedResource candidate columns (issue #418).
@@ -668,17 +779,17 @@ export async function buildProjectPlanningModel(
   // Apply capacity plan fallback for CAPACITY_PLAN RTs with no named resources
   const enrichedFacts = applyCapacityPlanFallback(resourceTypeFacts, capacityPlanByRt)
 
-  // ── 9. Compute planning window ───────────────────────────────────────
+  // ── 4. Planning window ─────────────────────────────────────────────────
   const planningWindow = computePlanningWindow(
     activeEntries,
     project.startDate,
     project.bufferWeeks ?? 0,
-    project.onboardingWeeks ?? 0,
+    onboardingWeeks,
   )
 
-  // ── 10. Compute weekly demand ─────────────────────────────────────────
+  // ── 5. Weekly demand (feature-granularity fallback + cached merge) ─────
   const simulatedDemand = convertWeeklyDemandCache(
-    project.weeklyDemandCache as Record<string, number> | null,
+    project.weeklyDemandCache,
     prismaResourceTypes,
   )
 
@@ -694,11 +805,11 @@ export async function buildProjectPlanningModel(
   )
 
   const weeklyDemand =
-    simulatedDemand && simulatedDemand.size > 0
+    simulatedDemand.size > 0
       ? mergeWeeklyDemand(fallbackDemand, simulatedDemand)
       : fallbackDemand
 
-  // ── 11. Compute weekly capacity ──────────────────────────────────────
+  // ── 6. Weekly capacity ─────────────────────────────────────────────────
   const maxDemandWeek =
     weeklyDemand.length > 0 ? Math.max(...weeklyDemand.map(d => d.week)) : 0
   const capacityEndWeek = Math.max(
@@ -722,7 +833,7 @@ export async function buildProjectPlanningModel(
     capacityPlanByRt,
   )
 
-  // ── 12. Reconcile capacity on demand rows ────────────────────────────
+  // ── 7. Reconcile capacity on demand rows ───────────────────────────────
   const capMap = new Map<string, number>()
   for (const cap of weeklyCapacity) {
     capMap.set(weeklyDemandKey(cap.week, cap.resourceTypeName), cap.capacityDays)
@@ -734,19 +845,15 @@ export async function buildProjectPlanningModel(
     }
   }
 
-  // ── 13. Derive named resource assignments ────────────────────────────
+  // ── 8. Named resource assignments ──────────────────────────────────────
   const namedResourceAssignments = deriveNamedResourceAssignments({
-    resourceTypes: capacityResourceTypes.map(rt => ({
-      ...rt,
-      capacityProfileBacked: capacityProfileBackedResourceTypeIds.has(rt.id),
-    })) as unknown as Parameters<typeof deriveNamedResourceAssignments>[0]['resourceTypes'],
+    resourceTypes: capacityResourceTypes,
     weeklyDemand,
   })
 
-  // ── 14. Compute parallel warnings (profile-aware) ────────────────────
+  // ── 9. Parallel warnings (profile-aware) ───────────────────────────────
   const activeFeatures = activeEntries.map(e => e.feature)
 
-  // Use profile-aware capacity resource types for warnings
   const warningResourceTypes = capacityResourceTypes.map(rt => {
     if (rt.allocationMode !== 'CAPACITY_PLAN') return rt
 
@@ -757,12 +864,15 @@ export async function buildProjectPlanningModel(
     if (hasAnyProfileAuthority) return rt
 
     const materialized = capacityPlanByRt.get(rt.id)
-    if (!materialized) return rt
-    // Only fall back when the RT has no named resources (legacy behaviour)
-    if ((rt.namedResources ?? []).length > 0) return rt
+    const useCapacityPlanFallback = shouldFallbackToActiveCapacityPlan(
+      rt.namedResources ?? [],
+      materialized,
+    )
+    if (!useCapacityPlanFallback || !materialized) return rt
+
     return {
       ...rt,
-      namedResources: materialized.slotWindows.map((window, idx) => ({
+      namedResources: (materialized.slotWindows ?? []).map((window, idx) => ({
         id: `${rt.id}-capacity-plan-${idx + 1}`,
         name: `${rt.name ?? ''} ${idx + 1}`,
         endWeek: window.endWeek,
@@ -797,6 +907,108 @@ export async function buildProjectPlanningModel(
     parallelWarnings,
     entries: resolvedEntries,
     storyEntries: resolvedStoryEntries,
+    featureDependencies,
+    storyDependencies,
+    epicDependencies,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Data loading
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Load every input the pure planning derivation needs, with ownership check.
+ * Loading and derivation are separate so the derivation stays pure and
+ * testable without Prisma or Express.
+ */
+export async function loadProjectPlanningInputs(
+  projectId: string,
+  userId: string,
+): Promise<ProjectPlanningInputs> {
+  // ── 1. Load project with ownership check ───────────────────────────────
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, ownerId: userId },
+  })
+
+  if (!project) {
+    throw new ProjectNotFoundError()
+  }
+
+  // ── 2. Load Prisma resource types (for display fields) ────────────────
+  const prismaResourceTypes = await prisma.resourceType.findMany({
+    where: { projectId },
+    include: {
+      namedResources: { orderBy: { createdAt: 'asc' } },
+    },
+  })
+
+  // ── 3. Resolve scheduler capacity (profile-first) ─────────────────────
+  const resolved = await resolveSchedulerCapacity(prisma, projectId)
+
+  // ── 4. Load timeline entries and story entries ──────────────────────
+  const [timelineEntries, storyTimelineEntries] = await Promise.all([
+    prisma.timelineEntry.findMany({
+      where: { projectId },
+      include: {
+        feature: {
+          include: {
+            epic: true,
+            userStories: {
+              include: {
+                tasks: { include: { resourceType: true } },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { startWeek: 'asc' },
+    }),
+    prisma.storyTimelineEntry.findMany({
+      where: { projectId },
+      include: { story: { select: { name: true, featureId: true } } },
+    }),
+  ])
+
+  // ── 5. Load dependencies (active-only) ─────────────────────────────────
+  const activeFeatureIds = timelineEntries
+    .filter(e => e.feature.isActive !== false && e.feature.epic.isActive !== false)
+    .map(e => e.featureId)
+  const activeFeatureIdSet = new Set(activeFeatureIds)
+  const activeStoryIds = storyTimelineEntries
+    .filter(e => activeFeatureIdSet.has(e.story.featureId))
+    .map(e => e.storyId)
+
+  const [featureDeps, storyDeps, epicDeps] = await Promise.all([
+    prisma.featureDependency.findMany({
+      where: { featureId: { in: activeFeatureIds } },
+      select: { featureId: true, dependsOnId: true },
+    }),
+    prisma.storyDependency.findMany({
+      where: { storyId: { in: activeStoryIds } },
+      select: { storyId: true, dependsOnId: true },
+    }),
+    prisma.epicDependency.findMany({
+      where: { epic: { projectId } },
+      select: { epicId: true, dependsOnId: true },
+    }),
+  ])
+
+  return {
+    project: {
+      id: project.id,
+      startDate: project.startDate,
+      hoursPerDay: project.hoursPerDay,
+      bufferWeeks: project.bufferWeeks,
+      onboardingWeeks: project.onboardingWeeks,
+      weeklyDemandCache: project.weeklyDemandCache as Record<string, number> | null,
+    },
+    resourceTypes: prismaResourceTypes as unknown as PlanningInputResourceType[],
+    capacityResourceTypes: resolved.resourceTypes,
+    capacityPlanByRt: resolved.capacityPlanByRt,
+    profileBackedNamedResourceIds: resolved.meta.profileBackedNamedResourceIds,
+    timelineEntries: timelineEntries as unknown as PlanningInputFeatureEntry[],
+    storyTimelineEntries: storyTimelineEntries as unknown as PlanningInputStoryEntry[],
     featureDependencies: featureDeps,
     storyDependencies: storyDeps,
     epicDependencies: epicDeps,
@@ -804,12 +1016,18 @@ export async function buildProjectPlanningModel(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Private helpers
+// Data-loading wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
-class NotFoundError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'NotFoundError'
-  }
+/**
+ * Load project planning data from the database and compute the shared
+ * planning read model. This is the main entry point for routes that
+ * need planning-derived facts.
+ */
+export async function buildProjectPlanningModel(
+  projectId: string,
+  userId: string,
+): Promise<ProjectPlanningModel> {
+  const inputs = await loadProjectPlanningInputs(projectId, userId)
+  return deriveProjectPlanningModel(inputs)
 }
