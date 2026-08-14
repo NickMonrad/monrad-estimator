@@ -15,7 +15,7 @@ import {
 } from '../../lib/capacityProfileFormatting'
 import NamedResourcesPanel from './NamedResourcesPanel'
 import CapacityProfileEditorModal from './CapacityProfileEditorModal'
-import { transferToManualCapacity } from '../../lib/api'
+import { transferToManualCapacity, applyRoleCountsAsNeeded, apiErrorMessage } from '../../lib/api'
 import { invalidateProjectResourceProfile } from '../../lib/projectInvalidation'
 import type { CapacityProfileEditorDraft } from '../../lib/capacityProfileFormatting'
 
@@ -56,6 +56,12 @@ export default function ResourceProfileTab({
       invalidateProjectResourceProfile(qc, projectId)
     },
   })
+  const bulkAsNeededMutation = useMutation({
+    mutationFn: () => applyRoleCountsAsNeeded(projectId),
+    onSuccess: () => {
+      invalidateProjectResourceProfile(qc, projectId)
+    },
+  })
   return (
     <>
     <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
@@ -64,7 +70,45 @@ export default function ResourceProfileTab({
           <h2 className="text-base font-semibold text-gray-900 dark:text-white">Capacity profile summary</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">Capacity profiles, availability patterns, and resource allocation by role</p>
         </div>
+        {profile?.planningState === 'NEEDS_REPLAN' && (
+          <button
+            onClick={() => bulkAsNeededMutation.mutate()}
+            disabled={bulkAsNeededMutation.isPending}
+            className="shrink-0 bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors disabled:opacity-50"
+            data-testid="bulk-as-needed-button"
+          >
+            {bulkAsNeededMutation.isPending ? 'Creating profiles…' : 'Use role counts as As needed'}
+          </button>
+        )}
       </header>
+      {profile?.planningState === 'NEEDS_REPLAN' && bulkAsNeededMutation.isSuccess && bulkAsNeededMutation.data && (
+        <div className="px-6 py-3 border-b border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950" role="status" data-testid="bulk-as-needed-feedback">
+          <p className="text-xs text-green-700 dark:text-green-400">
+            {bulkAsNeededMutation.data.created > 0
+              ? `Created As needed capacity profiles for ${bulkAsNeededMutation.data.created} role${bulkAsNeededMutation.data.created === 1 ? '' : 's'}.`
+              : 'All eligible roles already have a persisted As needed profile.'}
+          </p>
+          {bulkAsNeededMutation.data.remainingFindings.length > 0 && (
+            <>
+              <ul className="list-disc pl-5 mt-1 space-y-1">
+                {bulkAsNeededMutation.data.remainingFindings.map((finding, index) => (
+                  <li key={index} className="text-xs text-amber-800 dark:text-amber-300">{finding}</li>
+                ))}
+              </ul>
+              <p className="text-xs text-amber-800 dark:text-amber-300 mt-1">
+                Remaining findings need manual review before the project can return to CURRENT.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+      {profile?.planningState === 'NEEDS_REPLAN' && bulkAsNeededMutation.isError && (
+        <div className="px-6 py-2 border-b border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950">
+          <p role="alert" className="text-xs text-red-700 dark:text-red-400" data-testid="bulk-as-needed-error">
+            {apiErrorMessage(bulkAsNeededMutation.error, 'Could not create As needed profiles')}
+          </p>
+        </div>
+      )}
       <div className="px-6 py-3 bg-blue-50 dark:bg-blue-950/30 border-b border-blue-100 dark:border-blue-900">
         <p className="text-xs text-blue-700 dark:text-blue-300">
           <strong className="font-medium">Capacity profiles</strong> describe how much of a role, named person, or planned resource is available over time. Changing a profile affects planning capacity and scheduling. Commercial billing basis and billable days are managed separately on the <strong className="font-medium">Commercial</strong> tab.
@@ -219,6 +263,17 @@ export default function ResourceProfileTab({
 
                         return (
                           <div>
+                            {row.missingCapacityProfile ? (
+                              <button
+                                onClick={openProfileEditor}
+                                disabled={!editorDraft}
+                                className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 hover:opacity-80 transition-opacity disabled:cursor-not-allowed disabled:opacity-60"
+                                title={editorDraft ? 'Click to create capacity profile' : 'Weekly capacity data is unavailable'}
+                                data-testid={`missing-profile-badge-${row.resourceTypeId}`}
+                              >
+                                Needs capacity profile
+                              </button>
+                            ) : (
                             <button
                               onClick={isPlannerSquad
                                 ? () => navigate(`/projects/${projectId}/timeline?panel=squad-planner`)
@@ -233,6 +288,7 @@ export default function ResourceProfileTab({
                             >
                               {isPlannerSquad ? 'Open Squad Planner' : badge.label}
                             </button>
+                            )}
                             {isPlannerSquad && (
                               <button
                                 onClick={() => setTransferConfirm({

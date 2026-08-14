@@ -208,6 +208,34 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   }
 
   if (project.planningState === 'NEEDS_REPLAN') {
+    // ── Persisted ROLE profile + missing-profile markers (issue #456) ──
+    // While NEEDS_REPLAN a role row must show whether the canonical ROLE
+    // profile required for completion is persisted, instead of presenting
+    // the effective draft as if it were canonical state. A role requires a
+    // ROLE profile when it has no named resources, or when any of its
+    // profiles are planner-owned (PLANNED_RESOURCE / SQUAD_PLANNER) — the
+    // same boundary checkPersistedCompleteness enforces.
+    const profileByRtId = new Map<string, (typeof project.capacityProfiles)[number]>()
+    const plannerOwnedRtIds = new Set<string>()
+    const rtIdByNamedResourceId = new Map<string, string>()
+    for (const rt of project.resourceTypes) {
+      for (const nr of rt.namedResources) rtIdByNamedResourceId.set(nr.id, rt.id)
+    }
+    for (const profile of project.capacityProfiles) {
+      if (profile.ownerKind === 'ROLE' && profile.resourceTypeId) {
+        profileByRtId.set(profile.resourceTypeId, profile)
+      }
+      if (profile.ownerKind === 'PLANNED_RESOURCE' || profile.source === 'SQUAD_PLANNER') {
+        const rtId = profile.resourceTypeId
+          ?? (profile.namedResourceId ? rtIdByNamedResourceId.get(profile.namedResourceId) : undefined)
+        if (rtId) plannerOwnedRtIds.add(rtId)
+      }
+    }
+    // Mirror capacityProfileMapping.toCamel so the emitted profile shape
+    // matches the camelCase contract the client types and badge logic use.
+    const toCamel = (value: string) =>
+      value.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+
     // Reset Planning discarded the capacity model. Serve the estimation and
     // business inputs the user needs to replan — roles, counts, rates, effort
     // rollups, named-resource identity — with NO planning-derived values:
@@ -219,6 +247,9 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       .map(agg => {
         const resourceType = resourceTypeById.get(agg.resourceTypeId)!
         const dayRate = resourceType.dayRate ?? resourceType.globalType?.defaultDayRate ?? null
+        const persistedRoleProfile = profileByRtId.get(resourceType.id)
+        const requiresRoleProfile =
+          resourceType.namedResources.length === 0 || plannerOwnedRtIds.has(resourceType.id)
         return {
           resourceTypeId: resourceType.id,
           name: resourceType.name,
@@ -243,6 +274,20 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           derivedEndWeek: null,
           estimatedCost: null,
           epics: [],
+          capacityProfile: persistedRoleProfile ? {
+            planningBasis: toCamel(String(persistedRoleProfile.planningBasis)),
+            source: toCamel(String(persistedRoleProfile.source)),
+            defaultPercent: persistedRoleProfile.defaultPercent,
+            startWeek: persistedRoleProfile.startWeek,
+            endWeek: persistedRoleProfile.endWeek,
+            segments: persistedRoleProfile.segments.map(segment => ({
+              startWeek: segment.startWeek,
+              endWeek: segment.endWeek,
+              capacityPercent: segment.capacityPercent,
+            })),
+            resolutionSource: 'PROFILE' as const,
+          } : undefined,
+          missingCapacityProfile: requiresRoleProfile && !persistedRoleProfile,
           namedResources: resourceType.namedResources.map(nr => ({
             id: nr.id,
             name: nr.name,
@@ -278,6 +323,9 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     // are kept; effort/demand are zero and no capacity is fabricated.
     for (const resourceType of project.resourceTypes) {
       if (resourceAgg.has(resourceType.id)) continue
+      const persistedRoleProfile = profileByRtId.get(resourceType.id)
+      const requiresRoleProfile =
+        resourceType.namedResources.length === 0 || plannerOwnedRtIds.has(resourceType.id)
       resourceRows.push({
         resourceTypeId: resourceType.id,
         name: resourceType.name,
@@ -297,6 +345,20 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         derivedEndWeek: null,
         estimatedCost: null,
         epics: [],
+        capacityProfile: persistedRoleProfile ? {
+          planningBasis: toCamel(String(persistedRoleProfile.planningBasis)),
+          source: toCamel(String(persistedRoleProfile.source)),
+          defaultPercent: persistedRoleProfile.defaultPercent,
+          startWeek: persistedRoleProfile.startWeek,
+          endWeek: persistedRoleProfile.endWeek,
+          segments: persistedRoleProfile.segments.map(segment => ({
+            startWeek: segment.startWeek,
+            endWeek: segment.endWeek,
+            capacityPercent: segment.capacityPercent,
+          })),
+          resolutionSource: 'PROFILE' as const,
+        } : undefined,
+        missingCapacityProfile: requiresRoleProfile && !persistedRoleProfile,
         namedResources: resourceType.namedResources.map(nr => ({
           id: nr.id,
           name: nr.name,
