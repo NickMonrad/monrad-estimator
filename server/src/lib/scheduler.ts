@@ -497,10 +497,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     let maxDays = 0
     for (const [rtId, rtTasks] of byRt) {
       const count = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
-      const days = rtTasks.reduce((sum, task) => {
-        const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-        return sum + scheduleDurationDaysAtCount(task.durationDays, task.hoursEffort, hpd, count)
-      }, 0)
+      const days = scheduleDurationDaysAtCount(rtTasks, fallbackHoursPerDay, count)
       if (days > maxDays) maxDays = days
     }
     return Math.max(0.2, maxDays / 5)
