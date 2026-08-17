@@ -552,8 +552,8 @@ The scheduler does **not** use a simple uniform spread. Instead, active-story ta
 1. Active stories only are considered
 2. Tasks are grouped by `resourceTypeId`
 3. Resource demand person-days are calculated from `hoursEffort / effectiveHoursPerDay`
-4. Elapsed task days use positive `durationDays` when supplied, otherwise `hoursEffort / effectiveHoursPerDay`
-5. The bottleneck elapsed duration is divided by the configured resource type `count`, with a minimum of `0.2` weeks
+4. Elapsed task days use positive `durationDays` when supplied, otherwise `hoursEffort / effectiveHoursPerDay`; only effort-derived days respond to `ResourceType.count`, while explicit duration overrides remain undivided
+5. The largest resource-type elapsed duration becomes the feature duration floor, with a minimum of `0.2` weeks
 6. For parallel epics, a shared-resource minimum-span floor is applied so parallel features cannot complete faster than total demand divided by available weekly capacity
 
 See the [architecture guide](architecture/scheduling-and-resource-model.md) for the full Mermaid flowchart of this calculation.

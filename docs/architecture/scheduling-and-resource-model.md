@@ -409,8 +409,8 @@ Current feature duration is driven by the bottleneck resource type:
 1. Active stories only are considered.
 2. Tasks are grouped by `resourceTypeId`.
 3. Resource demand person-days are calculated from `hoursEffort / effectiveHoursPerDay`.
-4. Elapsed task days use positive `durationDays` when supplied, otherwise `hoursEffort / effectiveHoursPerDay`; the bottleneck elapsed duration is divided by `ResourceType.count`.
-5. The largest resource-type duration becomes the feature duration floor, with a minimum of `0.2` weeks.
+4. Elapsed task days use positive `durationDays` when supplied, otherwise `hoursEffort / effectiveHoursPerDay`; only effort-derived days are divided by `ResourceType.count`, so explicit overrides remain unchanged.
+5. The largest resource-type elapsed duration becomes the feature duration floor, with a minimum of `0.2` weeks.
 6. For parallel epics, a shared-resource minimum-span floor is applied so parallel features cannot complete faster than total demand divided by available weekly capacity.
 
 ```mermaid
@@ -418,8 +418,8 @@ flowchart TD
   Tasks[Active tasks in feature]
   Group[Group tasks by resourceTypeId]
   EffortDays[Calculate effort days<br/>hoursEffort / hoursPerDay]
-  ScheduleDays[Calculate elapsed days<br/>durationDays override or effort days]
-  Divide[Divide elapsed RT duration by ResourceType.count]
+  ExplicitDuration[Use positive durationDays<br/>unchanged]
+  EffortDuration[Use effort days<br/>divided by ResourceType.count]
   Bottleneck[Take max RT days]
   Weeks[Convert days to weeks<br/>max 0.2 minimum]
   Parallel{Parent epic featureMode = parallel?}
@@ -428,7 +428,8 @@ flowchart TD
 
   Tasks --> Group
   Group --> EffortDays
-  Group --> ScheduleDays --> Divide --> Bottleneck --> Weeks --> Parallel
+  Group --> ExplicitDuration --> Bottleneck
+  Group --> EffortDays --> EffortDuration --> Bottleneck
   EffortDays --> Parallel
   Parallel -- yes --> Floor --> Duration
   Parallel -- no --> Duration

@@ -15,7 +15,7 @@ import {
   type SchedulerInput,
   type SchedulerResourceType,
 } from './scheduler.js'
-import { effortDays, scheduleDurationDays } from '../utils/round.js'
+import { effortDays, scheduleDurationDaysAtCount } from '../utils/round.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -87,16 +87,15 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
       }
       let maxDays = 0
       for (const [rtId, tasks] of byRt) {
-        const personDays = tasks.reduce((sum, t) => {
-          const rtHpd = t.resourceType?.hoursPerDay ?? hpd
-          return sum + scheduleDurationDays(t.durationDays, t.hoursEffort, rtHpd)
-        }, 0)
         const rawCount = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
         const count = input.maxParallelismPerFeature
           ? Math.min(rawCount, input.maxParallelismPerFeature)
           : rawCount
-        const days = personDays / count
-        if (days > maxDays) maxDays = days
+        const personDays = tasks.reduce((sum, task) => {
+          const rtHpd = task.resourceType?.hoursPerDay ?? hpd
+          return sum + scheduleDurationDaysAtCount(task.durationDays, task.hoursEffort, rtHpd, count)
+        }, 0)
+        if (personDays > maxDays) maxDays = personDays
       }
       featureDurations.set(feature.id, Math.max(0.2, maxDays / 5))
     }
