@@ -17,13 +17,15 @@ export const scheduleDurationDays = (
 ): number =>
   durationDays && durationDays > 0 ? durationDays : effortDays(hoursEffort, hoursPerDay)
 
-/** Calculate elapsed task days without dividing an explicit duration override by headcount. */
+/** Calculate elapsed task days, preserving overrides while meeting effort capacity. */
 export const scheduleDurationDaysAtCount = (
   durationDays: number | null | undefined,
   hoursEffort: number,
   hoursPerDay: number,
   resourceCount: number,
-): number =>
-  durationDays && durationDays > 0
-    ? durationDays
-    : effortDays(hoursEffort, hoursPerDay) / Math.max(1, resourceCount)
+): number => {
+  const effortDurationDays = effortDays(hoursEffort, hoursPerDay) / Math.max(1, resourceCount)
+  return durationDays && durationDays > 0
+    ? Math.max(durationDays, effortDurationDays)
+    : effortDurationDays
+}
