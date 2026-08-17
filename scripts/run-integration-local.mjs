@@ -23,6 +23,7 @@ try {
       'test:replan-repair-integration',
       'test:provenance-migration-integration',
       'test:provenance-snapshot-integration',
+      'test:schedule-transaction-integration',
     ]) {
       if (guard.triggered) break
       await runCommand('npm', ['run', script, '--workspace=server'], { cwd: root, env: environment, signal: guard.abortSignal })
