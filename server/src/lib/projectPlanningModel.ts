@@ -29,7 +29,7 @@ import {
   type MaterializedCapacityPlanResource,
 } from './capacityPlanMaterialisation.js'
 import { deriveNamedResourceAssignments } from './namedResourceAssignments.js'
-import { effectiveDays } from '../utils/round.js'
+import { effortDays } from '../utils/round.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cache key resolution (backward-compatible: tries ID then legacy name)
@@ -397,7 +397,7 @@ export function computeResourceBreakdown(
       const key = task.resourceTypeId ?? '_unassigned'
       const name = task.resourceType?.name ?? 'Unassigned'
       const hpd = task.resourceType?.hoursPerDay ?? fallbackHpd
-      const days = effectiveDays(task.durationDays, task.hoursEffort, hpd)
+      const days = effortDays(task.hoursEffort, hpd)
       const existing = byRt.get(key) ?? { name, days: 0 }
       byRt.set(key, { name, days: existing.days + days })
     }

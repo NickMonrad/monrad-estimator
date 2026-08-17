@@ -3,7 +3,7 @@ import { ResourceCategory } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { effectiveDays } from '../utils/round.js'
+import { effortDays } from '../utils/round.js'
 import { buildResourceCapacityProfileMap } from '../lib/capacityProfileResourceAdapter.js'
 import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
 import { deriveProjectPlanningModel } from '../lib/projectPlanningModel.js'
@@ -141,7 +141,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           if (!effectiveHoursPerDay) continue
 
           const hours = task.hoursEffort ?? 0
-          const days = effectiveDays(task.durationDays, hours, effectiveHoursPerDay)
+          const days = effortDays(hours, effectiveHoursPerDay)
           if (!resourceAgg.has(resourceType.id)) {
             resourceAgg.set(resourceType.id, {
               resourceTypeId: resourceType.id,

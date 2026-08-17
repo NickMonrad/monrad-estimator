@@ -5,14 +5,14 @@ export const round2 = (n: number): number => Math.round(n * 100) / 100
 export const calcDurationDays = (hoursEffort: number, hoursPerDay: number): number =>
   round2(hoursEffort / hoursPerDay)
 
-/**
- * Get effective days for demand calculation.
- * Falls through to hours/hpd when durationDays is null, undefined, 0, negative, or NaN.
- * This provides defensive hardening against invalid persisted data.
- */
-export const effectiveDays = (
+/** Calculate authoritative delivery effort in person-days. */
+export const effortDays = (hoursEffort: number, hoursPerDay: number): number =>
+  hoursEffort / hoursPerDay
+
+/** Calculate elapsed scheduling duration, honouring a positive task override. */
+export const scheduleDurationDays = (
   durationDays: number | null | undefined,
   hoursEffort: number,
   hoursPerDay: number,
 ): number =>
-  durationDays && durationDays > 0 ? durationDays : (hoursEffort / hoursPerDay)
+  durationDays && durationDays > 0 ? durationDays : effortDays(hoursEffort, hoursPerDay)

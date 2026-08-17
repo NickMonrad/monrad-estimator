@@ -16,6 +16,7 @@ import {
   convertWeeklyDemandCache,
   deriveProjectPlanningModel,
 } from '../lib/projectPlanningModel.js'
+import { deriveNamedResourceAssignments } from '../lib/namedResourceAssignments.js'
 import type { MaterializedCapacityPlanResource } from '../lib/capacityPlanMaterialisation.js'
 import type { SchedulerNamedResource } from '../lib/scheduler.js'
 
@@ -118,7 +119,7 @@ describe('computeResourceBreakdown', () => {
     expect(result).toHaveLength(0)
   })
 
-  it('uses durationDays when provided', () => {
+  it('uses hoursEffort for demand when durationDays is provided', () => {
     const feature = {
       userStories: [
         {
@@ -135,8 +136,60 @@ describe('computeResourceBreakdown', () => {
       ],
     }
     const result = computeResourceBreakdown(feature, 8)
-    // effectiveDays(3, 8, 8) = max(3, 8/8) = 3
-    expect(result[0].days).toBe(3)
+    expect(result[0].days).toBe(1)
+  })
+
+  it('keeps 38 effort hours at five effort-days despite a shorter duration override', () => {
+    const feature = {
+      userStories: [{
+        isActive: true,
+        tasks: [{
+          resourceTypeId: 'rt-dev',
+          hoursEffort: 38,
+          durationDays: 3,
+          resourceType: { name: 'Developer', hoursPerDay: 7.6 },
+        }],
+      }],
+    }
+    expect(computeResourceBreakdown(feature, 7.6)[0].days).toBe(5)
+  })
+
+  it('reconciles fallback weekly demand and named assignments to effort', () => {
+    const feature = {
+      userStories: [{
+        isActive: true,
+        tasks: [{
+          resourceTypeId: 'rt-dev',
+          hoursEffort: 7.6,
+          durationDays: 5,
+          resourceType: { name: 'Developer', hoursPerDay: 7.6 },
+        }],
+      }],
+    }
+    const entries = [{ startWeek: 0, durationWeeks: 1, feature }]
+    const resourceTypes = [{
+      name: 'Developer',
+      id: 'rt-dev',
+      hoursPerDay: 7.6,
+      allocationMode: 'EFFORT',
+      count: 1,
+      namedResources: [{
+        id: 'nr-dev',
+        name: 'Alice',
+        startWeek: null,
+        endWeek: null,
+        allocationPct: 100,
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+      }],
+    }]
+    const weeklyDemand = buildFallbackWeeklyDemand(entries, resourceTypes, new Map(), 7.6)
+    expect(weeklyDemand.reduce((sum, row) => sum + row.demandDays, 0)).toBe(1)
+
+    const assignment = deriveNamedResourceAssignments({ resourceTypes, weeklyDemand }).get('rt-dev')
+    expect(assignment?.actualAllocatedDays).toBe(1)
   })
 
   it('uses fallback hoursPerDay when task resourceType lacks it', () => {
