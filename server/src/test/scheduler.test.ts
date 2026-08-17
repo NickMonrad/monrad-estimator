@@ -872,7 +872,7 @@ describe('runScheduler', () => {
     const totalDays = [...result.weeklyConsumptionMap.values()].reduce((sum, days) => sum + days, 0)
     const featureEntry = result.featureSchedule.find(entry => entry.featureId === 'f1')!
     expect(totalDays).toBeCloseTo(5, 8)
-    expect(featureEntry.durationWeeks).toBeGreaterThanOrEqual(1)
+    expect(featureEntry.durationWeeks).toBeCloseTo(1, 8)
   })
 
   it('does not inflate pinned story or manual feature demand from duration overrides', () => {
