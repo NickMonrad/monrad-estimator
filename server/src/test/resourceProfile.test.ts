@@ -290,7 +290,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 4, durationWeeks: 12 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 4, durationWeeks: 12 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [
@@ -410,7 +410,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 0, durationWeeks: 16 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 16 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [
@@ -521,7 +521,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 12, durationWeeks: 1 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 12, durationWeeks: 1 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [],
@@ -636,7 +636,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 4.327272727272727, durationWeeks: 8.072727272727272 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 4.327272727272727, durationWeeks: 8.072727272727272 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [],
@@ -738,7 +738,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 0, durationWeeks: 3 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 3 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [],
@@ -868,7 +868,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 0, durationWeeks: 1 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [{ id: 'story-1', isActive: true, tasks: [{ resourceTypeId: 'rt-dev', hoursEffort: 40, durationDays: 5, resourceType: { name: 'Developer', hoursPerDay: 8 } }, { resourceTypeId: 'rt-qa', hoursEffort: 40, durationDays: 5, resourceType: { name: 'QA', hoursPerDay: 8 } }] }] }, startWeek: 0, durationWeeks: 1 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [],
@@ -998,7 +998,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 0, durationWeeks: 2 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 2 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [],
@@ -1101,7 +1101,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 0, durationWeeks: 1 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 1 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [],
@@ -1198,7 +1198,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 0, durationWeeks: 1 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 1 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [],
@@ -1236,7 +1236,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       epics: [],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 0, durationWeeks: 4 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 4 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [],
@@ -1301,8 +1301,8 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-active', startWeek: 0, durationWeeks: 2 },
-        { featureId: 'feat-inactive', startWeek: 0, durationWeeks: 2 },
+        { featureId: 'feat-active', feature: { id: 'feat-active', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 2 },
+        { featureId: 'feat-inactive', feature: { id: 'feat-inactive', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 2 },
       ],
       storyTimelineEntries: [],
       capacityPlans: [],
@@ -1321,7 +1321,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     expect(devRow.epics[0].epicId).toBe('epic-active')
   })
 
-  it('uses story timeline entry for fallback demand when feature has no timeline entry', async () => {
+  it('derives no demand from a story-only entry without a feature entry (canonical feature granularity)', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       id: 'proj-1',
       ownerId: userId,
@@ -1396,7 +1396,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       overheads: [],
       timelineEntries: [],  // No feature-level entry
       storyTimelineEntries: [
-        { storyId: 'story-1', startWeek: 4, durationWeeks: 2 },
+        { storyId: 'story-1', story: { name: 'Story', featureId: 'feat-story' }, startWeek: 4, durationWeeks: 2 },
       ],
       capacityPlans: [],
     } as any)
@@ -1410,19 +1410,17 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
     expect(devRow).toBeTruthy()
 
-    // Fallback demand should be driven by the story timeline entry (startWeek=4, durationWeeks=2)
-    // not by an absent feature entry. Named-resource actual weeks reflect the story timing.
+    // Canonical weekly demand follows the feature timeline entries (issue #387):
+    // with no feature entry, Resource Profile (like Timeline) derives no
+    // planning demand — a story-only entry does not fabricate demand.
     const nr = devRow.namedResources[0]
-    expect(nr.actualAllocationStartWeek).toBe(4)
-    expect(nr.actualAllocationEndWeek).toBe(5)
-    expect(nr.actualAllocatedWeeks).toEqual([
-      expect.objectContaining({ week: 4, days: 5, capacityDays: 5 }),
-      expect.objectContaining({ week: 5, days: 5, capacityDays: 5 }),
-    ])
-    expect(nr.actualAllocatedDays).toBe(10)
+    expect(nr.actualAllocatedDays).toBe(0)
+    expect(nr.actualAllocationStartWeek).toBeNull()
+    expect(nr.actualAllocationEndWeek).toBeNull()
+    expect(nr.actualAllocatedWeeks).toEqual([])
   })
 
-  it('reflects two different story timeline entries under the same feature', async () => {
+  it('ignores story timeline entries for demand without feature entries (canonical feature granularity)', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       id: 'proj-1',
       ownerId: userId,
@@ -1513,8 +1511,8 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       overheads: [],
       timelineEntries: [],  // No feature entry
       storyTimelineEntries: [
-        { storyId: 'story-1', startWeek: 2, durationWeeks: 2 },
-        { storyId: 'story-2', startWeek: 6, durationWeeks: 2 },
+        { storyId: 'story-1', story: { name: 'Story', featureId: 'feat-story' }, startWeek: 2, durationWeeks: 2 },
+        { storyId: 'story-2', story: { name: 'Story', featureId: 'feat-story' }, startWeek: 6, durationWeeks: 2 },
       ],
       capacityPlans: [],
     } as any)
@@ -1528,16 +1526,13 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
     expect(devRow).toBeTruthy()
 
-    // Two stories with different story entries should produce two demand blocks
+    // Canonical weekly demand follows the feature timeline entries (issue #387):
+    // no feature entry → no planning demand, matching Timeline.
     const nr = devRow.namedResources[0]
-    expect(nr.actualAllocationStartWeek).toBe(2)
-    expect(nr.actualAllocationEndWeek).toBe(7)
-    expect(nr.actualAllocatedWeeks).toHaveLength(4)
-    expect(nr.actualAllocationSegments).toEqual([
-      { startWeek: 2, endWeek: 3, days: 10 },
-      { startWeek: 6, endWeek: 7, days: 10 },
-    ])
-    expect(nr.actualAllocatedDays).toBe(20)
+    expect(nr.actualAllocatedDays).toBe(0)
+    expect(nr.actualAllocationStartWeek).toBeNull()
+    expect(nr.actualAllocationEndWeek).toBeNull()
+    expect(nr.actualAllocatedWeeks).toEqual([])
   })
 
   it('uses story timeline entry for story-timed stories and feature entry for others', async () => {
@@ -1630,10 +1625,13 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-1', startWeek: 0, durationWeeks: 1 },
+        { featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [
+          { id: 'story-1', isActive: true, tasks: [{ resourceTypeId: 'rt-dev', hoursEffort: 40, durationDays: 5, resourceType: { name: 'Developer', hoursPerDay: 8 } }] },
+          { id: 'story-2', isActive: true, tasks: [{ resourceTypeId: 'rt-dev', hoursEffort: 40, durationDays: 5, resourceType: { name: 'Developer', hoursPerDay: 8 } }] },
+        ] }, startWeek: 0, durationWeeks: 1 },
       ],
       storyTimelineEntries: [
-        { storyId: 'story-1', startWeek: 2, durationWeeks: 1 },
+        { storyId: 'story-1', story: { name: 'Story', featureId: 'feat-story' }, startWeek: 2, durationWeeks: 1 },
       ],
       capacityPlans: [],
     } as any)
@@ -1647,21 +1645,17 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
     expect(devRow).toBeTruthy()
 
-    // story-1 (timed at week 2) contributes demand at week 2
-    // story-2 (no story entry, feature timed at week 0) contributes demand at week 0
+    // Canonical weekly demand follows the feature timeline entry (issue #387):
+    // both stories' demand sits on the feature timing (week 0), regardless of
+    // the story timeline entry — identical to the Timeline surface.
     const nr = devRow.namedResources[0]
     expect(nr.actualAllocationStartWeek).toBe(0)
-    expect(nr.actualAllocationEndWeek).toBe(2)
-    expect(nr.actualAllocatedWeeks).toHaveLength(2)
-    // Two separate segments since weeks 0 and 2 are not consecutive
-    expect(nr.actualAllocationSegments).toHaveLength(2)
-    const seg0 = nr.actualAllocationSegments[0]
-    expect(seg0.startWeek).toBe(0)
-    expect(seg0.endWeek).toBe(0)
-    const seg1 = nr.actualAllocationSegments[1]
-    expect(seg1.startWeek).toBe(2)
-    expect(seg1.endWeek).toBe(2)
-    expect(nr.actualAllocatedDays).toBe(10)
+    expect(nr.actualAllocationEndWeek).toBe(0)
+    expect(nr.actualAllocatedWeeks).toHaveLength(1)
+    // 10 demand days at week 0, capped by the single resource's 5-day weekly
+    // capacity — the canonical feature-level demand, identical to Timeline.
+    expect(nr.actualAllocatedWeeks[0]).toMatchObject({ week: 0, days: 5, capacityDays: 5 })
+    expect(nr.actualAllocatedDays).toBe(5)
   })
 
   it('excludes inactive stories and features from fallback demand', async () => {
@@ -1770,11 +1764,11 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
       ],
       overheads: [],
       timelineEntries: [
-        { featureId: 'feat-active', startWeek: 0, durationWeeks: 2 },
-        { featureId: 'feat-inactive', startWeek: 0, durationWeeks: 2 },
+        { featureId: 'feat-active', feature: { id: 'feat-active', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [{ id: 'story-active', isActive: true, tasks: [{ resourceTypeId: 'rt-dev', hoursEffort: 80, durationDays: 10, resourceType: { name: 'Developer', hoursPerDay: 8 } }] }] }, startWeek: 0, durationWeeks: 2 },
+        { featureId: 'feat-inactive', feature: { id: 'feat-inactive', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 2 },
       ],
       storyTimelineEntries: [
-        { storyId: 'story-inactive', startWeek: 0, durationWeeks: 2 },
+        { storyId: 'story-inactive', story: { name: 'Story', featureId: 'feat-story' }, startWeek: 0, durationWeeks: 2 },
       ],
       capacityPlans: [],
     } as any)
@@ -1873,7 +1867,7 @@ describe('overhead FTE scaling', () => {
           namedResources: [],
         },
       }],
-      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 10 }],
+      timelineEntries: [{ featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 10 }],
       storyTimelineEntries: [],
       capacityPlans: [],
     } as never)
@@ -1969,7 +1963,7 @@ describe('overhead FTE scaling', () => {
         id: 'oh-1', name: 'PM', resourceTypeId: 'rt-pm', type: 'PERCENTAGE', value: 60, order: 0,
         resourceType: { id: 'rt-pm', name: 'Project Manager', category: 'PROJECT_MANAGEMENT', count: 1, hoursPerDay: 8, dayRate: 600, allocationMode: 'EFFORT', allocationPercent: 100, allocationStartWeek: null, allocationEndWeek: null, globalType: null, namedResources: [] },
       }],
-      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 10 }],
+      timelineEntries: [{ featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 10 }],
       storyTimelineEntries: [],
       capacityPlans: [],
     } as never)
@@ -2054,7 +2048,7 @@ describe('capacity profile enrichment in resource profile', () => {
       }],
       epics: BASE_EPIC(rtId),
       overheads: [],
-      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 4 }],
+      timelineEntries: [{ featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 4 }],
       storyTimelineEntries: [],
     } as never)
 
@@ -2126,7 +2120,7 @@ describe('capacity profile enrichment in resource profile', () => {
       }],
       epics: BASE_EPIC(rtId),
       overheads: [],
-      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 8 }],
+      timelineEntries: [{ featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 8 }],
       storyTimelineEntries: [],
     } as never)
 
@@ -2183,7 +2177,7 @@ describe('capacity profile enrichment in resource profile', () => {
       }],
       epics: BASE_EPIC(rtId),
       overheads: [],
-      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 8 }],
+      timelineEntries: [{ featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 8 }],
       storyTimelineEntries: [],
     } as never)
 
@@ -2229,7 +2223,7 @@ describe('capacity profile enrichment in resource profile', () => {
       }],
       epics: BASE_EPIC(rtId),
       overheads: [],
-      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 4 }],
+      timelineEntries: [{ featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 4 }],
       storyTimelineEntries: [],
     } as never)
 
@@ -2278,7 +2272,7 @@ describe('capacity profile enrichment in resource profile', () => {
       }],
       epics: BASE_EPIC(rtId),
       overheads: [],
-      timelineEntries: [{ featureId: 'feat-1', startWeek: 0, durationWeeks: 8 }],
+      timelineEntries: [{ featureId: 'feat-1', feature: { id: 'feat-1', name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 8 }],
       storyTimelineEntries: [],
     } as never)
 
@@ -2359,7 +2353,7 @@ describe('profile-first read adoption integration', () => {
           }],
         }],
         overheads: [],
-        timelineEntries: [{ featureId: featId, startWeek: 0, durationWeeks: 4 }],
+        timelineEntries: [{ featureId: featId, feature: { id: featId, name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 4 }],
         storyTimelineEntries: [],
         capacityPlans: [],
         capacityProfiles: [{
@@ -2452,7 +2446,7 @@ describe('profile-first read adoption integration', () => {
           }],
         }],
         overheads: [],
-        timelineEntries: [{ featureId: featId, startWeek: 0, durationWeeks: 4 }],
+        timelineEntries: [{ featureId: featId, feature: { id: featId, name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 4 }],
         storyTimelineEntries: [],
         capacityPlans: [],
         capacityProfiles: [{
@@ -2554,7 +2548,7 @@ describe('profile-first read adoption integration', () => {
           }],
         }],
         overheads: [],
-        timelineEntries: [{ featureId: featId, startWeek: 0, durationWeeks: 12 }],
+        timelineEntries: [{ featureId: featId, feature: { id: featId, name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 12 }],
         storyTimelineEntries: [],
         capacityPlans: [],
         capacityProfiles: [{
@@ -2638,7 +2632,7 @@ describe('profile-first read adoption integration', () => {
           }],
         }],
         overheads: [],
-        timelineEntries: [{ featureId: featId, startWeek: 0, durationWeeks: 4 }],
+        timelineEntries: [{ featureId: featId, feature: { id: featId, name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 4 }],
         storyTimelineEntries: [],
         capacityPlans: [],
         capacityProfiles: [
@@ -2751,7 +2745,7 @@ describe('profile-first read adoption integration', () => {
           }],
         }],
         overheads: [],
-        timelineEntries: [{ featureId: featId, startWeek: 0, durationWeeks: 8 }],
+        timelineEntries: [{ featureId: featId, feature: { id: featId, name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 8 }],
         storyTimelineEntries: [],
         capacityPlans: [],
         capacityProfiles: [
@@ -2862,7 +2856,7 @@ describe('profile-first read adoption integration', () => {
           }],
         }],
         overheads: [],
-        timelineEntries: [{ featureId: featId, startWeek: 0, durationWeeks: 4 }],
+        timelineEntries: [{ featureId: featId, feature: { id: featId, name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 4 }],
         storyTimelineEntries: [],
         capacityPlans: [],
         capacityProfiles: [],
@@ -2919,7 +2913,7 @@ describe('profile-first read adoption integration', () => {
           }],
         }],
         overheads: [],
-        timelineEntries: [{ featureId: featId, startWeek: 0, durationWeeks: 8 }],
+        timelineEntries: [{ featureId: featId, feature: { id: featId, name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [] }, startWeek: 0, durationWeeks: 8 }],
         storyTimelineEntries: [],
         capacityPlans: [],
       }
@@ -3047,7 +3041,7 @@ describe('profile-first read adoption integration', () => {
           }],
         }],
         overheads: [],
-        timelineEntries: [{ featureId: `feat-${projectId}`, startWeek: timelineStartWeek, durationWeeks: timelineDurationWeeks }],
+        timelineEntries: [{ featureId: `feat-${projectId}`, feature: { id: `feat-${projectId}`, name: 'Feature', order: 0, isActive: true, timelineColour: null, epic: { id: 'epic-1', name: 'Epic', order: 0, isActive: true, featureMode: 'sequential', scheduleMode: 'auto', timelineStartWeek: null }, userStories: [{ id: `story-${projectId}`, isActive: true, tasks: [{ resourceTypeId: rtId, hoursEffort: taskHours, durationDays: null, resourceType: { id: rtId, name: rtName, hoursPerDay: HPD } }] }] }, startWeek: timelineStartWeek, durationWeeks: timelineDurationWeeks }],
         storyTimelineEntries: [],
         capacityPlans: [{
           id: `plan-${projectId}`,
@@ -3454,7 +3448,7 @@ describe('GET /resource-profile — restored Class A n=0 display (issue #438)', 
       ],
       overheads: [],
       timelineEntries: [],
-      storyTimelineEntries: [{ storyId: 'story-1', startWeek: 0, durationWeeks: 4 }],
+      storyTimelineEntries: [{ storyId: 'story-1', story: { name: 'Story', featureId: 'feat-story' }, startWeek: 0, durationWeeks: 4 }],
       capacityPlans: [],
       capacityProfiles: [
         {

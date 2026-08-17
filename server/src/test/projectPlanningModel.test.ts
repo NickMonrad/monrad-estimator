@@ -14,6 +14,7 @@ import {
   computeWeeklyCapacity,
   applyCapacityPlanFallback,
   convertWeeklyDemandCache,
+  deriveProjectPlanningModel,
 } from '../lib/projectPlanningModel.js'
 import type { MaterializedCapacityPlanResource } from '../lib/capacityPlanMaterialisation.js'
 import type { SchedulerNamedResource } from '../lib/scheduler.js'
@@ -758,5 +759,193 @@ describe('backward-compatible cache key parsing', () => {
     // Should prioritize ID match 'rt-eng' → 'Engineer', not name 'rt-eng' → that RT
     expect(result.get('Engineer|0')).toBe(5)
     expect(result.size).toBe(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deriveProjectPlanningModel — pure canonical derivation (issue #387)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deriveProjectPlanningModel (pure — no Prisma or Express)', () => {
+  const devTask = {
+    resourceTypeId: 'rt-dev',
+    hoursEffort: 80,
+    durationDays: null,
+    resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+  }
+
+  const baseInputs = () => ({
+    project: {
+      id: 'proj-1',
+      startDate: new Date('2026-01-05T00:00:00.000Z'),
+      hoursPerDay: 8,
+      bufferWeeks: 0,
+      onboardingWeeks: 0,
+      weeklyDemandCache: null as Record<string, number> | null,
+    },
+    resourceTypes: [{
+      id: 'rt-dev',
+      name: 'Developer',
+      category: 'ENGINEERING',
+      count: 1,
+      hoursPerDay: 8,
+      dayRate: 500,
+      namedResources: [{ id: 'nr-1', name: 'Alice', pricingModel: 'ACTUAL_DAYS' }],
+    }],
+    capacityResourceTypes: [{
+      id: 'rt-dev',
+      name: 'Developer',
+      count: 1,
+      hoursPerDay: 8,
+      allocationMode: 'EFFORT',
+      namedResources: [{
+        id: 'nr-1',
+        name: 'Alice',
+        startWeek: null,
+        endWeek: null,
+        allocationPct: 100,
+        allocationMode: 'EFFORT',
+        allocationPercent: 100,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        pricingModel: 'ACTUAL_DAYS',
+      }],
+    }],
+    capacityPlanByRt: new Map<string, MaterializedCapacityPlanResource>(),
+    profileBackedNamedResourceIds: ['nr-1'],
+    timelineEntries: [{
+      featureId: 'feat-1',
+      startWeek: 0,
+      durationWeeks: 2,
+      isManual: false,
+      feature: {
+        id: 'feat-1',
+        name: 'Feature A',
+        order: 0,
+        isActive: true,
+        timelineColour: null,
+        epic: {
+          id: 'epic-1',
+          name: 'Epic',
+          order: 0,
+          isActive: true,
+          featureMode: 'sequential',
+          scheduleMode: 'auto',
+          timelineStartWeek: null,
+        },
+        userStories: [{ id: 'story-1', isActive: true, tasks: [devTask] }],
+      },
+    }],
+    storyTimelineEntries: [] as Array<{
+      storyId: string
+      startWeek: number
+      durationWeeks: number
+      isManual: boolean
+      story: { name: string; featureId: string }
+    }>,
+    featureDependencies: [],
+    storyDependencies: [],
+    epicDependencies: [],
+  })
+
+  it('derives the canonical model from plain inputs without a database', () => {
+    const model = deriveProjectPlanningModel(baseInputs())
+    expect(model.projectId).toBe('proj-1')
+    expect(model.hoursPerDay).toBe(8)
+    expect(model.entries).toHaveLength(1)
+    expect(model.entries[0].featureName).toBe('Feature A')
+    // 80h / 8hpd = 10 days spread over 2 weeks → 5 demand days per week
+    expect(model.weeklyDemand).toEqual([
+      expect.objectContaining({ week: 0, resourceTypeName: 'Developer', demandDays: 5 }),
+      expect.objectContaining({ week: 1, resourceTypeName: 'Developer', demandDays: 5 }),
+    ])
+  })
+
+  it('computes the planning window and projected end date', () => {
+    const model = deriveProjectPlanningModel(baseInputs())
+    expect(model.planningWindow.maxWeek).toBe(2)
+    expect(model.planningWindow.projectedEndDate).toBe('2026-01-19T00:00:00.000Z')
+  })
+
+  it('merges cached demand with fallback (cached resource types suppress fallback)', () => {
+    const inputs = baseInputs()
+    inputs.project.weeklyDemandCache = { 'rt-dev|0': 3 }
+    const model = deriveProjectPlanningModel(inputs)
+    // Only the cached week survives for Developer; fallback rows suppressed.
+    expect(model.weeklyDemand).toHaveLength(1)
+    expect(model.weeklyDemand[0]).toMatchObject({ week: 0, demandDays: 3 })
+  })
+
+  it('keeps feature-granularity demand (story entries do not re-time canonical demand)', () => {
+    const inputs = baseInputs()
+    // A story timeline entry exists, but the canonical weekly demand follows
+    // the feature timeline entry (the visible schedule), matching Timeline.
+    inputs.storyTimelineEntries = [{
+      storyId: 'story-1',
+      startWeek: 4,
+      durationWeeks: 2,
+      isManual: false,
+      story: { name: 'Story 1', featureId: 'feat-1' },
+    }]
+    const model = deriveProjectPlanningModel(inputs)
+    expect(model.weeklyDemand.map(d => d.week)).toEqual([0, 1])
+    expect(model.weeklyDemand[0].demandDays).toBe(5)
+  })
+
+  it('derives named-resource actual allocation from the canonical weekly demand', () => {
+    const model = deriveProjectPlanningModel(baseInputs())
+    const assignment = model.namedResourceAssignments.get('rt-dev')
+    expect(assignment).toBeDefined()
+    const alice = assignment!.namedResources.find(nr => nr.id === 'nr-1')
+    expect(alice).toBeDefined()
+    expect(alice!.actualAllocatedDays).toBe(10)
+    expect(alice!.actualAllocationStartWeek).toBe(0)
+    expect(alice!.actualAllocationEndWeek).toBe(1)
+  })
+
+  it('honours profile-backed capacity segments over the capacity-plan fallback', () => {
+    const inputs = baseInputs()
+    const materialized: MaterializedCapacityPlanResource = {
+      resourceTypeId: 'rt-dev',
+      totalDays: 50,
+      weeklyHeadcount: new Map([[0, 1], [1, 1]]),
+      slotWindows: [{ startWeek: 0, endWeek: 1, allocationPercent: 100 }],
+      resourceTrajectories: [{ trajectoryIndex: 0, segments: [{ startWeek: 0, endWeek: 1, allocationPercent: 100 }] }],
+      startWeek: 0,
+      endWeek: 1,
+    }
+    inputs.capacityPlanByRt = new Map([['rt-dev', materialized]])
+    // Profile-backed NR carries capacity segments → weekly capacity from segments
+    ;(inputs.capacityResourceTypes[0].namedResources[0] as {
+      capacitySegments?: { startWeek: number; endWeek: number; allocationPercent: number }[]
+    }).capacitySegments = [
+      { startWeek: 0, endWeek: 1, allocationPercent: 100 },
+    ]
+    const model = deriveProjectPlanningModel(inputs)
+    // 5 capacity days per week from the segment-authoritative named resource
+    const devCapacity = model.weeklyDemand.filter(d => d.resourceTypeName === 'Developer')
+    expect(devCapacity.every(d => d.capacityDays === 5)).toBe(true)
+  })
+
+  it('computes profile-aware parallel warnings', () => {
+    const inputs = baseInputs()
+    // Two parallel features sharing the Developer → over-allocation warning
+    inputs.timelineEntries[0].feature.epic.featureMode = 'parallel'
+    inputs.timelineEntries = [
+      inputs.timelineEntries[0],
+      {
+        ...inputs.timelineEntries[0],
+        featureId: 'feat-2',
+        feature: {
+          ...inputs.timelineEntries[0].feature,
+          id: 'feat-2',
+          name: 'Feature B',
+        },
+      },
+    ]
+    const model = deriveProjectPlanningModel(inputs)
+    // Parallel epic with 2 features and 10 demand days vs 5 capacity → warning
+    expect(model.parallelWarnings.length).toBeGreaterThan(0)
+    expect(model.parallelWarnings[0]).toMatchObject({ resourceTypeName: 'Developer' })
   })
 })

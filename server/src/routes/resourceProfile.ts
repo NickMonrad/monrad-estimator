@@ -4,14 +4,9 @@ import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { effectiveDays } from '../utils/round.js'
-import {
-  materializeCapacityPlanResources,
-} from '../lib/capacityPlanMaterialisation.js'
 import { buildResourceCapacityProfileMap } from '../lib/capacityProfileResourceAdapter.js'
 import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
-import { deriveNamedResourceAssignments, type WeeklyDemandLike } from '../lib/namedResourceAssignments.js'
-import { buildFallbackWeeklyDemand, mergeWeeklyDemand, computePlanningWindow, convertWeeklyDemandCache } from '../lib/projectPlanningModel.js'
-import type { SchedulerNamedResource } from '../lib/scheduler.js'
+import { deriveProjectPlanningModel } from '../lib/projectPlanningModel.js'
 import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
@@ -55,12 +50,22 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         include: { resourceType: { include: { globalType: true } } },
         orderBy: [{ order: 'asc' }, { createdAt: 'asc' }],
       },
-      timelineEntries: true,
-      storyTimelineEntries: { select: { storyId: true, startWeek: true, durationWeeks: true } },
-      capacityPlans: {
-        where: { isActive: true },
-        take: 1,
-        include: { periods: { include: { entries: true }, orderBy: { periodIndex: 'asc' } } },
+      timelineEntries: {
+        include: {
+          feature: {
+            include: {
+              epic: true,
+              userStories: {
+                include: {
+                  tasks: { include: { resourceType: true } },
+                },
+              },
+            },
+          },
+        },
+      },
+      storyTimelineEntries: {
+        include: { story: { select: { name: true, featureId: true } } },
       },
       capacityProfiles: {
         include: {
@@ -428,10 +433,6 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     return
   }
 
-  // Materialize capacity plan for shared model consumption
-  const capacityPlanByRt = materializeCapacityPlanResources(
-    (project.capacityPlans?.[0] ?? null)?.periods ?? [],
-  )
   // Build capacity-profile enrichment map (profile-first, fail-closed)
   const { roleProfiles, namedResourceProfiles } = buildResourceCapacityProfileMap(
     project as unknown as Parameters<typeof buildResourceCapacityProfileMap>[0],
@@ -441,109 +442,49 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   // from authoritative profiles, never read from candidate columns).
   const resolvedCapacity = await resolveSchedulerCapacity(prisma, projectId)
 
-  // Project duration in weeks
-  const planningWindow = computePlanningWindow(
-    project.timelineEntries,
-    project.startDate,
-    project.bufferWeeks ?? 0,
-    project.onboardingWeeks ?? 0,
-  )
-  const projectDurationWeeks = planningWindow.maxWeek ?? 0
-
-  // ── Fallback weekly demand from shared model ──────────────────────
-  // Build entries at story-level granularity to preserve story-level scheduling semantics.
-  // Stories with a story timeline entry get their own timing; remaining active stories
-  // without a story entry are grouped under their feature-level timeline entry.
-  const fallbackEntries: Array<{
-    startWeek: number
-    durationWeeks: number
-    feature: {
-      userStories: Array<{
-        isActive: boolean | null
-        tasks: Array<{
-          resourceTypeId: string | null
-          hoursEffort: number
-          durationDays: number | null
-          resourceType: { name: string; hoursPerDay: number | null } | null
-        }>
-      }>
-    }
-  }> = []
-  const storyTimedIds = new Set<string>()
-  for (const epic of project.epics) {
-    if (epic.isActive === false) continue
-    for (const feature of epic.features) {
-      if (feature.isActive === false) continue
-      for (const story of feature.userStories) {
-        if (story.isActive === false) continue
-        const storyEntry = storyEntryMap.get(story.id)
-        if (storyEntry) {
-          fallbackEntries.push({
-            startWeek: storyEntry.startWeek,
-            durationWeeks: storyEntry.durationWeeks,
-            feature: { userStories: [story] },
-          })
-          storyTimedIds.add(story.id)
-        }
-      }
-    }
-  }
-  for (const epic of project.epics) {
-    if (epic.isActive === false) continue
-    for (const feature of epic.features) {
-      if (feature.isActive === false) continue
-      const featureEntry = featureEntryMap.get(feature.id)
-      if (!featureEntry) continue
-      const remaining = feature.userStories.filter(
-        story => story.isActive !== false && !storyTimedIds.has(story.id),
-      )
-      if (remaining.length > 0) {
-        fallbackEntries.push({
-          startWeek: featureEntry.startWeek,
-          durationWeeks: featureEntry.durationWeeks,
-          feature: { userStories: remaining },
-        })
-      }
-    }
-  }
-
-  // Profile-derived scheduler DTOs are authoritative (issue #418): the
-  // fallback demand builder consumes the projected compatibility fields
-  // (allocationMode etc.) from the resolved capacity model, never the removed
-  // legacy ResourceType/NamedResource columns.
-  const fallbackDemand = buildFallbackWeeklyDemand(
-    fallbackEntries,
-    resolvedCapacity.resourceTypes as Array<{
-      name: string; id: string; hoursPerDay: number | null;
-      allocationMode: string | null; count: number;
-      namedResources: SchedulerNamedResource[]
-    }>,
-    capacityPlanByRt,
-    project.hoursPerDay,
-  )
-
-  const weeklyDemandCache = project.weeklyDemandCache as Record<string, number> | null
-  let weeklyDemand: WeeklyDemandLike[]
-
-  if (weeklyDemandCache && Object.keys(weeklyDemandCache).length > 0) {
-    const simulatedDemand = convertWeeklyDemandCache(
-      weeklyDemandCache,
-      project.resourceTypes as Array<{ id: string; name: string }>,
-    )
-    const merged = mergeWeeklyDemand(fallbackDemand, simulatedDemand)
-    weeklyDemand = merged.map(r => ({ week: r.week, resourceTypeName: r.resourceTypeName, demandDays: r.demandDays }))
-  } else {
-    weeklyDemand = fallbackDemand.map(r => ({ week: r.week, resourceTypeName: r.resourceTypeName, demandDays: r.demandDays }))
-  }
-
-  weeklyDemand = weeklyDemand.filter(row => row.demandDays > 0)
-  // Assignment inputs are the profile-derived scheduler DTOs (issue #418):
-  // every named resource carries authoritative capacity segments and
-  // profile-projected compatibility fields.
-  const namedResourceAssignments = deriveNamedResourceAssignments({
-    resourceTypes: resolvedCapacity.resourceTypes,
-    weeklyDemand,
+  // ── Canonical planning model (issue #387) ─────────────────────────
+  // Timeline and Resource Profile consume the same pure derivation, so
+  // planning window, weekly demand, weekly capacity and named-resource
+  // actual assignment are identical across surfaces. The route keeps its
+  // own effort rollups and role/resource presentation below.
+  const [featureDeps, storyDeps, epicDeps] = await Promise.all([
+    prisma.featureDependency.findMany({
+      where: { feature: { epic: { projectId } } },
+      select: { featureId: true, dependsOnId: true },
+    }),
+    prisma.storyDependency.findMany({
+      where: { story: { feature: { epic: { projectId } } } },
+      select: { storyId: true, dependsOnId: true },
+    }),
+    prisma.epicDependency.findMany({
+      where: { epic: { projectId } },
+      select: { epicId: true, dependsOnId: true },
+    }),
+  ])
+  const model = deriveProjectPlanningModel({
+    project: {
+      id: project.id,
+      startDate: project.startDate,
+      hoursPerDay: project.hoursPerDay,
+      bufferWeeks: project.bufferWeeks,
+      onboardingWeeks: project.onboardingWeeks,
+      weeklyDemandCache: project.weeklyDemandCache as Record<string, number> | null,
+    },
+    resourceTypes: project.resourceTypes,
+    capacityResourceTypes: resolvedCapacity.resourceTypes,
+    capacityPlanByRt: resolvedCapacity.capacityPlanByRt,
+    profileBackedNamedResourceIds: resolvedCapacity.meta.profileBackedNamedResourceIds,
+    timelineEntries: project.timelineEntries,
+    storyTimelineEntries: project.storyTimelineEntries,
+    featureDependencies: featureDeps,
+    storyDependencies: storyDeps,
+    epicDependencies: epicDeps,
   })
+
+  const capacityPlanByRt = resolvedCapacity.capacityPlanByRt
+  const projectDurationWeeks = model.planningWindow.maxWeek ?? 0
+  const namedResourceAssignments = model.namedResourceAssignments
+
 
   const categoryIndex = (category: ResourceCategory) => {
     const idx = CATEGORY_ORDER.indexOf(category)
