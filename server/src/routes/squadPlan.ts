@@ -14,7 +14,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { effectiveDays } from '../utils/round.js'
+import { effortDays } from '../utils/round.js'
 import { ownedProject } from '../lib/ownership.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
@@ -676,7 +676,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             for (const task of story.tasks) {
               if (!task.resourceTypeId) continue
               const rtHpd = task.resourceType?.hoursPerDay ?? hpd
-              const days = effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
+              const days = effortDays(task.hoursEffort, rtHpd)
               demandByRt.set(task.resourceTypeId, (demandByRt.get(task.resourceTypeId) ?? 0) + days)
             }
           }
@@ -695,7 +695,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             for (const task of story.tasks) {
               if (!task.resourceTypeId) continue
               const rtHpd = task.resourceType?.hoursPerDay ?? hpd
-              storyDays += effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
+              storyDays += effortDays(task.hoursEffort, rtHpd)
             }
             const proportion = totalFeatureDays > 0 ? storyDays / totalFeatureDays : 0
             const storyDuration = Math.max(1, Math.ceil(span.durationWeeks * proportion))

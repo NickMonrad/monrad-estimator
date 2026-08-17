@@ -25,8 +25,8 @@ The app deliberately separates four related but different concepts:
 
 | Concept | Primary source | Owned by | Notes |
 |---|---|---|---|
-| Delivery effort | `Task.hoursEffort`, `Task.durationDays`, task `resourceTypeId` | Backlog / Effort Review | This is the estimated work required to deliver the scoped backlog. |
-| Scheduling reality | `TimelineEntry`, `StoryTimelineEntry`, `Project.weeklyDemandCache` | Timeline Planner | This is where work lands over time after dependencies, manual overrides, and optional resource levelling. |
+| Delivery effort | `Task.hoursEffort`, task `resourceTypeId` | Backlog / Effort Review | This is the estimated work required to deliver the scoped backlog. A positive `durationDays` is an elapsed scheduling override, not additional effort. |
+| Scheduling reality | `TimelineEntry`, `StoryTimelineEntry`, `Task.durationDays`, `Project.weeklyDemandCache` | Timeline Planner | This is where work lands over time after dependencies, manual overrides, and optional resource levelling. |
 | Resource capacity / staffing shape | `ResourceType`, `NamedResource` | Resource Profile / planning controls | This describes which role/person/slot capacity is available by week. `CapacityPlan` is turned into week-by-week staffing numbers and named-resource windows for the response/shared planning read model, but is **not** passed directly into `runScheduler`. The scheduler currently receives raw `ResourceType.count` values. |
 | Commercial pricing | `ResourceType.dayRate`, `NamedResource.pricingModel`, `ProjectOverhead`, `ProjectDiscount`, tax fields | Commercial / Resource Profile presentation | Pricing may use scheduled actual days, pro-rata allocation, full-project allocation, discounts, or overheads. It should not be treated as identical to effort or capacity. |
 
@@ -36,7 +36,7 @@ flowchart LR
     Epic[Epic]
     Feature[Feature]
     Story[UserStory]
-    Task[Task effort<br/>hoursEffort + durationDays + resourceType]
+    Task[Task effort<br/>hoursEffort + resourceType<br/>durationDays = elapsed override]
     Epic --> Feature --> Story --> Task
   end
 
@@ -408,8 +408,8 @@ Current feature duration is driven by the bottleneck resource type:
 
 1. Active stories only are considered.
 2. Tasks are grouped by `resourceTypeId`.
-3. Each task's effective days are calculated from `durationDays` when present, otherwise from `hoursEffort / effectiveHoursPerDay`.
-4. For each resource type, person-days are divided by the configured resource type `count`.
+3. Resource demand person-days are calculated from `hoursEffort / effectiveHoursPerDay`.
+4. Elapsed task days use positive `durationDays` when supplied, otherwise `hoursEffort / effectiveHoursPerDay`; the bottleneck elapsed duration is divided by `ResourceType.count`.
 5. The largest resource-type duration becomes the feature duration floor, with a minimum of `0.2` weeks.
 6. For parallel epics, a shared-resource minimum-span floor is applied so parallel features cannot complete faster than total demand divided by available weekly capacity.
 
@@ -417,15 +417,19 @@ Current feature duration is driven by the bottleneck resource type:
 flowchart TD
   Tasks[Active tasks in feature]
   Group[Group tasks by resourceTypeId]
-  EffectiveDays[Calculate effective days<br/>durationDays override or hoursEffort / hoursPerDay]
-  Divide[Divide each RT demand by ResourceType.count]
+  EffortDays[Calculate effort days<br/>hoursEffort / hoursPerDay]
+  ScheduleDays[Calculate elapsed days<br/>durationDays override or effort days]
+  Divide[Divide elapsed RT duration by ResourceType.count]
   Bottleneck[Take max RT days]
   Weeks[Convert days to weeks<br/>max 0.2 minimum]
   Parallel{Parent epic featureMode = parallel?}
   Floor[Apply parallel epic shared-resource min span]
   Duration[Feature durationWeeks]
 
-  Tasks --> Group --> EffectiveDays --> Divide --> Bottleneck --> Weeks --> Parallel
+  Tasks --> Group
+  Group --> EffortDays
+  Group --> ScheduleDays --> Divide --> Bottleneck --> Weeks --> Parallel
+  EffortDays --> Parallel
   Parallel -- yes --> Floor --> Duration
   Parallel -- no --> Duration
 ```

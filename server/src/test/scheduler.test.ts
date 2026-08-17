@@ -25,11 +25,17 @@ import { deriveSlotSegments } from '../routes/squadPlan.js'
 // Helpers to build minimal input objects
 // ─────────────────────────────────────────────────────────────────────────────
 
-function makeTask(hoursEffort: number, rtId: string | null = null, rtName = 'Dev', hpd = 8) {
+function makeTask(
+  hoursEffort: number,
+  rtId: string | null = null,
+  rtName = 'Dev',
+  hpd = 8,
+  durationDays: number | null = null,
+) {
   return {
     resourceTypeId: rtId,
     hoursEffort,
-    durationDays: null as null,
+    durationDays,
     resourceType: rtId ? { id: rtId, name: rtName, hoursPerDay: hpd } : null,
   }
 }
@@ -823,6 +829,62 @@ describe('runScheduler', () => {
     expect(result.weeklyConsumptionMap.size).toBeGreaterThan(0)
     const totalDays = [...result.weeklyConsumptionMap.values()].reduce((a, b) => a + b, 0)
     expect(totalDays).toBeCloseTo(5, 0)  // 40h / 8hpd = 5 days
+  })
+  it('paces a longer duration without inflating levelled effort demand', () => {
+    const rt = makeRt('rt1', 'Dev', 1, 7.6)
+    const feature = makeFeature('f1', [makeStory('s1', [makeTask(7.6, 'rt1', 'Dev', 7.6, 5)])])
+    const result = runScheduler(baseInput({
+      project: { hoursPerDay: 7.6 },
+      epics: [makeEpic('e1', [feature])],
+      resourceTypes: [rt],
+      resourceLevel: true,
+    }))
+
+    const totalDays = [...result.weeklyConsumptionMap.values()].reduce((sum, days) => sum + days, 0)
+    expect(totalDays).toBeCloseTo(1, 8)
+    expect(result.featureSchedule.find(entry => entry.featureId === 'f1')?.durationWeeks).toBeCloseTo(1, 8)
+  })
+
+  it('resource levelling consumes 38 effort hours despite a three-day override', () => {
+    const rt = makeRt('rt1', 'Dev', 1, 7.6)
+    const feature = makeFeature('f1', [makeStory('s1', [makeTask(38, 'rt1', 'Dev', 7.6, 3)])])
+    const result = runScheduler(baseInput({
+      project: { hoursPerDay: 7.6 },
+      epics: [makeEpic('e1', [feature])],
+      resourceTypes: [rt],
+      resourceLevel: true,
+    }))
+
+    const totalDays = [...result.weeklyConsumptionMap.values()].reduce((sum, days) => sum + days, 0)
+    const featureEntry = result.featureSchedule.find(entry => entry.featureId === 'f1')!
+    expect(totalDays).toBeCloseTo(5, 8)
+    expect(featureEntry.durationWeeks).toBeGreaterThanOrEqual(1)
+  })
+
+  it('does not inflate pinned story or manual feature demand from duration overrides', () => {
+    const rt = makeRt('rt1', 'Dev', 1, 7.6)
+    const pinnedStory = makeStory('s-pinned', [makeTask(7.6, 'rt1', 'Dev', 7.6, 5)])
+    const pinnedResult = runScheduler(baseInput({
+      project: { hoursPerDay: 7.6 },
+      epics: [makeEpic('e-pinned', [makeFeature('f-pinned', [pinnedStory])])],
+      resourceTypes: [rt],
+      manualStoryEntries: [{ storyId: 's-pinned', startWeek: 0 }],
+      resourceLevel: true,
+    }))
+    const pinnedDays = [...pinnedResult.weeklyConsumptionMap.values()].reduce((sum, days) => sum + days, 0)
+    expect(pinnedDays).toBeCloseTo(1, 8)
+    expect(pinnedResult.storySchedule.find(entry => entry.storyId === 's-pinned')?.durationWeeks).toBeCloseTo(1, 8)
+
+    const manualResult = runScheduler(baseInput({
+      project: { hoursPerDay: 7.6 },
+      epics: [makeEpic('e-manual', [makeFeature('f-manual', [makeStory('s-manual', [makeTask(7.6, 'rt1', 'Dev', 7.6, 5)])])])],
+      resourceTypes: [rt],
+      manualFeatureEntries: [{ featureId: 'f-manual', startWeek: 0, durationWeeks: 4 }],
+      resourceLevel: true,
+    }))
+    const manualDays = [...manualResult.weeklyConsumptionMap.values()].reduce((sum, days) => sum + days, 0)
+    expect(manualDays).toBeCloseTo(1, 8)
+    expect(manualResult.featureSchedule.find(entry => entry.featureId === 'f-manual')?.durationWeeks).toBe(4)
   })
 
   it('resourceLevel=true: small feature finishes promptly regardless of feature iteration order', () => {

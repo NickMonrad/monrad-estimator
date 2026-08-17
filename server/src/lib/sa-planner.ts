@@ -13,7 +13,7 @@ import {
   type SchedulerInput,
   type SchedulerResourceType,
 } from './scheduler.js'
-import { effectiveDays } from '../utils/round.js'
+import { effortDays } from '../utils/round.js'
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -112,7 +112,7 @@ export function runSAPlanner(
         for (const task of story.tasks) {
           if (!task.resourceTypeId) continue
           const rtHpd = task.resourceType?.hoursPerDay ?? hpd
-          const days = effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
+          const days = effortDays(task.hoursEffort, rtHpd)
           totalDaysByRt.set(task.resourceTypeId, (totalDaysByRt.get(task.resourceTypeId) ?? 0) + days)
         }
       }
