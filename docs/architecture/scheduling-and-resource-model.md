@@ -361,8 +361,6 @@ flowchart TD
   Reload --> Response
   Response --> Consumers
 ```
-  Response --> Consumers
-```
 
 ## Scheduler sequence
 
