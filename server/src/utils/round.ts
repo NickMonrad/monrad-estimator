@@ -29,21 +29,15 @@ export const scheduleDurationDaysAtCount = (
 ): number => {
   const count = Math.max(1, resourceCount)
   let totalEffortDays = 0
-  let totalScheduleDays = 0
   let explicitDurationFloor = 0
 
   for (const task of tasks) {
     const hoursPerDay = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
     totalEffortDays += effortDays(task.hoursEffort, hoursPerDay)
-    totalScheduleDays += scheduleDurationDays(task.durationDays, task.hoursEffort, hoursPerDay)
     if (task.durationDays && task.durationDays > explicitDurationFloor) {
       explicitDurationFloor = task.durationDays
     }
   }
 
-  return Math.max(
-    totalEffortDays / count,
-    totalScheduleDays / count,
-    explicitDurationFloor,
-  )
+  return Math.max(totalEffortDays / count, explicitDurationFloor)
 }

@@ -877,6 +877,46 @@ describe('runScheduler', () => {
     expect(totalDays * 7.6).toBeCloseTo(15.2, 8)
     expect(featureEntry.durationWeeks).toBeCloseTo(1, 8)
   })
+  it('keeps three explicit same-resource tasks within the longest override', () => {
+    const rt = makeRt('rt1', 'Dev', 2, 7.6)
+    const feature = makeFeature('f1', [makeStory('s1', [
+      makeTask(7.6, 'rt1', 'Dev', 7.6, 5),
+      makeTask(7.6, 'rt1', 'Dev', 7.6, 5),
+      makeTask(7.6, 'rt1', 'Dev', 7.6, 5),
+    ])])
+    const result = runScheduler(baseInput({
+      project: { hoursPerDay: 7.6 },
+      epics: [makeEpic('e1', [feature])],
+      resourceTypes: [rt],
+      resourceLevel: true,
+    }))
+
+    const totalDays = [...result.weeklyConsumptionMap.values()].reduce((sum, days) => sum + days, 0)
+    const featureEntry = result.featureSchedule.find(entry => entry.featureId === 'f1')!
+    expect(totalDays).toBeCloseTo(3, 8)
+    expect(totalDays * 7.6).toBeCloseTo(22.8, 8)
+    expect(featureEntry.durationWeeks).toBeCloseTo(1, 8)
+  })
+
+  it('keeps three explicit tasks within five days at single-resource capacity', () => {
+    const rt = makeRt('rt1', 'Dev', 1, 7.6)
+    const feature = makeFeature('f1', [makeStory('s1', [
+      makeTask(7.6, 'rt1', 'Dev', 7.6, 5),
+      makeTask(7.6, 'rt1', 'Dev', 7.6, 5),
+      makeTask(7.6, 'rt1', 'Dev', 7.6, 5),
+    ])])
+    const result = runScheduler(baseInput({
+      project: { hoursPerDay: 7.6 },
+      epics: [makeEpic('e1', [feature])],
+      resourceTypes: [rt],
+      resourceLevel: true,
+    }))
+
+    const totalDays = [...result.weeklyConsumptionMap.values()].reduce((sum, days) => sum + days, 0)
+    const featureEntry = result.featureSchedule.find(entry => entry.featureId === 'f1')!
+    expect(totalDays).toBeCloseTo(3, 8)
+    expect(featureEntry.durationWeeks).toBeCloseTo(1, 8)
+  })
 
   it('resource levelling consumes 38 effort hours despite a three-day override', () => {
     const rt = makeRt('rt1', 'Dev', 1, 7.6)

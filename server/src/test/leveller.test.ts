@@ -131,6 +131,23 @@ describe('levelEpicStarts', () => {
     expect(result.totalDeliveryWeeks).toBeCloseTo(1, 8)
     expect(result.featureStartWeeks.get('f1')).toBe(0)
   })
+  it('keeps three explicit same-resource tasks at the longest override', () => {
+    const rt = makeRt('rt1', 'Dev', 2, 7.6)
+    const result = levelEpicStarts(baseInput({
+      project: { hoursPerDay: 7.6 },
+      epics: [makeEpic('e1', [
+        makeFeature('f1', [makeStory('s1', [
+          makeTask(7.6, 'rt1', 'Dev', 7.6, 5),
+          makeTask(7.6, 'rt1', 'Dev', 7.6, 5),
+          makeTask(7.6, 'rt1', 'Dev', 7.6, 5),
+        ])]),
+      ], { featureMode: 'parallel' })],
+      resourceTypes: [rt],
+    }))
+
+    expect(result.totalDeliveryWeeks).toBeCloseTo(1, 8)
+    expect(result.featureStartWeeks.get('f1')).toBe(0)
+  })
 
   it('3 competing epics all needing same RT (count=1) are staggered sequentially', () => {
     // RT count=1: only 5 days/week capacity (1 person × 8hpd × 5days = 40h/wk = 5 days/wk)
