@@ -337,7 +337,7 @@ function mockCapacityProfilesForApply(rtId = 'rt-dev', namedResourceIds: string[
   }) as any)
 }
 
-  it('refreshes weeklyDemandCache from the applied planner output', async () => {
+  it('refreshes demand from effort and preserves duration-weighted story spans', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
     mockCapacityProfilesForApply()
     vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
@@ -390,7 +390,22 @@ function mockCapacityProfilesForApply(rtId = 'rt-dev', namedResourceIds: string[
                   {
                     id: 'task-1',
                     resourceTypeId: 'rt-dev',
-                    hoursEffort: 16,
+                    hoursEffort: 80,
+                    durationDays: 20,
+                    resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+                  },
+                ],
+                dependencies: [],
+              },
+              {
+                id: 'story-2',
+                order: 1,
+                isActive: true,
+                tasks: [
+                  {
+                    id: 'task-2',
+                    resourceTypeId: 'rt-dev',
+                    hoursEffort: 80,
                     durationDays: null,
                     resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
                   },
@@ -479,10 +494,16 @@ function mockCapacityProfilesForApply(rtId = 'rt-dev', namedResourceIds: string[
       })
 
     expect(res.status).toBe(201)
-    expect(capturedTx.project.update).toHaveBeenCalledWith({
-      where: { id: 'proj-1' },
-      data: { weeklyDemandCache: { 'rt-dev|0': 2 } },
-    })
+    const projectUpdateArg = capturedTx.project.update.mock.calls.at(-1)?.[0]
+    const weeklyDemandCache = projectUpdateArg?.data?.weeklyDemandCache as Record<string, number>
+    expect(Object.values(weeklyDemandCache).reduce((sum, days) => sum + days, 0)).toBeCloseTo(20, 6)
+    expect(weeklyDemandCache['rt-dev|0']).toBeCloseTo(5, 6)
+
+    const storyRows = capturedTx.storyTimelineEntry.createMany.mock.calls.at(-1)?.[0]?.data
+    expect(storyRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ storyId: 'story-1', durationWeeks: 3 }),
+      expect.objectContaining({ storyId: 'story-2', durationWeeks: 2 }),
+    ]))
   })
 
   it('replays applied reduced-period capacity into weeklyDemandCache', async () => {

@@ -20,11 +20,17 @@ import type {
 // Builder helpers (mirrors scheduler.test.ts pattern)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function makeTask(hoursEffort: number, rtId: string | null = null, rtName = 'Dev', hpd = 8) {
+function makeTask(
+  hoursEffort: number,
+  rtId: string | null = null,
+  rtName = 'Dev',
+  hpd = 8,
+  durationDays: number | null = null,
+) {
   return {
     resourceTypeId: rtId,
     hoursEffort,
-    durationDays: null as null,
+    durationDays,
     resourceType: rtId ? { id: rtId, name: rtName, hoursPerDay: hpd } : null,
   }
 }
@@ -96,6 +102,18 @@ describe('levelEpicStarts', () => {
     expect(result.epicStartWeeks.get('e1')).toBe(0)
     expect(result.featureStartWeeks.get('f1')).toBe(0)
     expect(result.totalDeliveryWeeks).toBeGreaterThan(0)
+  })
+  it('does not divide an explicit duration override by resource headcount', () => {
+    const rt = makeRt('rt1', 'Dev', 2, 7.6)
+    const result = levelEpicStarts(baseInput({
+      project: { hoursPerDay: 7.6 },
+      epics: [makeEpic('e1', [
+        makeFeature('f1', [makeStory('s1', [makeTask(7.6, 'rt1', 'Dev', 7.6, 5)])]),
+      ], { featureMode: 'parallel' })],
+      resourceTypes: [rt],
+    }))
+
+    expect(result.totalDeliveryWeeks).toBeCloseTo(1, 8)
   })
 
   it('3 competing epics all needing same RT (count=1) are staggered sequentially', () => {

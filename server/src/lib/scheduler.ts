@@ -9,7 +9,7 @@
  * Phase 2 extraction: issue #233
  */
 
-import { effortDays, scheduleDurationDays } from '../utils/round.js'
+import { effortDays, scheduleDurationDays, scheduleDurationDaysAtCount } from '../utils/round.js'
 // ─────────────────────────────────────────────────────────────────────────────
 // Input / Output types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -496,12 +496,11 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
 
     let maxDays = 0
     for (const [rtId, rtTasks] of byRt) {
-      const personDays = rtTasks.reduce((sum, t) => {
-        const hpd = t.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-        return sum + scheduleDurationDays(t.durationDays, t.hoursEffort, hpd)
-      }, 0)
       const count = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
-      const days = personDays / count
+      const days = rtTasks.reduce((sum, task) => {
+        const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+        return sum + scheduleDurationDaysAtCount(task.durationDays, task.hoursEffort, hpd, count)
+      }, 0)
       if (days > maxDays) maxDays = days
     }
     return Math.max(0.2, maxDays / 5)
