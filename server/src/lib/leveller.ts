@@ -15,7 +15,7 @@ import {
   type SchedulerInput,
   type SchedulerResourceType,
 } from './scheduler.js'
-import { effectiveDays } from '../utils/round.js'
+import { effortDays, scheduleDurationDaysAtCount } from '../utils/round.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -87,15 +87,11 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
       }
       let maxDays = 0
       for (const [rtId, tasks] of byRt) {
-        const personDays = tasks.reduce((sum, t) => {
-          const rtHpd = t.resourceType?.hoursPerDay ?? hpd
-          return sum + effectiveDays(t.durationDays, t.hoursEffort, rtHpd)
-        }, 0)
         const rawCount = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
         const count = input.maxParallelismPerFeature
           ? Math.min(rawCount, input.maxParallelismPerFeature)
           : rawCount
-        const days = personDays / count
+        const days = scheduleDurationDaysAtCount(tasks, hpd, count)
         if (days > maxDays) maxDays = days
       }
       featureDurations.set(feature.id, Math.max(0.2, maxDays / 5))
@@ -115,7 +111,7 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
         for (const task of story.tasks) {
           if (!task.resourceTypeId) continue
           const rtHpd = task.resourceType?.hoursPerDay ?? hpd
-          const demandDays = effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
+          const demandDays = effortDays(task.hoursEffort, rtHpd)
           demandByRt.set(
             task.resourceTypeId,
             (demandByRt.get(task.resourceTypeId) ?? 0) + demandDays,
@@ -253,7 +249,7 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
         for (const task of story.tasks) {
           if (!task.resourceTypeId) continue
           const rtHpd = task.resourceType?.hoursPerDay ?? hpd
-          const demandDays = effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
+          const demandDays = effortDays(task.hoursEffort, rtHpd)
           demandByRt.set(task.resourceTypeId, (demandByRt.get(task.resourceTypeId) ?? 0) + demandDays)
         }
       }

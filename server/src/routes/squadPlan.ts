@@ -14,7 +14,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { effectiveDays } from '../utils/round.js'
+import { scheduleDurationDays } from '../utils/round.js'
 import { ownedProject } from '../lib/ownership.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
@@ -670,17 +670,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             fallbackStartWeek,
           )
 
-          const demandByRt = new Map<string, number>()
           const activeStories = feature.userStories.filter(s => s.isActive !== false)
-          for (const story of activeStories) {
-            for (const task of story.tasks) {
-              if (!task.resourceTypeId) continue
-              const rtHpd = task.resourceType?.hoursPerDay ?? hpd
-              const days = effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
-              demandByRt.set(task.resourceTypeId, (demandByRt.get(task.resourceTypeId) ?? 0) + days)
-            }
-          }
-
           pfFeatureRows.push({
             projectId,
             featureId: feature.id,
@@ -689,15 +679,20 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             isManual: false as const,
           })
 
-          const totalFeatureDays = Array.from(demandByRt.values()).reduce((sum, d) => sum + d, 0)
+          const storyScheduleDays = new Map<string, number>()
           for (const story of activeStories) {
-            let storyDays = 0
+            let days = 0
             for (const task of story.tasks) {
               if (!task.resourceTypeId) continue
               const rtHpd = task.resourceType?.hoursPerDay ?? hpd
-              storyDays += effectiveDays(task.durationDays, task.hoursEffort, rtHpd)
+              days += scheduleDurationDays(task.durationDays, task.hoursEffort, rtHpd)
             }
-            const proportion = totalFeatureDays > 0 ? storyDays / totalFeatureDays : 0
+            storyScheduleDays.set(story.id, days)
+          }
+          const totalStoryScheduleDays = Array.from(storyScheduleDays.values()).reduce((sum, d) => sum + d, 0)
+          for (const story of activeStories) {
+            const storyDays = storyScheduleDays.get(story.id) ?? 0
+            const proportion = totalStoryScheduleDays > 0 ? storyDays / totalStoryScheduleDays : 0
             const storyDuration = Math.max(1, Math.ceil(span.durationWeeks * proportion))
             pfStoryRows.push({
               projectId,

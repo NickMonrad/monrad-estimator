@@ -149,7 +149,7 @@ beforeEach(() => {
 })
 
 describe('GET /api/projects/:projectId/resource-profile', () => {
-  it('uses task.durationDays when provided', async () => {
+  it('uses task.hoursEffort for effort totals when durationDays is provided', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       id: 'proj-1',
       ownerId: userId,
@@ -218,8 +218,8 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     expect(res.status).toBe(200)
     const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
     expect(devRow).toBeTruthy()
-    expect(devRow.effortDays).toBe(3)
-    expect(devRow.totalDays).toBe(3)
+    expect(devRow.effortDays).toBe(1)
+    expect(devRow.totalDays).toBe(1)
   })
 
   it('falls back to active CAPACITY_PLAN periods when persisted named-resource windows are stale', async () => {
@@ -1316,7 +1316,7 @@ describe('GET /api/projects/:projectId/resource-profile', () => {
     // Only active epic's effort should appear
     const devRow = res.body.resourceRows.find((row: any) => row.resourceTypeId === 'rt-dev')
     expect(devRow).toBeTruthy()
-    expect(devRow.effortDays).toBe(5) // effectiveDays(5, 80, 8) = 5 — positive durationDays used directly
+    expect(devRow.effortDays).toBe(10) // 80h / 8hpd; durationDays is elapsed scheduling data only
     expect(devRow.epics).toHaveLength(1)
     expect(devRow.epics[0].epicId).toBe('epic-active')
   })
@@ -3483,7 +3483,7 @@ describe('GET /resource-profile — restored Class A n=0 display (issue #438)', 
     // Demand window W0..W3 (4 weeks): the aggregate 300% ROLE is 3 FTE, so the
     // display shows 4 × 5 × 3 = 60 days — NOT count-scaled (4 × 5 × 3 × 3 = 180).
     expect(devRow.allocatedDays).toBe(60)
-    expect(devRow.effortDays).toBe(3)
+    expect(devRow.effortDays).toBe(1) // 8h / 8hpd; durationDays does not change effort
     // The projected legacy shape is the availability-window (TIMELINE) mode
     // with the aggregate percent; the restored profile is surfaced faithfully.
     expect(devRow.allocationMode).toBe('TIMELINE')
