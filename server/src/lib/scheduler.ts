@@ -9,7 +9,7 @@
  * Phase 2 extraction: issue #233
  */
 
-import { effectiveDays } from '../utils/round.js'
+import { effortDays, scheduleDurationDays, scheduleDurationDaysAtCount } from '../utils/round.js'
 // ─────────────────────────────────────────────────────────────────────────────
 // Input / Output types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -362,7 +362,7 @@ export function computeParallelWarnings(
         for (const task of story.tasks) {
           const rtId = task.resourceTypeId ?? '_unassigned'
           const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-          const days = effectiveDays(task.durationDays, task.hoursEffort, hpd)
+          const days = effortDays(task.hoursEffort, hpd)
           if (!demandMap.has(rtId)) {
             demandMap.set(rtId, {
               name: task.resourceType?.name ?? 'Unassigned',
@@ -459,7 +459,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       for (const task of tasks) {
         if (!task.resourceTypeId) continue
         const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-        const demand = effectiveDays(task.durationDays, task.hoursEffort, hpd)
+        const demand = effortDays(task.hoursEffort, hpd)
         totalDemandByRt.set(
           task.resourceTypeId,
           (totalDemandByRt.get(task.resourceTypeId) ?? 0) + demand,
@@ -496,15 +496,17 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
 
     let maxDays = 0
     for (const [rtId, rtTasks] of byRt) {
-      const personDays = rtTasks.reduce((sum, t) => {
-        const hpd = t.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-        return sum + effectiveDays(t.durationDays, t.hoursEffort, hpd)
-      }, 0)
       const count = rtId ? (rtCountMap.get(rtId) ?? 1) : 1
-      const days = personDays / count
+      const days = scheduleDurationDaysAtCount(rtTasks, fallbackHoursPerDay, count)
       if (days > maxDays) maxDays = days
     }
     return Math.max(0.2, maxDays / 5)
+  }
+  function storyScheduleHours(story: SchedulerStory): number {
+    return story.tasks.reduce((sum, task) => {
+      const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+      return sum + scheduleDurationDays(task.durationDays, task.hoursEffort, hpd) * hpd
+    }, 0)
   }
 
   function storyPhaseSchedule(feature: typeof allFeatures[0]): Array<{ storyId: string; weeks: number }> {
@@ -699,17 +701,13 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
       if (!manualStoryWeeks.has(story.id)) continue
       if (story.isActive === false) continue
       const sw = manualStoryWeeks.get(story.id)!
-      const totalHours = story.tasks.reduce((sum, t) => {
-        const hpd = t.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-        return sum + effectiveDays(t.durationDays, t.hoursEffort, hpd) * hpd
-      }, 0)
-      const dur = Math.max(0.2, totalHours / fallbackHoursPerDay / 5)
+      const dur = Math.max(0.2, storyScheduleHours(story) / fallbackHoursPerDay / 5)
       const endWeek = sw + dur
 
       for (const task of story.tasks) {
         const rtId = task.resourceTypeId ?? '_unassigned'
         const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-        const hours = effectiveDays(task.durationDays, task.hoursEffort, hpd) * hpd
+        const hours = effortDays(task.hoursEffort, hpd) * hpd
         pinnedIntervals.push({ rtId, hpd, totalHours: hours, dur, startWeek: sw, endWeek })
         // Weekly totals for output accounting
         const startW = Math.floor(sw)
@@ -736,7 +734,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
         for (const task of story.tasks) {
           const rtId = task.resourceTypeId ?? '_unassigned'
           const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-          const hours = effectiveDays(task.durationDays, task.hoursEffort, hpd) * hpd
+          const hours = effortDays(task.hoursEffort, hpd) * hpd
           result.set(rtId, (result.get(rtId) ?? 0) + hours)
         }
       }
@@ -754,7 +752,7 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     // each feature.  Only the current story's resource demand is eligible
     // for capacity allocation; when all demand for the current story is
     // consumed, the next story phase begins.
-    const storyPhases = new Map<string, Array<{ storyId: string; byRt: Map<string, number> }>>()
+    const storyPhases = new Map<string, Array<{ storyId: string; byRt: Map<string, number>; weeks: number }>>()
     const currentStoryIdx = new Map<string, number>()
 
     function advanceToNextStory(fId: string): boolean {
@@ -777,10 +775,10 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
         for (const task of s.tasks) {
           const rtId = task.resourceTypeId ?? '_unassigned'
           const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-          const hours = effectiveDays(task.durationDays, task.hoursEffort, hpd) * hpd
+          const hours = effortDays(task.hoursEffort, hpd) * hpd
           byRt.set(rtId, (byRt.get(rtId) ?? 0) + hours)
         }
-        return { storyId: s.id, byRt }
+        return { storyId: s.id, byRt, weeks: storyBottleneckWeeks(s) }
       })
       storyPhases.set(fId, phases)
       advanceToNextStory(fId)
@@ -879,11 +877,13 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
         let remainingStepCapacity = capPerStep
         for (const fId of sorted) {
           const rem = remainingHours.get(fId)!.get(rtId)!
-          // Greedy within remaining capacity: take what you need, up to
-          // what's left in the step.  Small features will claim their full
-          // remaining work and finish; large features get whatever capacity
-          // remains after smaller competing work has been satisfied.
-          const actualAllocated = Math.min(rem, remainingStepCapacity)
+          const phase = storyPhases.get(fId)?.[currentStoryIdx.get(fId) ?? 0]
+          const pacedStepCapacity = phase && phase.weeks > 0
+            ? ((phase.byRt.get(rtId) ?? 0) / phase.weeks) * STEP
+            : Infinity
+          // Pace effort across an elapsed duration override; capacity can still
+          // reduce the allocation and extend the realised schedule.
+          const actualAllocated = Math.min(rem, remainingStepCapacity, pacedStepCapacity)
           remainingStepCapacity -= actualAllocated
 
           const consumptionKey = `${rtId}|${currentWeek}`
@@ -1011,29 +1011,13 @@ export function runScheduler(input: SchedulerInput): SchedulerOutput {
     )
   )
 
-  function storyResourceHours(story: typeof allStories[0]): Map<string, number> {
-    const result = new Map<string, number>()
-    for (const task of story.tasks) {
-      const rtId = task.resourceTypeId ?? '_unassigned'
-      const hpd = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
-      const hours = effectiveDays(task.durationDays, task.hoursEffort, hpd) * hpd
-      result.set(rtId, (result.get(rtId) ?? 0) + hours)
-    }
-    return result
-  }
-
-  function storyTotalHours(story: typeof allStories[0]): number {
-    return [...storyResourceHours(story).values()].reduce((a, b) => a + b, 0)
-  }
-
   const storyScheduled = new Map<string, { startWeek: number; durationWeeks: number; isManual: boolean }>()
 
   // Pass 1: manual-pinned stories
   for (const story of allStories) {
     if (manualStoryWeeks.has(story.id)) {
       const sw = manualStoryWeeks.get(story.id)!
-      const totalHours = storyTotalHours(story)
-      const dur = Math.max(0.2, totalHours / fallbackHoursPerDay / 5)
+      const dur = Math.max(0.2, storyScheduleHours(story) / fallbackHoursPerDay / 5)
       storyScheduled.set(story.id, { startWeek: sw, durationWeeks: dur, isManual: true })
     }
   }
