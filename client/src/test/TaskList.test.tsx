@@ -114,12 +114,17 @@ describe('TaskList — duplication', () => {
     await waitFor(() => expect(duplicateBacklogItem).toHaveBeenCalledWith('proj-1', 'task', 't-1'))
   })
 
-  it('shows duplication failure feedback', async () => {
-    vi.mocked(duplicateBacklogItem).mockRejectedValueOnce({ response: { data: { error: 'Resource assignment is invalid' } } })
+  it('clears failure feedback after a successful retry', async () => {
+    vi.mocked(duplicateBacklogItem)
+      .mockRejectedValueOnce({ response: { data: { error: 'Resource assignment is invalid' } } })
+      .mockResolvedValueOnce({ type: 'task', id: 't-2', name: 'Copy of Implement login', parentId: 's-1' })
     render(<TaskList storyId="s-1" tasks={tasks} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }))
-
+    const duplicateButton = screen.getByRole('button', { name: 'Duplicate' })
+    fireEvent.click(duplicateButton)
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Resource assignment is invalid'))
+
+    fireEvent.click(duplicateButton)
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
   })
 })

@@ -107,7 +107,10 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId, hou
   })
   const duplicateTask = useMutation({
     mutationFn: (id: string) => duplicateBacklogItem(projectId, 'task', id),
-    onSuccess: invalidateDuplicate,
+    onSuccess: () => {
+      invalidateDuplicate()
+      setDuplicateError(null)
+    },
     onError: (error: unknown) => setDuplicateError(apiErrorMessage(error, 'Failed to duplicate task')),
   })
 
