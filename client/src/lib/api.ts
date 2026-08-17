@@ -32,6 +32,18 @@ api.interceptors.response.use(
   }
 )
 
+export type BacklogItemType = 'epic' | 'feature' | 'story' | 'task'
+
+export interface DuplicatedBacklogItem {
+  type: BacklogItemType
+  id: string
+  name: string
+  parentId: string | null
+}
+
+export const duplicateBacklogItem = (projectId: string, type: BacklogItemType, id: string) =>
+  api.post<DuplicatedBacklogItem>(`/projects/${projectId}/backlog/duplicate`, { type, id }).then(r => r.data)
+
 // Orgs
 export const getOrgs = () => api.get('/orgs').then(r => r.data)
 export const createOrg = (data: { name: string }) => api.post('/orgs', data).then(r => r.data)

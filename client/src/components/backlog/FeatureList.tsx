@@ -3,9 +3,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { api } from '../../lib/api'
+import { api, apiErrorMessage, duplicateBacklogItem } from '../../lib/api'
 import type { Feature, ResourceType } from '../../types/backlog'
 import type { EpicColour } from '../../lib/epicColours'
+import { invalidateProjectAll } from '../../lib/projectInvalidation'
 import StoryList from './StoryList'
 import ApplyTemplateModal from './ApplyTemplateModal'
 import RichTextEditor from '../shared/RichTextEditor'
@@ -23,7 +24,7 @@ interface Props {
   featureDepError?: string | null
 }
 
-function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, onToggleFeatureMode, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay, epicColour, allFeatures, featureDeps, onAddFeatureDep, onRemoveFeatureDep, featureDepError }: {
+function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onDuplicate, duplicatePending, onToggleActive, onToggleFeatureMode, isSaving, onApplyTemplate, resourceTypes, projectId, hoursPerDay, epicColour, allFeatures, featureDeps, onAddFeatureDep, onRemoveFeatureDep, featureDepError }: {
   feature: Feature
   isEditing: boolean
   expanded: boolean
@@ -33,6 +34,8 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
   onSave: (data: { name: string; description: string; assumptions: string }) => void
   onDelete: () => void
   onToggleActive: () => void
+  onDuplicate: () => void
+  duplicatePending: boolean
   onToggleFeatureMode: () => void
   isSaving: boolean
   onApplyTemplate: () => void
@@ -93,6 +96,7 @@ function SortableFeatureItem({ feature, isEditing, expanded, onToggle, onEdit, o
               {feature.isActive === false ? 'Out of scope' : 'In scope'}
             </button>
             <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-1">Edit</button>
+            <button onClick={onDuplicate} disabled={duplicatePending} title="Duplicate feature" className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 disabled:opacity-50 px-1">{duplicatePending ? 'Duplicating…' : 'Duplicate'}</button>
             <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
           </div>
         </div>
@@ -160,6 +164,11 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
   const { setNodeRef } = useDroppable({ id: 'epic-container-' + epicId })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+  const invalidateDuplicate = () => {
+    invalidateProjectAll(qc, projectId)
+    qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+  }
+  const [duplicateError, setDuplicateError] = useState<string | null>(null)
 
   const createFeature = useMutation({
     mutationFn: (data: typeof form) => api.post(`/epics/${epicId}/features`, data),
@@ -188,12 +197,22 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
     mutationFn: (id: string) => api.delete(`/epics/${epicId}/features/${id}`),
     onSuccess: invalidate,
   })
+  const duplicateFeature = useMutation({
+    mutationFn: (id: string) => duplicateBacklogItem(projectId, 'feature', id),
+    onSuccess: (duplicate) => {
+      invalidateDuplicate()
+      setDuplicateError(null)
+      setExpandedIds(s => { const n = new Set(s); n.add(duplicate.id); return n })
+    },
+    onError: (error: unknown) => setDuplicateError(apiErrorMessage(error, 'Failed to duplicate feature')),
+  })
 
   const toggle = (id: string) =>
     setExpandedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
   return (
     <div ref={setNodeRef} className="ml-4 mt-1 space-y-1">
+      {duplicateError && <div role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{duplicateError}</div>}
       {applyTemplateFeatureId && (
         <ApplyTemplateModal
           featureId={applyTemplateFeatureId}
@@ -213,6 +232,8 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
             onCancelEdit={() => setEditingId(null)}
             onSave={(data) => updateFeature.mutate({ id: feature.id, data })}
             onDelete={() => deleteFeature.mutate(feature.id)}
+            onDuplicate={() => duplicateFeature.mutate(feature.id)}
+            duplicatePending={duplicateFeature.isPending}
             onToggleActive={() => toggleFeatureActive.mutate({ id: feature.id, isActive: feature.isActive !== false ? false : true })}
             onToggleFeatureMode={() => toggleFeatureMode.mutate({ id: feature.id, featureMode: feature.featureMode === 'parallel' ? 'sequential' : 'parallel' })}
             isSaving={updateFeature.isPending}
