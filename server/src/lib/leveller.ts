@@ -91,11 +91,8 @@ export function levelEpicStarts(input: SchedulerInput): LevellingResult {
         const count = input.maxParallelismPerFeature
           ? Math.min(rawCount, input.maxParallelismPerFeature)
           : rawCount
-        const personDays = tasks.reduce((sum, task) => {
-          const rtHpd = task.resourceType?.hoursPerDay ?? hpd
-          return sum + scheduleDurationDaysAtCount(task.durationDays, task.hoursEffort, rtHpd, count)
-        }, 0)
-        if (personDays > maxDays) maxDays = personDays
+        const days = scheduleDurationDaysAtCount(tasks, hpd, count)
+        if (days > maxDays) maxDays = days
       }
       featureDurations.set(feature.id, Math.max(0.2, maxDays / 5))
     }

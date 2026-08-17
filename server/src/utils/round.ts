@@ -17,15 +17,33 @@ export const scheduleDurationDays = (
 ): number =>
   durationDays && durationDays > 0 ? durationDays : effortDays(hoursEffort, hoursPerDay)
 
-/** Calculate elapsed task days, preserving overrides while meeting effort capacity. */
+/** Calculate elapsed days for tasks sharing one resource type. */
 export const scheduleDurationDaysAtCount = (
-  durationDays: number | null | undefined,
-  hoursEffort: number,
-  hoursPerDay: number,
+  tasks: ReadonlyArray<{
+    durationDays: number | null | undefined
+    hoursEffort: number
+    resourceType?: { hoursPerDay?: number | null } | null
+  }>,
+  fallbackHoursPerDay: number,
   resourceCount: number,
 ): number => {
-  const effortDurationDays = effortDays(hoursEffort, hoursPerDay) / Math.max(1, resourceCount)
-  return durationDays && durationDays > 0
-    ? Math.max(durationDays, effortDurationDays)
-    : effortDurationDays
+  const count = Math.max(1, resourceCount)
+  let totalEffortDays = 0
+  let totalScheduleDays = 0
+  let explicitDurationFloor = 0
+
+  for (const task of tasks) {
+    const hoursPerDay = task.resourceType?.hoursPerDay ?? fallbackHoursPerDay
+    totalEffortDays += effortDays(task.hoursEffort, hoursPerDay)
+    totalScheduleDays += scheduleDurationDays(task.durationDays, task.hoursEffort, hoursPerDay)
+    if (task.durationDays && task.durationDays > explicitDurationFloor) {
+      explicitDurationFloor = task.durationDays
+    }
+  }
+
+  return Math.max(
+    totalEffortDays / count,
+    totalScheduleDays / count,
+    explicitDurationFloor,
+  )
 }
