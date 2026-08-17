@@ -9,7 +9,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { api } from '../lib/api'
+import { api, apiErrorMessage, duplicateBacklogItem } from '../lib/api'
 import AppLayout from '../components/layout/AppLayout'
 import SnapshotHistoryPanel from '../components/SnapshotHistoryPanel'
 import { useReorderEpics, useReorderFeatures, useReorderStories, useReorderTasks } from '../hooks/useReorder'
@@ -30,6 +30,7 @@ export default function BacklogPage() {
   const [epicForm, setEpicForm] = useState({ name: '', description: '', assumptions: '' })
   const [showHistory, setShowHistory] = useState(false)
   const [showCsvImport, setShowCsvImport] = useState(false)
+  const [duplicateError, setDuplicateError] = useState<string | null>(null)
 
   const [tree, setTree] = useState<Epic[]>([])
   const [activeItem, setActiveItem] = useState<{ name: string } | null>(null)
@@ -100,6 +101,15 @@ export default function BacklogPage() {
   const deleteEpic = useMutation({
     mutationFn: (id: string) => api.delete(`/projects/${projectId}/epics/${id}`),
     onSuccess: invalidate,
+  })
+  const duplicateEpic = useMutation({
+    mutationFn: (id: string) => duplicateBacklogItem(projectId!, 'epic', id),
+    onSuccess: (duplicate) => {
+      invalidate()
+      setDuplicateError(null)
+      setExpandedEpics(s => { const n = new Set(s); n.add(duplicate.id); return n })
+    },
+    onError: (error: unknown) => setDuplicateError(apiErrorMessage(error, 'Failed to duplicate epic')),
   })
 
   const { data: epicDepsData = [] } = useQuery<Array<{ epicId: string; dependsOnId: string }>>({
@@ -278,6 +288,11 @@ export default function BacklogPage() {
             🕐 History
           </button>
         </div>
+        {duplicateError && (
+          <div role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+            {duplicateError}
+          </div>
+        )}
 
         {isLoading ? (
           <div className="text-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
@@ -303,6 +318,8 @@ export default function BacklogPage() {
                     onCancelEdit={() => setEditingEpicId(null)}
                     editSaving={updateEpic.isPending}
                     onDelete={() => deleteEpic.mutate(epic.id)}
+                    onDuplicate={() => duplicateEpic.mutate(epic.id)}
+                    duplicatePending={duplicateEpic.isPending}
                     onToggleActive={() => toggleEpicActive.mutate({ id: epic.id, isActive: epic.isActive !== false ? false : true })}
                     onToggleFeatureMode={() => updateEpic.mutate({ id: epic.id, data: { featureMode: epic.featureMode === 'parallel' ? 'sequential' : 'parallel' } })}
                     epicTotalHours={epicTotalHours(epic)}
@@ -367,7 +384,7 @@ export default function BacklogPage() {
   )
 }
 
-function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, onToggleActive, onToggleFeatureMode, epicTotalHours, resourceTypes, projectId, hoursPerDay, epicColour, allEpics, epicDeps, onAddEpicDep, onRemoveEpicDep, epicDepError, allFeatures, featureDeps, onAddFeatureDep, onRemoveFeatureDep, featureDepError }: {
+function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEdit, onCancelEdit, editSaving, onDelete, onDuplicate, duplicatePending, onToggleActive, onToggleFeatureMode, epicTotalHours, resourceTypes, projectId, hoursPerDay, epicColour, allEpics, epicDeps, onAddEpicDep, onRemoveEpicDep, epicDepError, allFeatures, featureDeps, onAddFeatureDep, onRemoveFeatureDep, featureDepError }: {
   epic: Epic
   expanded: boolean
   onToggle: () => void
@@ -377,6 +394,8 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
   onCancelEdit: () => void
   editSaving: boolean
   onDelete: () => void
+  onDuplicate: () => void
+  duplicatePending: boolean
   onToggleActive: () => void
   onToggleFeatureMode: () => void
   epicTotalHours: number
@@ -440,6 +459,7 @@ function SortableEpicRow({ epic, expanded, onToggle, isEditing, onEdit, onSaveEd
                 {epic.isActive === false ? 'Out of scope' : 'In scope'}
               </button>
               <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-2 py-1">Edit</button>
+              <button onClick={onDuplicate} disabled={duplicatePending} title="Duplicate epic" className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 disabled:opacity-50 px-2 py-1">{duplicatePending ? 'Duplicating…' : 'Duplicate'}</button>
               <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-2 py-1">Delete</button>
             </div>
           </div>
