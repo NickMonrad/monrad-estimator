@@ -111,7 +111,7 @@ export default function DocumentsPage() {
     enabled: !!projectId,
   })
 
-  const { data: generatedDocs = [], isLoading: docsLoading, isFetching: docsFetching, isSuccess: docsLoaded } = useQuery<GeneratedDoc[]>({
+  const { data: generatedDocs = [], isLoading: docsLoading, isSuccess: docsLoaded } = useQuery<GeneratedDoc[]>({
     queryKey: ['generated-docs', projectId],
     queryFn: () => api.get(`/projects/${projectId}/documents`).then(r => r.data),
     enabled: !!projectId,
@@ -126,11 +126,11 @@ export default function DocumentsPage() {
       setSections({ ...DEFAULT_SECTIONS })
     }
 
-    if (!docsLoaded || docsLoading || docsFetching || hydratedSectionsProjectIdRef.current === projectId) return
+    if (!docsLoaded || docsLoading || hydratedSectionsProjectIdRef.current === projectId) return
 
     hydratedSectionsProjectIdRef.current = projectId
     setSections(restoreDocumentSections(generatedDocs[0]?.sections))
-  }, [projectId, generatedDocs, docsLoaded, docsLoading, docsFetching])
+  }, [projectId, generatedDocs, docsLoaded, docsLoading])
 
   // ── Derived "all data loaded" flag ────────────────────────────
   const allLoaded = !!(project && effortData && timelineData && resourceProfileData)
