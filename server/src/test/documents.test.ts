@@ -93,6 +93,100 @@ describe('POST /api/projects/:projectId/documents/generate', () => {
     expect(rendered.epics[0].isActive).toBe(isActive)
     expect(rendered.epics[0].features[0].name).toBe('Renamed Feature')
   })
+  it('canonicalizes stale hierarchy names in derived document data without changing values', async () => {
+    const currentEpics = [{
+      id: 'epic-1',
+      name: 'Renamed Epic',
+      isActive: true,
+      features: [{ id: 'feature-1', name: 'Renamed Feature', isActive: true, userStories: [] }],
+    }]
+    const timelineEntry = {
+      featureId: 'feature-1',
+      featureName: 'Old Feature',
+      epicId: 'epic-1',
+      epicName: 'Old Epic',
+      epicOrder: 0,
+      featureOrder: 0,
+      startWeek: 2,
+      durationWeeks: 3,
+      startDate: '2025-01-15T00:00:00.000Z',
+      endDate: '2025-02-05T00:00:00.000Z',
+      timelineColour: '#3b82f6',
+    }
+    const resourceFeature = {
+      featureId: 'feature-1',
+      featureName: 'Old Feature',
+      hours: 8,
+      days: 1,
+      stories: [{ storyId: 'story-1', storyName: 'Story', hours: 8, days: 1 }],
+    }
+    const resourceEpic = {
+      epicId: 'epic-1',
+      epicName: 'Old Epic',
+      hours: 8,
+      days: 1,
+      features: [resourceFeature],
+    }
+    const resourceRow = {
+      resourceTypeId: 'rt-1',
+      name: 'Developer',
+      category: 'Engineering',
+      totalHours: 8,
+      totalDays: 1,
+      epics: [resourceEpic],
+      namedResources: [],
+    }
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as unknown as Awaited<ReturnType<typeof prisma.project.findFirst>>)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue(currentEpics as unknown as Awaited<ReturnType<typeof prisma.epic.findMany>>)
+    vi.mocked(prisma.generatedDocument.create).mockResolvedValue(mockDoc as unknown as Awaited<ReturnType<typeof prisma.generatedDocument.create>>)
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined)
+    vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined)
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/documents/generate')
+      .set('Authorization', authHeader)
+      .send({
+        ...generateBody,
+        documentData: {
+          ...generateBody.documentData,
+          epics: [{ id: 'epic-1', name: 'Old Epic', isActive: true, features: [{ id: 'feature-1', name: 'Old Feature', isActive: true, userStories: [] }] }],
+          timelineData: {
+            startDate: '2025-01-01',
+            projectedEndDate: '2025-02-05',
+            entries: [timelineEntry],
+            bufferWeeks: 1,
+            onboardingWeeks: 2,
+          },
+          resourceProfileData: {
+            resourceRows: [resourceRow],
+            overheadRows: [],
+            summary: { totalHours: 8, totalDays: 1, hasCost: false },
+          },
+        },
+      })
+
+    expect(res.status).toBe(201)
+    const rendered = vi.mocked(renderScopeDocumentHtml).mock.calls[0][0]
+    expect(rendered.epics[0].name).toBe('Renamed Epic')
+    expect(rendered.epics[0].features[0].name).toBe('Renamed Feature')
+    expect(rendered.timelineData.entries).toEqual([{
+      ...timelineEntry,
+      epicName: 'Renamed Epic',
+      featureName: 'Renamed Feature',
+    }])
+    expect(rendered.resourceProfileData.resourceRows).toEqual([{
+      ...resourceRow,
+      epics: [{
+        ...resourceEpic,
+        epicName: 'Renamed Epic',
+        features: [{ ...resourceFeature, featureName: 'Renamed Feature' }],
+      }],
+    }])
+    expect(JSON.stringify(rendered.timelineData)).not.toContain('Old Feature')
+    expect(JSON.stringify(rendered.resourceProfileData)).not.toContain('Old Feature')
+  })
 
   it('creates a new document without mutating historical generated documents', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as unknown as Awaited<ReturnType<typeof prisma.project.findFirst>>)
