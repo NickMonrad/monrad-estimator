@@ -57,6 +57,9 @@ const defaultSections: Record<SectionKey, boolean> = {
 }
 
 let documentsByProject: Record<string, StoredDocument[]> = {}
+let pendingDocumentProject: string | null = null
+let pendingDocumentResponse: Promise<{ data: StoredDocument[] }> | null = null
+let pendingDocumentRequestCount = 0
 
 function documentRecord(id: string, sections: Record<string, boolean> | null): StoredDocument {
   return {
@@ -122,11 +125,19 @@ async function expectSections(expected: Record<SectionKey, boolean>) {
 
 beforeEach(() => {
   documentsByProject = {}
+  pendingDocumentProject = null
+  pendingDocumentResponse = null
+  pendingDocumentRequestCount = 0
   vi.clearAllMocks()
-  mockPost.mockResolvedValue({ data: {} })
   mockGet.mockImplementation((url: string) => {
     const projectId = projectIdFromUrl(url)
-    if (url.endsWith('/documents')) return Promise.resolve({ data: documentsByProject[projectId] ?? [] })
+    if (url.endsWith('/documents')) {
+      if (projectId === pendingDocumentProject && pendingDocumentResponse) {
+        pendingDocumentRequestCount += 1
+        return pendingDocumentResponse
+      }
+      return Promise.resolve({ data: documentsByProject[projectId] ?? [] })
+    }
     if (url.includes('/effort')) return Promise.resolve({ data: {} })
     if (url.includes('/timeline')) return Promise.resolve({ data: { projectedEndDate: null } })
     if (url.includes('/resource-profile')) return Promise.resolve({ data: {} })
@@ -215,5 +226,26 @@ describe('DocumentsPage section settings restoration', () => {
     await waitFor(() => expect(documentRequestCount()).toBeGreaterThan(previousDocumentRequestCount))
 
     expect(screen.getByRole('checkbox', { name: sectionLabels.scope })).toBeChecked()
+  })
+
+  it('does not overwrite edits made while cached documents refetch', async () => {
+    const cachedSections = { ...defaultSections }
+    documentsByProject['project-b'] = [documentRecord('refetched', cachedSections)]
+    const documentRefetch = Promise.withResolvers<{ data: StoredDocument[] }>()
+    pendingDocumentProject = 'project-b'
+    pendingDocumentResponse = documentRefetch.promise
+
+    const { queryClient } = renderPage('project-a', 'project-b')
+    await expectSections(defaultSections)
+    queryClient.setQueryData(['generated-docs', 'project-b'], [documentRecord('cached', cachedSections)])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch project' }))
+    await waitFor(() => expect(pendingDocumentRequestCount).toBe(1))
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: sectionLabels.scope })).toBeChecked())
+
+    fireEvent.click(screen.getByRole('checkbox', { name: sectionLabels.scope }))
+    documentRefetch.resolve({ data: documentsByProject['project-b'] })
+
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: sectionLabels.scope })).not.toBeChecked())
   })
 })
