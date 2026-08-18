@@ -76,9 +76,9 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `backlog.spec.ts` — Backlog (13 tests)
+### `backlog.spec.ts` — Backlog (14 tests)
 
-#### `Backlog` describe block (8 tests)
+#### `Backlog` describe block (9 tests)
 
 | Test | Description |
 |------|-------------|
@@ -90,6 +90,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 | CSV import shows parse errors on bad file | Uploading malformed CSV shows error/validation message |
 | History button toggles history panel | "🕐 History" button reveals the Snapshot History panel |
 | drag handle is visible on epics for reordering | Hovering an epic row reveals the ⠿ drag handle for DnD reorder |
+| duplicates every backlog level, preserves metadata, and edits independently | Imports a hierarchy, duplicates Task/Story/Feature/Epic roots, edits the Task copy, reloads, and verifies failure feedback |
 
 #### `CSV redesign — Type column and status fields` describe block (3 tests)
 

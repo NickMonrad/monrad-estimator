@@ -50,7 +50,7 @@ export interface Task {
   description?: string
   assumptions?: string
   hoursEffort: number
-  durationDays?: number
+  durationDays?: number | null
   order: number
   userStoryId: string
   resourceTypeId: string | null
