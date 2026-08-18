@@ -6,7 +6,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { api, apiErrorMessage, duplicateBacklogItem } from '../../lib/api'
 import type { Feature, ResourceType } from '../../types/backlog'
 import type { EpicColour } from '../../lib/epicColours'
-import { invalidateProjectAll } from '../../lib/projectInvalidation'
+import { invalidateProjectAll, invalidateProjectDocumentData } from '../../lib/projectInvalidation'
 import StoryList from './StoryList'
 import ApplyTemplateModal from './ApplyTemplateModal'
 import RichTextEditor from '../shared/RichTextEditor'
@@ -163,10 +163,13 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
 
   const { setNodeRef } = useDroppable({ id: 'epic-container-' + epicId })
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+    invalidateProjectDocumentData(qc, projectId)
+  }
   const invalidateDuplicate = () => {
     invalidateProjectAll(qc, projectId)
-    qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+    invalidate()
   }
   const [duplicateError, setDuplicateError] = useState<string | null>(null)
 

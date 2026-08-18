@@ -128,3 +128,32 @@ describe('renderScopeDocumentHtml — Gantt chart pagination', () => {
     expect(html).not.toContain(PAGE_DIV)
   })
 })
+
+describe('renderScopeDocumentHtml — scope hierarchy freshness', () => {
+  it('keeps both scope branches and renders their current feature names', () => {
+    const props = buildProps([])
+    const html = renderScopeDocumentHtml({
+      ...props,
+      sections: { ...props.sections, scope: true, ganttChart: false },
+      epics: [
+        {
+          id: 'in-scope-epic',
+          name: 'In Scope Epic',
+          isActive: true,
+          features: [{ id: 'in-scope-feature', name: 'Renamed In-Scope Feature', isActive: true, userStories: [] }],
+        },
+        {
+          id: 'out-of-scope-epic',
+          name: 'Out of Scope Epic',
+          isActive: false,
+          features: [{ id: 'out-of-scope-feature', name: 'Renamed Out-of-Scope Feature', isActive: true, userStories: [] }],
+        },
+      ],
+    })
+
+    expect(html).toContain('Renamed In-Scope Feature')
+    expect(html).toContain('Renamed Out-of-Scope Feature')
+    expect(html).not.toContain('Old In-Scope Feature')
+    expect(html).not.toContain('Old Out-of-Scope Feature')
+  })
+})

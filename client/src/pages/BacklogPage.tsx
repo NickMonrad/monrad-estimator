@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import DOMPurify from 'dompurify'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { invalidateProjectAll } from '../lib/projectInvalidation'
+import { invalidateProjectAll, invalidateProjectDocumentData } from '../lib/projectInvalidation'
 import {
   DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors,
   type DragStartEvent, type DragOverEvent, type DragEndEvent,
@@ -70,15 +70,17 @@ export default function BacklogPage() {
   // Full invalidation: for mutations that affect effort/hours/active-status
   const invalidate = () => {
     invalidateProjectAll(qc, projectId)
+    invalidateProjectDocumentData(qc, projectId)
     qc.invalidateQueries({ queryKey: ['backlog', projectId] })
     qc.invalidateQueries({ queryKey: ['epicDeps', projectId] })
     qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
   }
 
-  // Backlog-only invalidation: for metadata-only mutations (name, description, assumptions)
-  // that cannot affect timeline scheduling or resource demand
+  // Metadata-only mutations do not affect planning, but document payloads
+  // include hierarchy names and assumptions from these queries.
   const invalidateBacklog = () => {
     qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+    invalidateProjectDocumentData(qc, projectId)
   }
 
   const createEpic = useMutation({

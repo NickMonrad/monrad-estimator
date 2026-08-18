@@ -18,6 +18,22 @@ export function invalidateProjectPlanning(
   queryClient.invalidateQueries({ queryKey: ['timeline', projectId] })
   queryClient.invalidateQueries({ queryKey: ['resource-profile', projectId] })
 }
+/**
+ * Invalidate every query used to assemble a newly generated document.
+ *
+ * These payload inputs include feature names, so metadata changes must not
+ * leave a document page with a still-fresh cached representation.
+ */
+export function invalidateProjectDocumentData(
+  queryClient: QueryInvalidator,
+  projectId: string | undefined,
+) {
+  if (!projectId) return
+  queryClient.invalidateQueries({ queryKey: ['effort', projectId] })
+  queryClient.invalidateQueries({ queryKey: ['timeline', projectId] })
+  queryClient.invalidateQueries({ queryKey: ['resource-profile', projectId] })
+  queryClient.invalidateQueries({ queryKey: ['epics', projectId] })
+}
 
 /**
  * Invalidate query keys consumed by the Resource Profile domain.

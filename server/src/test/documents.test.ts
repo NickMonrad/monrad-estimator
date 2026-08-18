@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken'
 import fs from 'fs'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
+import { renderScopeDocumentHtml } from '../lib/scopeDocumentRenderer.js'
 
 process.env.JWT_SECRET = 'test-secret'
 
@@ -32,7 +33,10 @@ const mockDoc = {
   createdAt: new Date().toISOString(),
 }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(prisma.epic.findMany).mockResolvedValue([])
+})
 
 describe('POST /api/projects/:projectId/documents/generate', () => {
   it('returns 201 with the created document record on success', async () => {
@@ -52,6 +56,60 @@ describe('POST /api/projects/:projectId/documents/generate', () => {
     expect(res.status).toBe(201)
     expect(res.body.id).toBe('doc-1')
     expect(res.body.label).toBe('Scope Document v1')
+  })
+
+  it.each([true, false])('renders persisted feature names when the parent epic is %s', async (isActive) => {
+    const currentEpics = [{
+      id: 'epic-1',
+      name: 'Epic 1',
+      isActive,
+      features: [{
+        id: 'feature-1',
+        name: 'Renamed Feature',
+        isActive: true,
+        userStories: [],
+      }],
+    }]
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as unknown as Awaited<ReturnType<typeof prisma.project.findFirst>>)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue(currentEpics as unknown as Awaited<ReturnType<typeof prisma.epic.findMany>>)
+    vi.mocked(prisma.generatedDocument.create).mockResolvedValue(mockDoc as unknown as Awaited<ReturnType<typeof prisma.generatedDocument.create>>)
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined)
+    vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined)
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/documents/generate')
+      .set('Authorization', authHeader)
+      .send({
+        ...generateBody,
+        documentData: {
+          ...generateBody.documentData,
+          epics: [{ id: 'epic-1', name: 'Epic 1', isActive, features: [{ id: 'feature-1', name: 'Old Feature', isActive: true, userStories: [] }] }],
+        },
+      })
+
+    expect(res.status).toBe(201)
+    const rendered = vi.mocked(renderScopeDocumentHtml).mock.calls[0][0]
+    expect(rendered.epics[0].isActive).toBe(isActive)
+    expect(rendered.epics[0].features[0].name).toBe('Renamed Feature')
+  })
+
+  it('creates a new document without mutating historical generated documents', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as unknown as Awaited<ReturnType<typeof prisma.project.findFirst>>)
+    vi.mocked(prisma.generatedDocument.create).mockResolvedValue(mockDoc as unknown as Awaited<ReturnType<typeof prisma.generatedDocument.create>>)
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined)
+    vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined)
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/documents/generate')
+      .set('Authorization', authHeader)
+      .send(generateBody)
+
+    expect(res.status).toBe(201)
+    expect(prisma.generatedDocument.create).toHaveBeenCalledOnce()
+    expect(prisma.generatedDocument.update).not.toHaveBeenCalled()
+    expect(prisma.generatedDocument.delete).not.toHaveBeenCalled()
   })
 
   it('returns 404 when the project does not exist or is not owned', async () => {

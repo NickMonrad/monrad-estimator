@@ -52,8 +52,21 @@ router.post('/generate', asyncHandler(async (req: AuthRequest, res: Response) =>
     res.status(400).json({ error: 'Invalid format' }); return
   }
 
+  // Resolve hierarchy names from persistence at generation time rather than
+  // trusting a potentially stale Documents-page query cache.
+  const currentEpics = await prisma.epic.findMany({
+    where: { projectId },
+    orderBy: { order: 'asc' },
+    include: {
+      features: {
+        orderBy: { order: 'asc' },
+        include: { userStories: { orderBy: { order: 'asc' } } },
+      },
+    },
+  })
+
   // Render HTML and generate PDF
-  const html = renderScopeDocumentHtml({ ...documentData, tz })
+  const html = renderScopeDocumentHtml({ ...documentData, epics: currentEpics, tz })
   const buffer = await generatePdfFromHtml(html)
 
   // Ensure output directory exists
