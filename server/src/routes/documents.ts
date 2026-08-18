@@ -33,6 +33,57 @@ function formatExportTimestamp(tz?: string): string {
   }
 }
 
+type CurrentEpic = {
+  id: string
+  name: string
+  features: Array<{ id: string; name: string }>
+}
+
+type DocumentEntry = Record<string, unknown> & {
+  epicId?: string
+  epicName?: string
+  featureId?: string
+  featureName?: string
+  features?: DocumentEntry[]
+}
+
+type DocumentData = Record<string, unknown> & {
+  timelineData?: Record<string, unknown> & { entries?: DocumentEntry[] }
+  resourceProfileData?: Record<string, unknown> & {
+    resourceRows?: Array<Record<string, unknown> & { epics?: DocumentEntry[] }>
+  }
+}
+
+function canonicalizeDocumentHierarchyNames(documentData: DocumentData, currentEpics: CurrentEpic[]): DocumentData {
+  const epicNames = new Map(currentEpics.map(epic => [epic.id, epic.name]))
+  const featureNames = new Map(currentEpics.flatMap(epic => epic.features.map(feature => [feature.id, feature.name] as const)))
+
+  const withCurrentNames = (entry: DocumentEntry): DocumentEntry => {
+    const canonicalEntry = { ...entry }
+    if (entry.epicId && epicNames.has(entry.epicId)) canonicalEntry.epicName = epicNames.get(entry.epicId)
+    if (entry.featureId && featureNames.has(entry.featureId)) canonicalEntry.featureName = featureNames.get(entry.featureId)
+    return canonicalEntry
+  }
+
+  const timelineData = documentData.timelineData?.entries
+    ? { ...documentData.timelineData, entries: documentData.timelineData.entries.map(withCurrentNames) }
+    : documentData.timelineData
+  const resourceProfileData = documentData.resourceProfileData?.resourceRows
+    ? {
+        ...documentData.resourceProfileData,
+        resourceRows: documentData.resourceProfileData.resourceRows.map(row => ({
+          ...row,
+          epics: row.epics?.map(epic => ({
+            ...withCurrentNames(epic),
+            features: epic.features?.map(withCurrentNames),
+          })),
+        })),
+      }
+    : documentData.resourceProfileData
+
+  return { ...documentData, timelineData, resourceProfileData }
+}
+
 // POST /api/projects/:projectId/documents/generate
 // Body: { type: string, format: string, label: string, tz?: string, documentData: ScopeDocumentProps }
 // Server renders HTML via React renderToStaticMarkup, then generates PDF via Puppeteer.
@@ -52,8 +103,22 @@ router.post('/generate', asyncHandler(async (req: AuthRequest, res: Response) =>
     res.status(400).json({ error: 'Invalid format' }); return
   }
 
+  // Resolve hierarchy names from persistence at generation time rather than
+  // trusting a potentially stale Documents-page query cache.
+  const currentEpics = await prisma.epic.findMany({
+    where: { projectId },
+    orderBy: { order: 'asc' },
+    include: {
+      features: {
+        orderBy: { order: 'asc' },
+        include: { userStories: { orderBy: { order: 'asc' } } },
+      },
+    },
+  })
+
   // Render HTML and generate PDF
-  const html = renderScopeDocumentHtml({ ...documentData, tz })
+  const canonicalDocumentData = canonicalizeDocumentHierarchyNames(documentData, currentEpics)
+  const html = renderScopeDocumentHtml({ ...canonicalDocumentData, epics: currentEpics, tz } as unknown as Parameters<typeof renderScopeDocumentHtml>[0])
   const buffer = await generatePdfFromHtml(html)
 
   // Ensure output directory exists
