@@ -1,16 +1,18 @@
 import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import TaskList from '@/components/backlog/TaskList'
+import { duplicateBacklogItem } from '../lib/api'
 import type { Task, ResourceType } from '@/types/backlog'
-
-vi.mock('../../lib/api', () => ({
+vi.mock('../lib/api', () => ({
   api: {
     post: vi.fn().mockResolvedValue({ data: {} }),
     put: vi.fn().mockResolvedValue({ data: {} }),
     delete: vi.fn().mockResolvedValue({ data: {} }),
   },
+  duplicateBacklogItem: vi.fn().mockResolvedValue({ type: 'task', id: 't-2', name: 'Copy of Implement login', parentId: 's-1' }),
+  apiErrorMessage: vi.fn((error: { response?: { data?: { error?: string } } }, fallback: string) => error.response?.data?.error ?? fallback),
 }))
 
 const resourceTypes: ResourceType[] = [
@@ -100,5 +102,29 @@ describe('TaskList — durationDays validation', () => {
     fireEvent.change(overrideInput, { target: { value: '3' } })
     fireEvent.click(screen.getByText('Save'))
     expect(screen.queryByText('Duration must be at least 1 day')).not.toBeInTheDocument()
+  })
+})
+
+describe('TaskList — duplication', () => {
+  it('shows Duplicate and calls the project-scoped task duplication endpoint', async () => {
+    render(<TaskList storyId="s-1" tasks={[{ ...tasks[0], durationDays: 2 }]} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }))
+
+    await waitFor(() => expect(duplicateBacklogItem).toHaveBeenCalledWith('proj-1', 'task', 't-1'))
+  })
+
+  it('clears failure feedback after a successful retry', async () => {
+    vi.mocked(duplicateBacklogItem)
+      .mockRejectedValueOnce({ response: { data: { error: 'Resource assignment is invalid' } } })
+      .mockResolvedValueOnce({ type: 'task', id: 't-2', name: 'Copy of Implement login', parentId: 's-1' })
+    render(<TaskList storyId="s-1" tasks={tasks} resourceTypes={resourceTypes} projectId="proj-1" hoursPerDay={7.6} />, { wrapper })
+
+    const duplicateButton = screen.getByRole('button', { name: 'Duplicate' })
+    fireEvent.click(duplicateButton)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Resource assignment is invalid'))
+
+    fireEvent.click(duplicateButton)
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
   })
 })

@@ -326,6 +326,74 @@ test.describe('Backlog', () => {
     expect(updatedDuration).toBeGreaterThan(originalDuration)
   })
 
+  test('duplicates every backlog level, preserves metadata, and edits independently', async ({ page }) => {
+    await page.getByRole('button', { name: /backlog/i }).click()
+    const epicName = `E2E Dup Epic ${Date.now()}`
+    const featureName = `E2E Dup Feature ${Date.now()}`
+    const storyName = `E2E Dup Story ${Date.now()}`
+    const taskName = `E2E Dup Task ${Date.now()}`
+    const headers = 'Epic,Feature,Story,Task,ResourceType,HoursEffort,DurationDays,Description,Assumptions'
+    const csv = [headers, `${epicName},${featureName},${storyName},${taskName},Developer,12.5,2,Task description,Task assumptions`].join('\n')
+    const tmpFile = path.join(os.tmpdir(), `backlog-duplication-${Date.now()}.csv`)
+    fs.writeFileSync(tmpFile, csv)
+
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(tmpFile)
+    fs.unlinkSync(tmpFile)
+    await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
+    await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
+    await expect(page.getByText(epicName, { exact: true })).toBeVisible({ timeout: 10_000 })
+
+    await page.getByText(epicName, { exact: true }).click()
+    await expect(page.getByText(featureName, { exact: true })).toBeVisible()
+    await page.getByText(featureName, { exact: true }).click()
+    await expect(page.getByText(storyName, { exact: true })).toBeVisible()
+    await page.getByText(storyName, { exact: true }).click()
+    await expect(page.getByText(taskName, { exact: true })).toBeVisible()
+
+    const sourceTaskRow = page.getByText(taskName, { exact: true }).locator('..').locator('..').locator('..')
+    await sourceTaskRow.hover()
+    await sourceTaskRow.getByTitle('Duplicate task').click()
+    await expect(page.getByText(`Copy of ${taskName}`, { exact: true })).toBeVisible({ timeout: 10_000 })
+    const duplicateTaskRow = page.getByText(`Copy of ${taskName}`, { exact: true }).locator('..').locator('..').locator('..')
+    await duplicateTaskRow.hover()
+    await duplicateTaskRow.getByRole('button', { name: 'Edit' }).click()
+    await page.getByPlaceholder('Task name *').fill('Edited duplicate task')
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(page.getByText('Edited duplicate task', { exact: true })).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText(taskName, { exact: true })).toBeVisible()
+
+    const sourceStoryRow = page.getByText(storyName, { exact: true }).locator('..').locator('..')
+    await sourceStoryRow.hover()
+    await sourceStoryRow.getByTitle('Duplicate story').click()
+    const sourceFeatureRow = page.getByText(featureName, { exact: true }).locator('..').locator('..')
+    await sourceFeatureRow.hover()
+    await sourceFeatureRow.getByTitle('Duplicate feature').click()
+    const sourceEpicRow = page.getByText(epicName, { exact: true }).locator('..').locator('..').locator('..')
+    await sourceEpicRow.hover()
+    await sourceEpicRow.getByTitle('Duplicate epic').click()
+    await expect(page.getByText(`Copy of ${epicName}`, { exact: true })).toBeVisible({ timeout: 10_000 })
+
+    await page.reload()
+    await expect(page.getByText(`Copy of ${epicName}`, { exact: true })).toBeVisible({ timeout: 10_000 })
+    await page.getByText(`Copy of ${epicName}`, { exact: true }).click()
+    await page.getByText(featureName, { exact: true }).last().click()
+    await page.getByText(storyName, { exact: true }).last().click()
+    await expect(page.getByText('Edited duplicate task', { exact: true })).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText(taskName, { exact: true })).toBeVisible()
+
+    await page.route('**/api/projects/*/backlog/duplicate', route => route.fulfill({
+      status: 422,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Duplication unavailable' }),
+    }))
+    const duplicateEpicButton = page.getByTitle('Duplicate epic').first()
+    await duplicateEpicButton.hover()
+    await duplicateEpicButton.click()
+    await expect(page.getByRole('alert')).toContainText('Duplication unavailable')
+    await page.unroute('**/api/projects/*/backlog/duplicate')
+  })
+
   test('History button toggles history panel', async ({ page }) => {
     await page.getByRole('button', { name: /backlog/i }).click()
     await page.getByRole('button', { name: /history/i }).click()

@@ -3,9 +3,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { api } from '../../lib/api'
+import { api, apiErrorMessage, duplicateBacklogItem } from '../../lib/api'
 import { stripHtml } from '../../lib/stripHtml'
 import type { Task, ResourceType } from '../../types/backlog'
+import { invalidateProjectAll } from '../../lib/projectInvalidation'
 import RichTextEditor from '../shared/RichTextEditor'
 
 interface Props {
@@ -16,12 +17,14 @@ interface Props {
   hoursPerDay: number
 }
 
-function SortableTaskItem({ task, isEditing, onEdit, onCancelEdit, onSave, onDelete, isSaving, resourceTypes, hoursPerDay }: {
+function SortableTaskItem({ task, isEditing, onEdit, onCancelEdit, onSave, onDelete, onDuplicate, duplicatePending, isSaving, resourceTypes, hoursPerDay }: {
   task: Task
   isEditing: boolean
   onEdit: () => void
   onCancelEdit: () => void
   onSave: (data: { name: string; description: string; assumptions: string; hoursEffort: string; resourceTypeId: string; durationDays: string }) => void
+  onDuplicate: () => void
+  duplicatePending: boolean
   onDelete: () => void
   isSaving: boolean
   resourceTypes: ResourceType[]
@@ -64,6 +67,7 @@ function SortableTaskItem({ task, isEditing, onEdit, onCancelEdit, onSave, onDel
       </div>
       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
         <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-1">Edit</button>
+        <button onClick={onDuplicate} disabled={duplicatePending} title="Duplicate task" className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 disabled:opacity-50 px-1">{duplicatePending ? 'Duplicating…' : 'Duplicate'}</button>
         <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
       </div>
     </div>
@@ -79,6 +83,11 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId, hou
   const { setNodeRef } = useDroppable({ id: 'story-container-' + storyId })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+  const invalidateDuplicate = () => {
+    invalidateProjectAll(qc, projectId)
+    qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+  }
+  const [duplicateError, setDuplicateError] = useState<string | null>(null)
 
   const createTask = useMutation({
     mutationFn: (data: typeof form) =>
@@ -96,9 +105,18 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId, hou
     mutationFn: (id: string) => api.delete(`/stories/${storyId}/tasks/${id}`),
     onSuccess: invalidate,
   })
+  const duplicateTask = useMutation({
+    mutationFn: (id: string) => duplicateBacklogItem(projectId, 'task', id),
+    onSuccess: () => {
+      invalidateDuplicate()
+      setDuplicateError(null)
+    },
+    onError: (error: unknown) => setDuplicateError(apiErrorMessage(error, 'Failed to duplicate task')),
+  })
 
   return (
     <div ref={setNodeRef} className="ml-6 mt-1 space-y-1">
+      {duplicateError && <div role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{duplicateError}</div>}
       <SortableContext items={tasks.map(t => 'task-' + t.id)} strategy={verticalListSortingStrategy}>
         {tasks.map(task => (
           <SortableTaskItem
@@ -108,6 +126,8 @@ export default function TaskList({ storyId, tasks, resourceTypes, projectId, hou
             onEdit={() => setEditingId(task.id)}
             onCancelEdit={() => setEditingId(null)}
             onSave={(data) => updateTask.mutate({ id: task.id, data })}
+            onDuplicate={() => duplicateTask.mutate(task.id)}
+            duplicatePending={duplicateTask.isPending}
             onDelete={() => deleteTask.mutate(task.id)}
             isSaving={updateTask.isPending}
             resourceTypes={resourceTypes}

@@ -8,6 +8,7 @@ import { logger } from './lib/logger.js'
 import { authenticate } from './middleware/auth.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import authRoutes from './routes/auth.js'
+import backlogRoutes from './routes/backlog.js'
 import projectRoutes from './routes/projects.js'
 import epicRoutes from './routes/epics.js'
 import featureRoutes from './routes/features.js'
@@ -60,6 +61,7 @@ app.use('/api/global-resource-types', globalResourceTypeRoutes)
 app.use('/api/projects/:projectId/effort', effortRoutes)
 app.use('/api/projects/:projectId/timeline', timelineRoutes)
 app.use('/api/projects/:projectId/snapshots', snapshotRoutes)
+app.use('/api/projects/:projectId/backlog', backlogRoutes)
 app.use('/api/projects/:projectId/backlog', csvRoutes)
 app.use('/api/projects/:projectId/reorder', reorderRoutes)
 app.use('/api/projects/:projectId/discounts', discountRoutes)

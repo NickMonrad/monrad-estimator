@@ -3,9 +3,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { api } from '../../lib/api'
+import { api, apiErrorMessage, duplicateBacklogItem } from '../../lib/api'
 import type { UserStory, ResourceType } from '../../types/backlog'
 import type { EpicColour } from '../../lib/epicColours'
+import { invalidateProjectAll } from '../../lib/projectInvalidation'
 import TaskList from './TaskList'
 import RichTextEditor from '../shared/RichTextEditor'
 
@@ -18,7 +19,7 @@ interface Props {
   epicColour?: EpicColour
 }
 
-function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onToggleActive, isSaving, onRefresh, isRefreshing, onRefreshSelect, onCancelRefresh, refreshPending, resourceTypes, projectId, hoursPerDay, epicColour }: {
+function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCancelEdit, onSave, onDelete, onDuplicate, duplicatePending, onToggleActive, isSaving, onRefresh, isRefreshing, onRefreshSelect, onCancelRefresh, refreshPending, resourceTypes, projectId, hoursPerDay, epicColour }: {
   story: UserStory
   isEditing: boolean
   expanded: boolean
@@ -28,6 +29,8 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
   onSave: (data: { name: string; description: string; assumptions: string }) => void
   onDelete: () => void
   onToggleActive: () => void
+  onDuplicate: () => void
+  duplicatePending: boolean
   isSaving: boolean
   onRefresh: () => void
   isRefreshing: boolean
@@ -78,6 +81,7 @@ function SortableStoryItem({ story, isEditing, expanded, onToggle, onEdit, onCan
               {story.isActive === false ? 'Out of scope' : 'In scope'}
             </button>
             <button onClick={onEdit} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 px-1">Edit</button>
+            <button onClick={onDuplicate} disabled={duplicatePending} title="Duplicate story" className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 disabled:opacity-50 px-1">{duplicatePending ? 'Duplicating…' : 'Duplicate'}</button>
             <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-600 px-1">Delete</button>
           </div>
         </div>
@@ -112,6 +116,11 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
   const { setNodeRef } = useDroppable({ id: 'feature-container-' + featureId })
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+  const invalidateDuplicate = () => {
+    invalidateProjectAll(qc, projectId)
+    qc.invalidateQueries({ queryKey: ['backlog', projectId] })
+  }
+  const [duplicateError, setDuplicateError] = useState<string | null>(null)
 
   const createStory = useMutation({
     mutationFn: (data: typeof form) => api.post(`/features/${featureId}/stories`, data),
@@ -133,6 +142,15 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
   const deleteStory = useMutation({
     mutationFn: (id: string) => api.delete(`/features/${featureId}/stories/${id}`),
     onSuccess: invalidate,
+  })
+  const duplicateStory = useMutation({
+    mutationFn: (id: string) => duplicateBacklogItem(projectId, 'story', id),
+    onSuccess: (duplicate) => {
+      invalidateDuplicate()
+      setDuplicateError(null)
+      setExpandedIds(s => { const n = new Set(s); n.add(duplicate.id); return n })
+    },
+    onError: (error: unknown) => setDuplicateError(apiErrorMessage(error, 'Failed to duplicate story')),
   })
 
   const refreshFromTemplate = useMutation({
@@ -158,6 +176,7 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
 
   return (
     <div ref={setNodeRef} className="ml-4 mt-1 space-y-1">
+      {duplicateError && <div role="alert" className="mb-2 text-xs text-red-600 dark:text-red-400">{duplicateError}</div>}
       <SortableContext items={stories.map(s => 'story-' + s.id)} strategy={verticalListSortingStrategy}>
         {stories.map(story => (
           <SortableStoryItem
@@ -170,6 +189,8 @@ export default function StoryList({ featureId, stories, resourceTypes, projectId
             onCancelEdit={() => setEditingId(null)}
             onSave={(data) => updateStory.mutate({ id: story.id, data })}
             onDelete={() => deleteStory.mutate(story.id)}
+            onDuplicate={() => duplicateStory.mutate(story.id)}
+            duplicatePending={duplicateStory.isPending}
             onToggleActive={() => toggleStoryActive.mutate({ id: story.id, isActive: story.isActive !== false ? false : true })}
             isSaving={updateStory.isPending}
             onRefresh={() => setRefreshingId(story.id)}
