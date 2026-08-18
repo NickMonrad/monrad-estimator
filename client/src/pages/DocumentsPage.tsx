@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -17,6 +17,42 @@ interface GeneratedDoc {
   generatedBy: { email: string }
 }
 
+type DocumentSections = {
+  cover: boolean
+  scope: boolean
+  effort: boolean
+  timeline: boolean
+  resourceProfile: boolean
+  assumptions: boolean
+  ganttChart: boolean
+}
+
+const DEFAULT_SECTIONS: DocumentSections = {
+  cover: true,
+  scope: true,
+  effort: true,
+  timeline: true,
+  resourceProfile: true,
+  assumptions: true,
+  ganttChart: true,
+}
+
+function restoreDocumentSections(sections: GeneratedDoc['sections']): DocumentSections {
+  if (!sections || typeof sections !== 'object' || Array.isArray(sections)) {
+    return { ...DEFAULT_SECTIONS }
+  }
+
+  const restored = { ...DEFAULT_SECTIONS }
+  let hasRecognizedSection = false
+  for (const key of Object.keys(DEFAULT_SECTIONS) as Array<keyof DocumentSections>) {
+    if (typeof sections[key] === 'boolean') {
+      restored[key] = sections[key]
+      hasRecognizedSection = true
+    }
+  }
+  return hasRecognizedSection ? restored : { ...DEFAULT_SECTIONS }
+}
+
 function defaultLabel(projectName?: string): string {
   const now = new Date()
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -32,15 +68,9 @@ export default function DocumentsPage() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
 
-  const [sections, setSections] = useState({
-    cover: true,
-    scope: true,
-    effort: true,
-    timeline: true,
-    resourceProfile: true,
-    assumptions: true,
-    ganttChart: true,
-  })
+  const [sections, setSections] = useState<DocumentSections>(() => ({ ...DEFAULT_SECTIONS }))
+  const sectionsProjectIdRef = useRef<string | null>(null)
+  const hydratedSectionsProjectIdRef = useRef<string | null>(null)
   const [label, setLabel] = useState(defaultLabel)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
@@ -81,11 +111,26 @@ export default function DocumentsPage() {
     enabled: !!projectId,
   })
 
-  const { data: generatedDocs = [], isLoading: docsLoading } = useQuery<GeneratedDoc[]>({
+  const { data: generatedDocs = [], isLoading: docsLoading, isFetching: docsFetching, isSuccess: docsLoaded } = useQuery<GeneratedDoc[]>({
     queryKey: ['generated-docs', projectId],
     queryFn: () => api.get(`/projects/${projectId}/documents`).then(r => r.data),
     enabled: !!projectId,
   })
+
+  useEffect(() => {
+    if (!projectId) return
+
+    if (sectionsProjectIdRef.current !== projectId) {
+      sectionsProjectIdRef.current = projectId
+      hydratedSectionsProjectIdRef.current = null
+      setSections({ ...DEFAULT_SECTIONS })
+    }
+
+    if (!docsLoaded || docsLoading || docsFetching || hydratedSectionsProjectIdRef.current === projectId) return
+
+    hydratedSectionsProjectIdRef.current = projectId
+    setSections(restoreDocumentSections(generatedDocs[0]?.sections))
+  }, [projectId, generatedDocs, docsLoaded, docsLoading, docsFetching])
 
   // ── Derived "all data loaded" flag ────────────────────────────
   const allLoaded = !!(project && effortData && timelineData && resourceProfileData)
