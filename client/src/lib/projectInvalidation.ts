@@ -33,6 +33,8 @@ export function invalidateProjectDocumentData(
   queryClient.invalidateQueries({ queryKey: ['timeline', projectId] })
   queryClient.invalidateQueries({ queryKey: ['resource-profile', projectId] })
   queryClient.invalidateQueries({ queryKey: ['epics', projectId] })
+  queryClient.invalidateQueries({ queryKey: ['project-dependencies', projectId] })
+  queryClient.invalidateQueries({ queryKey: ['project-risks', projectId] })
 }
 
 /**

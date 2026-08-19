@@ -35,11 +35,13 @@ describe('projectInvalidation', () => {
 
       invalidateProjectDocumentData({ invalidateQueries } as never, 'project-1')
 
-      expect(invalidateQueries).toHaveBeenCalledTimes(4)
+      expect(invalidateQueries).toHaveBeenCalledTimes(6)
       expect(invalidateQueries).toHaveBeenNthCalledWith(1, { queryKey: ['effort', 'project-1'] })
       expect(invalidateQueries).toHaveBeenNthCalledWith(2, { queryKey: ['timeline', 'project-1'] })
       expect(invalidateQueries).toHaveBeenNthCalledWith(3, { queryKey: ['resource-profile', 'project-1'] })
       expect(invalidateQueries).toHaveBeenNthCalledWith(4, { queryKey: ['epics', 'project-1'] })
+      expect(invalidateQueries).toHaveBeenNthCalledWith(5, { queryKey: ['project-dependencies', 'project-1'] })
+      expect(invalidateQueries).toHaveBeenNthCalledWith(6, { queryKey: ['project-risks', 'project-1'] })
     })
 
     it('does nothing when projectId is undefined', () => {

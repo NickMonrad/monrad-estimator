@@ -1,3 +1,5 @@
+import type { ScopeDocumentContext } from './scopeDocumentContext.js'
+
 interface ScopeDocumentProps {
   project: {
     name: string
@@ -13,6 +15,8 @@ interface ScopeDocumentProps {
     timeline: boolean
     resourceProfile: boolean
     assumptions: boolean
+    dependencies: boolean
+    risks: boolean
     ganttChart?: boolean
   }
   effortData: any
@@ -41,6 +45,7 @@ interface ScopeDocumentProps {
   }>
   generatedBy: string
   documentLabel: string
+  documentContext: ScopeDocumentContext
   tz?: string
 }
 
@@ -413,7 +418,7 @@ tr.overhead-row td { color: #666; }
 `
 
 export function renderScopeDocumentHtml(props: ScopeDocumentProps): string {
-  const { project, sections, effortData, timelineData, resourceProfileData, epics, generatedBy, documentLabel, tz } = props
+  const { project, sections, effortData, timelineData, resourceProfileData, epics, generatedBy, documentLabel, documentContext, tz } = props
 
   const now = new Date()
   const tzOpts: Intl.DateTimeFormatOptions = tz ? { timeZone: tz } : {}
@@ -450,21 +455,6 @@ export function renderScopeDocumentHtml(props: ScopeDocumentProps): string {
   }
   const epicRows = [...epicMap.values()].filter(e => e.totalHours > 0)
   const hasOverhead = (resourceProfileData?.overheadRows ?? []).length > 0
-
-  // ── Assumptions ───────────────────────────────────────────────
-  const assumptions: { label: string; text: string }[] = []
-  for (const epic of epics) {
-    if (!epic.isActive) continue
-    if (hasContent(epic.assumptions)) assumptions.push({ label: epic.name, text: epic.assumptions! })
-    for (const feat of epic.features) {
-      if (!feat.isActive) continue
-      if (hasContent(feat.assumptions)) assumptions.push({ label: `${epic.name} › ${feat.name}`, text: feat.assumptions! })
-      for (const story of feat.userStories ?? []) {
-        if (!story.isActive) continue
-        if (hasContent(story.assumptions)) assumptions.push({ label: `${feat.name} › ${story.name}`, text: story.assumptions! })
-      }
-    }
-  }
 
   // ── Helpers ───────────────────────────────────────────────────
   type Epic = ScopeDocumentProps['epics'][0]
@@ -612,13 +602,29 @@ export function renderScopeDocumentHtml(props: ScopeDocumentProps): string {
     </table>
   </div>` : ''
 
-  const assumptionsHtml = sections.assumptions && assumptions.length > 0 ? `
+  const assumptionsHtml = sections.assumptions && documentContext.assumptions.length > 0 ? `
   <div class="page-section">
     <div class="section-heading">Assumptions</div>
-    ${assumptions.map(item => `
+    ${documentContext.assumptions.map(item => `
       <div class="assumption-item">
         <div class="assumption-label">${esc(item.label)}</div>
         <div class="assumption-text rich">${richField(item.text)}</div>
+      </div>`).join('')}
+  </div>` : ''
+
+  const dependenciesHtml = sections.dependencies && documentContext.dependencies.length > 0 ? `
+  <div class="page-section">
+    <div class="section-heading">Dependencies</div>
+    ${documentContext.dependencies.map(item => `<div class="body-text rich">${richField(item.description)}</div>`).join('')}
+  </div>` : ''
+
+  const risksHtml = sections.risks && documentContext.risks.length > 0 ? `
+  <div class="page-section">
+    <div class="section-heading">Risks</div>
+    ${documentContext.risks.map(item => `
+      <div class="risk-item">
+        <div class="body-text rich">${richField(item.description)}</div>
+        ${hasContent(item.mitigation) ? `<div class="detail-block"><div class="detail-label">Mitigation / response</div><div class="detail-text rich">${richField(item.mitigation)}</div></div>` : ''}
       </div>`).join('')}
   </div>` : ''
 
@@ -661,6 +667,8 @@ ${ganttHtml}
 ${timelineHtml}
 ${resourceHtml}
 ${assumptionsHtml}
+${dependenciesHtml}
+${risksHtml}
 </body>
 </html>`
 }

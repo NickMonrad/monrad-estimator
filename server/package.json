@@ -13,6 +13,7 @@
     "test:snapshot-integration": "vitest run --config vitest.integration.config.ts src/test/snapshotRollback.integration.test.ts",
     "test:backlog-duplication-integration": "vitest run --config vitest.integration.config.ts src/test/backlogDuplication.integration.test.ts",
     "test:clone-integration": "vitest run --config vitest.integration.config.ts src/test/projects.clone.integration.test.ts",
+    "test:project-dependencies-risks-integration": "vitest run --config vitest.integration.config.ts src/test/projectDependenciesRisks.integration.test.ts",
     "test:squadplan-integration": "vitest run --config vitest.integration.config.ts src/test/squadPlanProfileFirst.integration.test.ts src/test/squadPlanApplyParity.integration.test.ts",
     "test:named-resource-guard-integration": "vitest run --config vitest.integration.config.ts src/test/namedResourceGuardPostgres.integration.test.ts",
     "test:optimiser-apply-integration": "vitest run --config vitest.integration.config.ts src/test/optimiserApplyProfileFirst.integration.test.ts",

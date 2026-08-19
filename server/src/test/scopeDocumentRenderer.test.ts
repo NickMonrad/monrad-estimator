@@ -56,6 +56,8 @@ function buildProps(entries: GanttFixtureEntry[]) {
       timeline: false,
       resourceProfile: false,
       assumptions: false,
+      dependencies: false,
+      risks: false,
       ganttChart: true,
     },
     effortData: null,
@@ -68,6 +70,7 @@ function buildProps(entries: GanttFixtureEntry[]) {
     },
     resourceProfileData: null,
     epics: [],
+    documentContext: { assumptions: [], dependencies: [], risks: [] },
     generatedBy: 'tester',
     documentLabel: 'doc',
   }
@@ -155,5 +158,59 @@ describe('renderScopeDocumentHtml — scope hierarchy freshness', () => {
     expect(html).toContain('Renamed Out-of-Scope Feature')
     expect(html).not.toContain('Old In-Scope Feature')
     expect(html).not.toContain('Old Out-of-Scope Feature')
+  })
+})
+
+
+describe('renderScopeDocumentHtml — project context sections', () => {
+  it('renders the aggregated assumptions section without duplicate entries', () => {
+    const props = buildProps([])
+    const html = renderScopeDocumentHtml({
+      ...props,
+      sections: { ...props.sections, assumptions: true },
+      documentContext: {
+        assumptions: [
+          { label: 'Epic One', text: 'Client will provide API access.' },
+          { label: 'Feature One', text: 'Production access is separate.' },
+        ],
+        dependencies: [],
+        risks: [],
+      },
+    })
+
+    expect(countOccurrences(html, 'Client will provide API access.')).toBe(1)
+    expect(html).toContain('Production access is separate.')
+  })
+
+  it('renders ordered dependencies and risks with optional mitigation', () => {
+    const props = buildProps([])
+    const html = renderScopeDocumentHtml({
+      ...props,
+      sections: { ...props.sections, dependencies: true, risks: true },
+      documentContext: {
+        assumptions: [],
+        dependencies: [{ description: 'Dependency one' }, { description: 'Dependency two' }],
+        risks: [
+          { description: 'Risk one', mitigation: null },
+          { description: 'Risk two', mitigation: 'Respond early' },
+        ],
+      },
+    })
+
+    expect(html.indexOf('Dependency one')).toBeLessThan(html.indexOf('Dependency two'))
+    expect(html.indexOf('Risk one')).toBeLessThan(html.indexOf('Risk two'))
+    expect(html).toContain('Mitigation / response')
+    expect(html).toContain('Respond early')
+    expect(html).not.toContain('Risk one</p></div><div class="detail-block">')
+  })
+
+  it('omits empty project context sections', () => {
+    const props = buildProps([])
+    const html = renderScopeDocumentHtml({
+      ...props,
+      sections: { ...props.sections, dependencies: true, risks: true },
+    })
+    expect(html).not.toContain('<div class="section-heading">Dependencies</div>')
+    expect(html).not.toContain('<div class="section-heading">Risks</div>')
   })
 })

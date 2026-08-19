@@ -65,7 +65,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `projects.spec.ts` — Projects (4 tests)
+### `projects.spec.ts` — Projects (5 tests)
 
 | Test | Description |
 |------|-------------|
@@ -73,6 +73,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 | can create a new project | New Project button → form → project card appears |
 | can open a project backlog | Clicking project card navigates to `/projects/:id` |
 | can search/filter projects | Search input filters visible projects (skipped if input absent) |
+| can manage project dependencies and risks in settings | Creates a project, adds a dependency and a risk with mitigation in Project Settings, then reloads and verifies both persist |
 
 ---
 

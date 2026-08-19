@@ -1,8 +1,11 @@
+import { randomUUID } from 'crypto'
+
 import { Router, Response } from 'express'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { prisma } from '../lib/prisma.js'
 import { renderScopeDocumentHtml } from '../lib/scopeDocumentRenderer.js'
+import { buildScopeDocumentContext } from '../lib/scopeDocumentContext.js'
 import { generatePdfFromHtml } from '../lib/pdfRenderer.js'
 import path from 'path'
 import fs from 'fs'
@@ -105,27 +108,43 @@ router.post('/generate', asyncHandler(async (req: AuthRequest, res: Response) =>
 
   // Resolve hierarchy names from persistence at generation time rather than
   // trusting a potentially stale Documents-page query cache.
-  const currentEpics = await prisma.epic.findMany({
-    where: { projectId },
-    orderBy: { order: 'asc' },
-    include: {
-      features: {
-        orderBy: { order: 'asc' },
-        include: { userStories: { orderBy: { order: 'asc' } } },
+  const [currentEpics, dependencies, risks] = await Promise.all([
+    prisma.epic.findMany({
+      orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      include: {
+        features: {
+          orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+          include: { userStories: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] } },
+        },
       },
-    },
-  })
+    }),
+    prisma.projectDependency.findMany({
+      where: { projectId },
+      orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    }),
+    prisma.projectRisk.findMany({
+      where: { projectId },
+      orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    }),
+  ])
 
-  // Render HTML and generate PDF
+  // Render HTML and generate PDF from one server-owned, current context.
   const canonicalDocumentData = canonicalizeDocumentHierarchyNames(documentData, currentEpics)
-  const html = renderScopeDocumentHtml({ ...canonicalDocumentData, epics: currentEpics, tz } as unknown as Parameters<typeof renderScopeDocumentHtml>[0])
+  const documentContext = buildScopeDocumentContext(currentEpics, dependencies, risks)
+  const html = renderScopeDocumentHtml({
+    ...canonicalDocumentData,
+    epics: currentEpics,
+    documentContext,
+    tz,
+  } as unknown as Parameters<typeof renderScopeDocumentHtml>[0])
   const buffer = await generatePdfFromHtml(html)
 
   // Ensure output directory exists
   fs.mkdirSync(GENERATED_DIR, { recursive: true })
 
   const ts = formatExportTimestamp(tz)
-  const filename = `${projectId}-${ts}.${format}`
+  // Keep every generated file immutable even when two generations share a minute.
+  const filename = `${projectId}-${ts}-${randomUUID()}.${format}`
   const filePath = path.join(GENERATED_DIR, filename)
 
   // #171: assert resolved path is within GENERATED_DIR to prevent path traversal
