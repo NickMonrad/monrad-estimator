@@ -7,10 +7,11 @@ interface RichTextEditorProps {
   value: string
   onChange: (html: string) => void
   placeholder?: string
+  ariaLabel?: string
   className?: string
 }
 
-export default function RichTextEditor({ value, onChange, placeholder, className }: RichTextEditorProps) {
+export default function RichTextEditor({ value, onChange, placeholder, ariaLabel, className }: RichTextEditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -57,6 +58,7 @@ export default function RichTextEditor({ value, onChange, placeholder, className
       {/* Editor content */}
       <EditorContent
         editor={editor}
+        aria-label={ariaLabel}
         className="prose prose-sm max-w-none px-3 py-2 text-sm text-gray-900 dark:text-white min-h-[60px] focus-within:outline-none"
       />
     </div>

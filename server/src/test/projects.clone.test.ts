@@ -32,6 +32,8 @@ const mockSource = {
   resourceTypes: [],
   overheads: [],
   discounts: [],
+  dependencies: [],
+  risks: [],
   epics: [],
 }
 
@@ -55,6 +57,8 @@ function baseTx() {
     namedResource: { create: vi.fn() },
     projectOverhead: { create: vi.fn() },
     projectDiscount: { create: vi.fn() },
+    projectDependency: { create: vi.fn() },
+    projectRisk: { create: vi.fn() },
     epic: { create: vi.fn() },
     epicDependency: { create: vi.fn() },
     feature: { create: vi.fn() },
@@ -218,6 +222,33 @@ describe('POST /api/projects/:id/clone', () => {
     expect(captured.hoursPerDay).toBe(7.5)
     expect(captured.taxRate).toBe(0.1)
     expect(captured.taxLabel).toBe('GST')
+  })
+
+  it('clones project dependencies and risks with their order', async () => {
+    const src = {
+      ...mockSource,
+      dependencies: [{ id: 'dependency-1', description: 'Dependency', order: 4 }],
+      risks: [{ id: 'risk-1', description: 'Risk', mitigation: 'Response', order: 2 }],
+    }
+    const dependencyCreate = vi.fn()
+    const riskCreate = vi.fn()
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
+      const tx = baseTx()
+      tx.project.findFirst
+        .mockResolvedValueOnce(src as unknown as Record<string, unknown>)
+        .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
+      tx.projectDependency.create = dependencyCreate
+      tx.projectRisk.create = riskCreate
+      tx.capacityProfile.findMany.mockResolvedValue([])
+      tx.$queryRaw.mockResolvedValue([])
+      return (fn as (tx: unknown) => Promise<unknown>)(tx)
+    })
+
+    const res = await request(app).post('/api/projects/proj-1/clone').set('Authorization', authHeader)
+
+    expect(res.status).toBe(201)
+    expect(dependencyCreate).toHaveBeenCalledWith({ data: { projectId: 'proj-clone-1', description: 'Dependency', order: 4 } })
+    expect(riskCreate).toHaveBeenCalledWith({ data: { projectId: 'proj-clone-1', description: 'Risk', mitigation: 'Response', order: 2 } })
   })
 
   // ── Feature metadata ─────────────────────────────────────────────────
