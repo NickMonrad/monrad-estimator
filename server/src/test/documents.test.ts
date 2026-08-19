@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import request from 'supertest'
 import jwt from 'jsonwebtoken'
 import fs from 'fs'
+import type { GeneratedDocument, Project } from '@prisma/client'
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
 import { renderScopeDocumentHtml } from '../lib/scopeDocumentRenderer.js'
@@ -12,7 +13,7 @@ const userId = 'user-1'
 const token = jwt.sign({ userId }, 'test-secret')
 const authHeader = `Bearer ${token}`
 
-const mockProject = { id: 'proj-1', ownerId: userId, name: 'Test Project' }
+const mockProject = { id: 'proj-1', ownerId: userId, name: 'Test Project' } as unknown as Project
 
 const generateBody = {
   type: 'scope',
@@ -31,11 +32,13 @@ const mockDoc = {
   sections: null,
   generatedById: userId,
   createdAt: new Date().toISOString(),
-}
+} as unknown as GeneratedDocument
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(prisma.epic.findMany).mockResolvedValue([])
+  vi.mocked(prisma.projectDependency.findMany).mockResolvedValue([])
+  vi.mocked(prisma.projectRisk.findMany).mockResolvedValue([])
 })
 
 describe('POST /api/projects/:projectId/documents/generate', () => {
@@ -186,6 +189,60 @@ describe('POST /api/projects/:projectId/documents/generate', () => {
     }])
     expect(JSON.stringify(rendered.timelineData)).not.toContain('Old Feature')
     expect(JSON.stringify(rendered.resourceProfileData)).not.toContain('Old Feature')
+  })
+
+  it('builds the current dependency, risk and de-duplicated assumption context on generation', async () => {
+    const currentEpics = [{
+      id: 'epic-1', name: 'Epic 1', isActive: true, assumptions: 'Client will provide API access.',
+      features: [{
+        id: 'feature-1', name: 'Feature 1', isActive: true, assumptions: '<p> client   WILL provide API access. </p><p>Production access is separate.</p>',
+        userStories: [],
+      }],
+    }]
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as unknown as Awaited<ReturnType<typeof prisma.project.findFirst>>)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue(currentEpics as unknown as Awaited<ReturnType<typeof prisma.epic.findMany>>)
+    vi.mocked(prisma.projectDependency.findMany).mockResolvedValue([
+      { id: 'dependency-1', projectId: 'proj-1', description: 'API access', order: 0, createdAt: new Date(), updatedAt: new Date() },
+    ] as unknown as Awaited<ReturnType<typeof prisma.projectDependency.findMany>>)
+    vi.mocked(prisma.projectRisk.findMany).mockResolvedValue([
+      { id: 'risk-1', projectId: 'proj-1', description: 'Vendor delay', mitigation: 'Escalate early', order: 0, createdAt: new Date(), updatedAt: new Date() },
+    ] as unknown as Awaited<ReturnType<typeof prisma.projectRisk.findMany>>)
+    vi.mocked(prisma.generatedDocument.create).mockResolvedValue(mockDoc as unknown as Awaited<ReturnType<typeof prisma.generatedDocument.create>>)
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined)
+    vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined)
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/documents/generate')
+      .set('Authorization', authHeader)
+      .send({ ...generateBody, documentData: { ...generateBody.documentData, sections: { assumptions: true, dependencies: true, risks: true } } })
+
+    expect(res.status).toBe(201)
+    expect(prisma.generatedDocument.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ sections: { assumptions: true, dependencies: true, risks: true } }),
+    }))
+    const rendered = vi.mocked(renderScopeDocumentHtml).mock.calls[0][0]
+    expect(rendered.documentContext).toEqual({
+      assumptions: [
+        { label: 'Epic 1', text: 'Client will provide API access.' },
+        { label: 'Epic 1 › Feature 1', text: '<p>Production access is separate.</p>' },
+      ],
+      dependencies: [{ description: 'API access' }],
+      risks: [{ description: 'Vendor delay', mitigation: 'Escalate early' }],
+    })
+  })
+  it('uses a distinct file path for successive generations', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject)
+    vi.mocked(prisma.generatedDocument.create).mockResolvedValue(mockDoc)
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined)
+    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined)
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false)
+
+    await request(app).post('/api/projects/proj-1/documents/generate').set('Authorization', authHeader).send(generateBody)
+    await request(app).post('/api/projects/proj-1/documents/generate').set('Authorization', authHeader).send(generateBody)
+
+    expect(writeSpy).toHaveBeenCalledTimes(2)
+    expect(writeSpy.mock.calls[0][0]).not.toBe(writeSpy.mock.calls[1][0])
   })
 
   it('creates a new document without mutating historical generated documents', async () => {

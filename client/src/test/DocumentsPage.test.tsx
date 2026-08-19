@@ -24,7 +24,7 @@ vi.mock('@/components/layout/AppLayout', () => ({
   default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
-type SectionKey = 'cover' | 'scope' | 'effort' | 'timeline' | 'resourceProfile' | 'assumptions' | 'ganttChart'
+type SectionKey = 'cover' | 'scope' | 'effort' | 'timeline' | 'resourceProfile' | 'assumptions' | 'dependencies' | 'risks' | 'ganttChart'
 
 type StoredDocument = {
   id: string
@@ -43,6 +43,8 @@ const sectionLabels: Record<SectionKey, string> = {
   timeline: 'Timeline Summary',
   resourceProfile: 'Resource Profile',
   assumptions: 'Assumptions',
+  dependencies: 'Dependencies',
+  risks: 'Risks',
   ganttChart: 'Gantt Chart',
 }
 
@@ -53,6 +55,8 @@ const defaultSections: Record<SectionKey, boolean> = {
   timeline: true,
   resourceProfile: true,
   assumptions: true,
+  dependencies: true,
+  risks: true,
   ganttChart: true,
 }
 
@@ -197,6 +201,18 @@ describe('DocumentsPage section settings restoration', () => {
     view.unmount()
     renderPage()
     await expectSections(savedSections)
+  })
+
+  it('keeps new section defaults when legacy metadata lacks dependency and risk keys', async () => {
+    documentsByProject['project-a'] = [documentRecord('legacy', { cover: false, scope: false })]
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: sectionLabels.cover })).not.toBeChecked()
+      expect(screen.getByRole('checkbox', { name: sectionLabels.scope })).not.toBeChecked()
+      expect(screen.getByRole('checkbox', { name: sectionLabels.dependencies })).toBeChecked()
+      expect(screen.getByRole('checkbox', { name: sectionLabels.risks })).toBeChecked()
+    })
   })
 
   it('falls back to defaults when the latest document has null section metadata', async () => {

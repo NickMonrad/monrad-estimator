@@ -24,6 +24,8 @@ type DocumentSections = {
   timeline: boolean
   resourceProfile: boolean
   assumptions: boolean
+  dependencies: boolean
+  risks: boolean
   ganttChart: boolean
 }
 
@@ -34,6 +36,8 @@ const DEFAULT_SECTIONS: DocumentSections = {
   timeline: true,
   resourceProfile: true,
   assumptions: true,
+  dependencies: true,
+  risks: true,
   ganttChart: true,
 }
 
@@ -259,6 +263,8 @@ export default function DocumentsPage() {
                   ['timeline', 'Timeline Summary'],
                   ['resourceProfile', 'Resource Profile'],
                   ['assumptions', 'Assumptions'],
+                  ['dependencies', 'Dependencies'],
+                  ['risks', 'Risks'],
                 ] as const).map(([key, sectionLabel]) => (
                   <label key={key} className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -335,6 +341,7 @@ export default function DocumentsPage() {
                 const sectionLabels: Record<string, string> = {
                   cover: 'Cover', scope: 'Scope', effort: 'Effort',
                   timeline: 'Timeline', resourceProfile: 'Resources', assumptions: 'Assumptions',
+                  dependencies: 'Dependencies', risks: 'Risks',
                   ganttChart: 'Gantt',
                 }
                 const includedSections = doc.sections

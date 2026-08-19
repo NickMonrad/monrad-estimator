@@ -32,6 +32,8 @@ const mockSource = {
   resourceTypes: [],
   overheads: [],
   discounts: [],
+  dependencies: [],
+  risks: [],
   epics: [],
 }
 
@@ -55,6 +57,8 @@ function baseTx() {
     namedResource: { create: vi.fn() },
     projectOverhead: { create: vi.fn() },
     projectDiscount: { create: vi.fn() },
+    projectDependency: { create: vi.fn() },
+    projectRisk: { create: vi.fn() },
     epic: { create: vi.fn() },
     epicDependency: { create: vi.fn() },
     feature: { create: vi.fn() },
@@ -70,6 +74,11 @@ function baseTx() {
     capacityProfile: { findMany: vi.fn(), create: vi.fn() },
     capacitySegment: { create: vi.fn() },
   }
+}
+
+type CloneTransactionMetadata = {
+  projectDependency: { create: (args: unknown) => unknown }
+  projectRisk: { create: (args: unknown) => unknown }
 }
 
 /**
@@ -141,8 +150,34 @@ describe('POST /api/projects/:id/clone', () => {
     })
 
     const res = await request(app).post('/api/projects/proj-1/clone').set('Authorization', authHeader)
-    expect(res.status).toBe(201)
     expect(res.body.name).toBe('Copy of Original Project')
+  })
+
+  it('clones project dependencies and risks with new child rows', async () => {
+    let cloneTx: CloneTransactionMetadata | undefined
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
+      const tx = baseTx()
+      cloneTx = tx
+      tx.project.findFirst
+        .mockResolvedValueOnce({
+          ...mockSource,
+          dependencies: [{ id: 'dependency-1', description: 'API access', order: 2 }],
+          risks: [{ id: 'risk-1', description: 'Vendor delay', mitigation: 'Escalate early', order: 1 }],
+        } as unknown as Record<string, unknown>)
+        .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
+      tx.capacityProfile.findMany.mockResolvedValue([])
+      tx.$queryRaw.mockResolvedValue([])
+      return (fn as (tx: unknown) => Promise<unknown>)(tx)
+    })
+
+    const response = await request(app).post('/api/projects/proj-1/clone').set('Authorization', authHeader)
+    expect(response.status).toBe(201)
+    expect(cloneTx?.projectDependency.create).toHaveBeenCalledWith({
+      data: { projectId: 'proj-clone-1', description: 'API access', order: 2 },
+    })
+    expect(cloneTx?.projectRisk.create).toHaveBeenCalledWith({
+      data: { projectId: 'proj-clone-1', description: 'Vendor delay', mitigation: 'Escalate early', order: 1 },
+    })
   })
 
   it('returns 404 when source project does not exist', async () => {

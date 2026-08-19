@@ -83,10 +83,37 @@ model Project {
   snapshots   BacklogSnapshot[]
   overheads   ProjectOverhead[]
   discounts   ProjectDiscount[]
+  dependencies ProjectDependency[]
+  risks        ProjectRisk[]
   weeklyDemandCache Json?
   generatedDocuments GeneratedDocument[]
   capacityPlans      CapacityPlan[]
   capacityProfiles   CapacityProfile[]
+}
+
+model ProjectDependency {
+  id          String   @id @default(cuid())
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  description String
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId, order])
+}
+
+model ProjectRisk {
+  id          String   @id @default(cuid())
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  description String
+  mitigation  String?
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId, order])
 }
 
 enum ProjectStatus {

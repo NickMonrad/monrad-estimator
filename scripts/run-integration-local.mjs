@@ -11,7 +11,7 @@ try {
     for (const script of [
       'test:snapshot-integration',
       'test:clone-integration',
-      'test:backlog-duplication-integration',
+      'test:project-dependencies-risks-integration',
       'test:squadplan-integration',
       'test:named-resource-guard-integration',
       'test:optimiser-apply-integration',

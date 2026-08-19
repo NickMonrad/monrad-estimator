@@ -34,4 +34,28 @@ test.describe('Projects', () => {
       await expect(page.getByRole('heading', { name: PROJECT_NAME, exact: true }).first()).not.toBeVisible()
     }
   })
+
+
+  test('can manage project dependencies and risks in settings', async ({ page }) => {
+    const projectName = `E2E Project Context ${Date.now()}`
+    await createProject(page, projectName)
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    const projectId = new URL(page.url()).pathname.split('/')[2]
+    await page.goto(`/projects/${projectId}/settings`)
+
+    await expect(page.getByRole('heading', { name: 'Project Settings', exact: true })).toBeVisible()
+    await page.getByLabel('Add dependency').fill('API access')
+    await page.getByRole('button', { name: 'Add dependency' }).click()
+    await expect(page.getByText('API access', { exact: true })).toBeVisible()
+
+    await page.getByLabel('Add risk').fill('Vendor delay')
+    await page.getByLabel('Mitigation / response (optional)').fill('Escalate early')
+    await page.getByRole('button', { name: 'Add risk' }).click()
+    await expect(page.getByText('Vendor delay', { exact: true })).toBeVisible()
+    await expect(page.getByText(/Mitigation \/ response: Escalate early/)).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByText('API access', { exact: true })).toBeVisible()
+    await expect(page.getByText(/Mitigation \/ response: Escalate early/)).toBeVisible()
+  })
 })
