@@ -36,6 +36,8 @@ const mockDoc = {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(prisma.epic.findMany).mockResolvedValue([])
+  vi.mocked(prisma.projectDependency.findMany).mockResolvedValue([])
+  vi.mocked(prisma.projectRisk.findMany).mockResolvedValue([])
 })
 
 describe('POST /api/projects/:projectId/documents/generate', () => {
@@ -186,6 +188,65 @@ describe('POST /api/projects/:projectId/documents/generate', () => {
     }])
     expect(JSON.stringify(rendered.timelineData)).not.toContain('Old Feature')
     expect(JSON.stringify(rendered.resourceProfileData)).not.toContain('Old Feature')
+  })
+
+  it('assembles persisted project dependencies, risks and active backlog assumptions for a new document', async () => {
+    const currentEpics = [{
+      id: 'epic-1',
+      name: 'Active Epic',
+      isActive: true,
+      order: 0,
+      assumptions: '<p>Client will provide API access.</p>',
+      features: [{
+        id: 'feature-1',
+        name: 'Current Feature',
+        isActive: true,
+        order: 0,
+        assumptions: '<p>client will provide   API access.</p><p>Feature-specific assumption.</p>',
+        userStories: [],
+      }],
+    }, {
+      id: 'epic-2',
+      name: 'Out of scope Epic',
+      isActive: false,
+      order: 1,
+      assumptions: '<p>Must not appear.</p>',
+      features: [{
+        id: 'feature-2',
+        name: 'Out of scope Feature',
+        isActive: true,
+        order: 0,
+        assumptions: '<p>Must not appear.</p>',
+        userStories: [],
+      }],
+    }]
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as unknown as Awaited<ReturnType<typeof prisma.project.findFirst>>)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue(currentEpics as unknown as Awaited<ReturnType<typeof prisma.epic.findMany>>)
+    vi.mocked(prisma.projectDependency.findMany).mockResolvedValue([
+      { id: 'dependency-1', projectId: 'proj-1', description: '<p>Dependency</p>', order: 0 },
+    ] as unknown as Awaited<ReturnType<typeof prisma.projectDependency.findMany>>)
+    vi.mocked(prisma.projectRisk.findMany).mockResolvedValue([
+      { id: 'risk-1', projectId: 'proj-1', description: '<p>Risk</p>', mitigation: '<p>Response</p>', order: 0 },
+    ] as unknown as Awaited<ReturnType<typeof prisma.projectRisk.findMany>>)
+    vi.mocked(prisma.generatedDocument.create).mockResolvedValue(mockDoc as unknown as Awaited<ReturnType<typeof prisma.generatedDocument.create>>)
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined)
+    vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined)
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/documents/generate')
+      .set('Authorization', authHeader)
+      .send({ ...generateBody, documentData: { ...generateBody.documentData, sections: { assumptions: true, dependencies: true, risks: true } } })
+
+    expect(res.status).toBe(201)
+    const rendered = vi.mocked(renderScopeDocumentHtml).mock.calls[0][0]
+    expect(rendered.assumptions).toEqual([
+      { label: 'Active Epic', text: '<p>Client will provide API access.</p>' },
+      { label: 'Active Epic › Current Feature', text: '<p>Feature-specific assumption.</p>' },
+    ])
+    expect(rendered.dependencies).toEqual([{ id: 'dependency-1', projectId: 'proj-1', description: '<p>Dependency</p>', order: 0 }])
+    expect(rendered.risks).toEqual([{ id: 'risk-1', projectId: 'proj-1', description: '<p>Risk</p>', mitigation: '<p>Response</p>', order: 0 }])
+    expect(JSON.stringify({ assumptions: rendered.assumptions, dependencies: rendered.dependencies, risks: rendered.risks })).not.toContain('Must not appear')
   })
 
   it('creates a new document without mutating historical generated documents', async () => {
