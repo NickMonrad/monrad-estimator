@@ -3,6 +3,7 @@ import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
 import { prisma } from '../lib/prisma.js'
 import { renderScopeDocumentHtml } from '../lib/scopeDocumentRenderer.js'
+import { buildScopeDocumentContext } from '../lib/scopeDocumentContext.js'
 import { generatePdfFromHtml } from '../lib/pdfRenderer.js'
 import path from 'path'
 import fs from 'fs'
@@ -52,6 +53,9 @@ type DocumentData = Record<string, unknown> & {
   resourceProfileData?: Record<string, unknown> & {
     resourceRows?: Array<Record<string, unknown> & { epics?: DocumentEntry[] }>
   }
+  assumptions?: Array<{ label: string; text: string }>
+  dependencies?: Array<{ id: string; description: string; order: number }>
+  risks?: Array<{ id: string; description: string; mitigation?: string | null; order: number }>
 }
 
 function canonicalizeDocumentHierarchyNames(documentData: DocumentData, currentEpics: CurrentEpic[]): DocumentData {
@@ -105,20 +109,37 @@ router.post('/generate', asyncHandler(async (req: AuthRequest, res: Response) =>
 
   // Resolve hierarchy names from persistence at generation time rather than
   // trusting a potentially stale Documents-page query cache.
-  const currentEpics = await prisma.epic.findMany({
-    where: { projectId },
-    orderBy: { order: 'asc' },
-    include: {
-      features: {
-        orderBy: { order: 'asc' },
-        include: { userStories: { orderBy: { order: 'asc' } } },
+  const [currentEpics, dependencies, risks] = await Promise.all([
+    prisma.epic.findMany({
+      where: { projectId },
+      orderBy: { order: 'asc' },
+      include: {
+        features: {
+          orderBy: { order: 'asc' },
+          include: { userStories: { orderBy: { order: 'asc' } } },
+        },
       },
-    },
-  })
+    }),
+    prisma.projectDependency.findMany({ where: { projectId }, orderBy: [{ order: 'asc' }, { id: 'asc' }] }),
+    prisma.projectRisk.findMany({ where: { projectId }, orderBy: [{ order: 'asc' }, { id: 'asc' }] }),
+  ])
+
+  const documentContext = buildScopeDocumentContext(currentEpics, dependencies, risks)
 
   // Render HTML and generate PDF
-  const canonicalDocumentData = canonicalizeDocumentHierarchyNames(documentData, currentEpics)
-  const html = renderScopeDocumentHtml({ ...canonicalDocumentData, epics: currentEpics, tz } as unknown as Parameters<typeof renderScopeDocumentHtml>[0])
+  const canonicalDocumentData = canonicalizeDocumentHierarchyNames(
+    { ...documentData, ...documentContext },
+    currentEpics,
+  )
+  const html = renderScopeDocumentHtml({
+    ...canonicalDocumentData,
+    epics: currentEpics,
+    assumptions: documentContext.assumptions,
+    dependencies: documentContext.dependencies,
+    risks: documentContext.risks,
+    tz,
+  } as unknown as Parameters<typeof renderScopeDocumentHtml>[0])
+
   const buffer = await generatePdfFromHtml(html)
 
   // Ensure output directory exists

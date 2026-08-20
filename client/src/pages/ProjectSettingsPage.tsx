@@ -5,6 +5,7 @@ import { invalidateProjectAll } from '../lib/projectInvalidation'
 import { api, getCustomers, getOrgs, moveProjectToOrg } from '../lib/api'
 import AppLayout from '../components/layout/AppLayout'
 import RichTextEditor from '../components/shared/RichTextEditor'
+import ProjectContextPanel from '../components/project/ProjectContextPanel'
 
 const STATUS_OPTIONS = ['DRAFT', 'ACTIVE', 'REVIEW', 'COMPLETE', 'ARCHIVED']
 
@@ -239,6 +240,7 @@ export default function ProjectSettingsPage() {
             {saved && <span className="text-sm text-green-600">✓ Settings saved</span>}
           </div>
         </div>
+        <ProjectContextPanel projectId={id!} />
       </main>
   </AppLayout>
   )
