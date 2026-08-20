@@ -28,13 +28,15 @@ export function invalidateProjectDocumentData(
   queryClient: QueryInvalidator,
   projectId: string | undefined,
 ) {
-  if (!projectId) return
-  queryClient.invalidateQueries({ queryKey: ['effort', projectId] })
-  queryClient.invalidateQueries({ queryKey: ['timeline', projectId] })
-  queryClient.invalidateQueries({ queryKey: ['resource-profile', projectId] })
-  queryClient.invalidateQueries({ queryKey: ['epics', projectId] })
-  queryClient.invalidateQueries({ queryKey: ['project-dependencies', projectId] })
-  queryClient.invalidateQueries({ queryKey: ['project-risks', projectId] })
+  if (!projectId) return Promise.resolve()
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['effort', projectId] }),
+    queryClient.invalidateQueries({ queryKey: ['timeline', projectId] }),
+    queryClient.invalidateQueries({ queryKey: ['resource-profile', projectId] }),
+    queryClient.invalidateQueries({ queryKey: ['epics', projectId] }),
+    queryClient.invalidateQueries({ queryKey: ['project-dependencies', projectId] }),
+    queryClient.invalidateQueries({ queryKey: ['project-risks', projectId] }),
+  ])
 }
 
 /**

@@ -61,6 +61,22 @@ describe('POST /api/projects/:projectId/documents/generate', () => {
     expect(res.body.label).toBe('Scope Document v1')
   })
 
+  it('loads only the requested project hierarchy for generation', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as any)
+    vi.mocked(prisma.generatedDocument.create).mockResolvedValue(mockDoc as any)
+    vi.spyOn(fs, 'mkdirSync').mockReturnValue(undefined as any)
+    vi.spyOn(fs, 'writeFileSync').mockReturnValue(undefined)
+    vi.spyOn(fs, 'existsSync').mockReturnValue(false)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/documents/generate')
+      .set('Authorization', authHeader)
+      .send(generateBody)
+
+    expect(res.status).toBe(201)
+    expect(prisma.epic.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { projectId: 'proj-1' } }))
+  })
+
   it.each([true, false])('renders persisted feature names when the parent epic is %s', async (isActive) => {
     const currentEpics = [{
       id: 'epic-1',
