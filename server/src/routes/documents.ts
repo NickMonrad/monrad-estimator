@@ -110,6 +110,7 @@ router.post('/generate', asyncHandler(async (req: AuthRequest, res: Response) =>
   // trusting a potentially stale Documents-page query cache.
   const [currentEpics, dependencies, risks] = await Promise.all([
     prisma.epic.findMany({
+      where: { projectId },
       orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       include: {
         features: {

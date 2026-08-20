@@ -75,6 +75,15 @@ export default function ProjectSettingsPage() {
       setDropdownError('Failed to load customer / team data. Some dropdowns may be unavailable.')
     })
   }, [])
+  useEffect(() => {
+    setNewDependency('')
+    setNewRisk({ description: '', mitigation: '' })
+    setEditingDependency(null)
+    setEditingRisk(null)
+    setMetadataBusy(null)
+    setMetadataError(null)
+  }, [id])
+
 
   useEffect(() => {
     if (project) {
@@ -108,35 +117,42 @@ export default function ProjectSettingsPage() {
     setForm(v => ({ ...v, [field]: value }))
   }
 
-  const refreshMetadata = () => {
-    invalidateProjectDocumentData(qc, id)
+  const refreshMetadata = async () => {
+    await invalidateProjectDocumentData(qc, id)
   }
 
-  const runMetadataAction = async (action: string, request: () => Promise<unknown>) => {
+  const runMetadataAction = async (action: string, request: () => Promise<unknown>): Promise<boolean> => {
     setMetadataBusy(action)
     setMetadataError(null)
     try {
       await request()
-      refreshMetadata()
+      await refreshMetadata()
+      return true
     } catch (err) {
       setMetadataError(apiErrorMessage(err, 'Failed to save project dependencies and risks'))
+      return false
     } finally {
       setMetadataBusy(null)
     }
   }
 
   const addDependency = () => {
-    if (!newDependency.trim()) return
-    void runMetadataAction('add-dependency', () => api.post(`/projects/${id}/dependencies`, { description: newDependency }))
-    setNewDependency('')
+    const description = newDependency
+    if (!description.trim()) return
+    void runMetadataAction('add-dependency', () => api.post(`/projects/${id}/dependencies`, { description }))
+      .then(success => {
+        if (success) setNewDependency('')
+      })
   }
 
   const saveDependency = () => {
-    if (!editingDependency?.description.trim()) return
-    void runMetadataAction(`edit-dependency-${editingDependency.id}`, () => api.put(`/projects/${id}/dependencies/${editingDependency.id}`, {
-      description: editingDependency.description,
-    }))
-    setEditingDependency(null)
+    const dependency = editingDependency
+    if (!dependency?.description.trim()) return
+    void runMetadataAction(`edit-dependency-${dependency.id}`, () => api.put(`/projects/${id}/dependencies/${dependency.id}`, {
+      description: dependency.description,
+    })).then(success => {
+      if (success) setEditingDependency(null)
+    })
   }
 
   const deleteDependency = (dependencyId: string) => {
@@ -156,21 +172,25 @@ export default function ProjectSettingsPage() {
   }
 
   const addRisk = () => {
-    if (!newRisk.description.trim()) return
+    const risk = newRisk
+    if (!risk.description.trim()) return
     void runMetadataAction('add-risk', () => api.post(`/projects/${id}/risks`, {
-      description: newRisk.description,
-      mitigation: newRisk.mitigation,
-    }))
-    setNewRisk({ description: '', mitigation: '' })
+      description: risk.description,
+      mitigation: risk.mitigation,
+    })).then(success => {
+      if (success) setNewRisk({ description: '', mitigation: '' })
+    })
   }
 
   const saveRisk = () => {
-    if (!editingRisk?.description.trim()) return
-    void runMetadataAction(`edit-risk-${editingRisk.id}`, () => api.put(`/projects/${id}/risks/${editingRisk.id}`, {
-      description: editingRisk.description,
-      mitigation: editingRisk.mitigation,
-    }))
-    setEditingRisk(null)
+    const risk = editingRisk
+    if (!risk?.description.trim()) return
+    void runMetadataAction(`edit-risk-${risk.id}`, () => api.put(`/projects/${id}/risks/${risk.id}`, {
+      description: risk.description,
+      mitigation: risk.mitigation,
+    })).then(success => {
+      if (success) setEditingRisk(null)
+    })
   }
 
   const deleteRisk = (riskId: string) => {
@@ -391,8 +411,8 @@ export default function ProjectSettingsPage() {
                   <div className="flex items-center gap-1 shrink-0">
                     <button type="button" onClick={() => moveDependency(index, -1)} disabled={index === 0 || metadataBusy !== null} aria-label={`Move dependency ${index + 1} up`} className="px-1.5 py-1 text-xs text-gray-500 hover:text-lab3-navy disabled:opacity-30">↑</button>
                     <button type="button" onClick={() => moveDependency(index, 1)} disabled={index === dependencies.length - 1 || metadataBusy !== null} aria-label={`Move dependency ${index + 1} down`} className="px-1.5 py-1 text-xs text-gray-500 hover:text-lab3-navy disabled:opacity-30">↓</button>
-                    <button type="button" onClick={() => setEditingDependency({ id: dependency.id, description: dependency.description })} disabled={metadataBusy !== null} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-800">Edit</button>
-                    <button type="button" onClick={() => deleteDependency(dependency.id)} disabled={metadataBusy !== null} className="px-2 py-1 text-xs text-gray-500 hover:text-red-600">Delete</button>
+                    <button type="button" onClick={() => setEditingDependency({ id: dependency.id, description: dependency.description })} disabled={metadataBusy !== null} aria-label={`Edit dependency ${index + 1}`} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-800">Edit</button>
+                    <button type="button" onClick={() => deleteDependency(dependency.id)} disabled={metadataBusy !== null} aria-label={`Delete dependency ${index + 1}`} className="px-2 py-1 text-xs text-gray-500 hover:text-red-600">Delete</button>
                   </div>
                 </div>
               ))}
@@ -440,8 +460,8 @@ export default function ProjectSettingsPage() {
                   <div className="flex items-center gap-1 shrink-0">
                     <button type="button" onClick={() => moveRisk(index, -1)} disabled={index === 0 || metadataBusy !== null} aria-label={`Move risk ${index + 1} up`} className="px-1.5 py-1 text-xs text-gray-500 hover:text-lab3-navy disabled:opacity-30">↑</button>
                     <button type="button" onClick={() => moveRisk(index, 1)} disabled={index === risks.length - 1 || metadataBusy !== null} aria-label={`Move risk ${index + 1} down`} className="px-1.5 py-1 text-xs text-gray-500 hover:text-lab3-navy disabled:opacity-30">↓</button>
-                    <button type="button" onClick={() => setEditingRisk({ id: risk.id, description: risk.description, mitigation: risk.mitigation ?? '' })} disabled={metadataBusy !== null} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-800">Edit</button>
-                    <button type="button" onClick={() => deleteRisk(risk.id)} disabled={metadataBusy !== null} className="px-2 py-1 text-xs text-gray-500 hover:text-red-600">Delete</button>
+                    <button type="button" onClick={() => setEditingRisk({ id: risk.id, description: risk.description, mitigation: risk.mitigation ?? '' })} disabled={metadataBusy !== null} aria-label={`Edit risk ${index + 1}`} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-800">Edit</button>
+                    <button type="button" onClick={() => deleteRisk(risk.id)} disabled={metadataBusy !== null} aria-label={`Delete risk ${index + 1}`} className="px-2 py-1 text-xs text-gray-500 hover:text-red-600">Delete</button>
                   </div>
                 </div>
               ))}

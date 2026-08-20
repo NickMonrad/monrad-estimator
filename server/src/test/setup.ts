@@ -14,6 +14,8 @@ vi.mock('../lib/scopeDocumentRenderer.js', () => ({
 vi.mock('../lib/prisma.js', () => {
   const capacityProfileMocks = { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() }
   const capacitySegmentMocks = { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() }
+  const projectDependencyMocks = { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() }
+  const projectRiskMocks = { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() }
   return {
     prisma: {
       user: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), count: vi.fn() },
@@ -38,8 +40,8 @@ vi.mock('../lib/prisma.js', () => {
       rateCard: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
       rateCardEntry: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
       projectDiscount: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
-      projectDependency: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
-      projectRisk: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
+      projectDependency: projectDependencyMocks,
+      projectRisk: projectRiskMocks,
       documentTemplate: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
       generatedDocument: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
       passwordResetToken: {
@@ -67,6 +69,8 @@ vi.mock('../lib/prisma.js', () => {
         userStory: { findFirst: vi.fn(), updateMany: vi.fn(), create: vi.fn().mockResolvedValue({ id: 'story-id' }) },
         task: { findFirst: vi.fn(), updateMany: vi.fn(), create: vi.fn() },
         project: { update: vi.fn() },
+        projectDependency: projectDependencyMocks,
+        projectRisk: projectRiskMocks,
         resourceType: { findUnique: vi.fn().mockResolvedValue(null), findMany: vi.fn().mockResolvedValue([]), update: vi.fn(), create: vi.fn(), upsert: vi.fn() },
         namedResource: { findUnique: vi.fn().mockResolvedValue(null), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), create: vi.fn(), upsert: vi.fn(), delete: vi.fn(), count: vi.fn() },
         timelineEntry: { deleteMany: vi.fn(), createMany: vi.fn(), upsert: vi.fn() },

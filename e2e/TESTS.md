@@ -65,7 +65,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `projects.spec.ts` — Projects (5 tests)
+### `projects.spec.ts` — Projects (6 tests)
 
 | Test | Description |
 |------|-------------|
@@ -74,6 +74,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 | can open a project backlog | Clicking project card navigates to `/projects/:id` |
 | can search/filter projects | Search input filters visible projects (skipped if input absent) |
 | can manage project dependencies and risks in settings | Creates a project, adds a dependency and a risk with mitigation in Project Settings, then reloads and verifies both persist |
+| generates current project context and preserves historical documents | Adds and reorders dependencies, adds risks, generates a Scope Document, edits a dependency, generates again, and confirms the first download remains unchanged |
 
 ---
 

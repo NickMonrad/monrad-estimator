@@ -42,35 +42,43 @@ function parseReorderItems(value: unknown): Array<{ id: string; order: number }>
 }
 
 async function reorderDependencies(projectId: string, items: Array<{ id: string; order: number }>) {
-  const existing = await prisma.projectDependency.findMany({
-    where: { projectId },
-    select: { id: true },
-  })
-  if (existing.length !== items.length || existing.some(row => !items.some(item => item.id === row.id))) {
-    return false
-  }
-  if (items.some(item => item.order >= existing.length)) return false
+  return prisma.$transaction(async tx => {
+    const existing = await tx.projectDependency.findMany({
+      where: { projectId },
+      select: { id: true },
+    })
+    const existingIds = new Set(existing.map(row => row.id))
+    if (existing.length !== items.length || items.some(item => !existingIds.has(item.id) || item.order >= existing.length)) {
+      return false
+    }
 
-  await prisma.$transaction(items.map(({ id, order }) =>
-    prisma.projectDependency.update({ where: { id }, data: { order } }),
-  ))
-  return true
+    for (const { id, order } of items) {
+      await tx.projectDependency.update({ where: { id }, data: { order } })
+    }
+    return true
+  }, { isolationLevel: 'Serializable' })
 }
 
 async function reorderRisks(projectId: string, items: Array<{ id: string; order: number }>) {
-  const existing = await prisma.projectRisk.findMany({
-    where: { projectId },
-    select: { id: true },
-  })
-  if (existing.length !== items.length || existing.some(row => !items.some(item => item.id === row.id))) {
-    return false
-  }
-  if (items.some(item => item.order >= existing.length)) return false
+  return prisma.$transaction(async tx => {
+    const existing = await tx.projectRisk.findMany({
+      where: { projectId },
+      select: { id: true },
+    })
+    const existingIds = new Set(existing.map(row => row.id))
+    if (existing.length !== items.length || items.some(item => !existingIds.has(item.id) || item.order >= existing.length)) {
+      return false
+    }
 
-  await prisma.$transaction(items.map(({ id, order }) =>
-    prisma.projectRisk.update({ where: { id }, data: { order } }),
-  ))
-  return true
+    for (const { id, order } of items) {
+      await tx.projectRisk.update({ where: { id }, data: { order } })
+    }
+    return true
+  }, { isolationLevel: 'Serializable' })
+}
+
+function isSerializationConflict(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2034'
 }
 
 // GET /api/projects/:projectId/dependencies
@@ -170,9 +178,17 @@ router.patch('/dependencies/reorder', asyncHandler(async (req: AuthRequest, res:
     res.status(400).json({ error: 'items must contain unique ids and non-negative integer orders' })
     return
   }
-  if (!await reorderDependencies(projectId, items)) {
-    res.status(400).json({ error: 'items must include every dependency exactly once' })
-    return
+  try {
+    if (!await reorderDependencies(projectId, items)) {
+      res.status(400).json({ error: 'items must include every dependency exactly once' })
+      return
+    }
+  } catch (error) {
+    if (isSerializationConflict(error)) {
+      res.status(409).json({ error: 'Dependencies changed while reordering; please retry' })
+      return
+    }
+    throw error
   }
   res.json({ ok: true })
 }))
@@ -199,23 +215,21 @@ router.post('/risks', asyncHandler(async (req: AuthRequest, res: Response) => {
     res.status(404).json({ error: 'Project not found' })
     return
   }
-
   const description = parseRequiredText(req.body.description)
   if (!description) {
     res.status(400).json({ error: 'description is required' })
     return
   }
-
   const mitigation = parseMitigation(req.body.mitigation)
   if (req.body.mitigation !== undefined && mitigation === undefined) {
     res.status(400).json({ error: 'mitigation must be text or null' })
     return
   }
-
   const order = await prisma.projectRisk.count({ where: { projectId } })
   const risk = await prisma.projectRisk.create({ data: { projectId, description, mitigation: mitigation ?? null, order } })
   res.status(201).json(risk)
 }))
+
 
 // PUT /api/projects/:projectId/risks/:riskId
 router.put('/risks/:riskId', asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -284,9 +298,17 @@ router.patch('/risks/reorder', asyncHandler(async (req: AuthRequest, res: Respon
     res.status(400).json({ error: 'items must contain unique ids and non-negative integer orders' })
     return
   }
-  if (!await reorderRisks(projectId, items)) {
-    res.status(400).json({ error: 'items must include every risk exactly once' })
-    return
+  try {
+    if (!await reorderRisks(projectId, items)) {
+      res.status(400).json({ error: 'items must include every risk exactly once' })
+      return
+    }
+  } catch (error) {
+    if (isSerializationConflict(error)) {
+      res.status(409).json({ error: 'Risks changed while reordering; please retry' })
+      return
+    }
+    throw error
   }
   res.json({ ok: true })
 }))
