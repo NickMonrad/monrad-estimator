@@ -87,6 +87,8 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
         resourceTypes: { include: { namedResources: true } },
         overheads: true,
         discounts: true,
+        dependencies: true,
+        risks: true,
         timelineEntries: true,
         storyTimelineEntries: true,
         capacityPlans: {
@@ -252,6 +254,27 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
           value: disc.value,
           label: disc.label,
           order: disc.order,
+        },
+      })
+    }
+
+    // Copy project-owned dependencies and risks with their persisted order.
+    for (const dependency of source.dependencies ?? []) {
+      await tx.projectDependency.create({
+        data: {
+          projectId: newProject.id,
+          description: dependency.description,
+          order: dependency.order,
+        },
+      })
+    }
+    for (const risk of source.risks ?? []) {
+      await tx.projectRisk.create({
+        data: {
+          projectId: newProject.id,
+          description: risk.description,
+          mitigation: risk.mitigation,
+          order: risk.order,
         },
       })
     }

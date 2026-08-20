@@ -34,6 +34,55 @@ api.interceptors.response.use(
 
 export type BacklogItemType = 'epic' | 'feature' | 'story' | 'task'
 
+export interface ProjectDependency {
+  id: string
+  projectId: string
+  description: string
+  order: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ProjectRisk {
+  id: string
+  projectId: string
+  description: string
+  mitigation: string | null
+  order: number
+  createdAt: string
+  updatedAt: string
+}
+
+export const getProjectDependencies = (projectId: string) =>
+  api.get<ProjectDependency[]>(`/projects/${projectId}/dependencies`).then(r => r.data)
+
+export const createProjectDependency = (projectId: string, data: { description: string; order?: number }) =>
+  api.post<ProjectDependency>(`/projects/${projectId}/dependencies`, data).then(r => r.data)
+
+export const updateProjectDependency = (projectId: string, id: string, data: { description?: string; order?: number }) =>
+  api.put<ProjectDependency>(`/projects/${projectId}/dependencies/${id}`, data).then(r => r.data)
+
+export const deleteProjectDependency = (projectId: string, id: string) =>
+  api.delete(`/projects/${projectId}/dependencies/${id}`).then(r => r.data)
+
+export const reorderProjectDependencies = (projectId: string, items: Array<{ id: string; order: number }>) =>
+  api.patch<ProjectDependency[]>(`/projects/${projectId}/dependencies/reorder`, { items }).then(r => r.data)
+
+export const getProjectRisks = (projectId: string) =>
+  api.get<ProjectRisk[]>(`/projects/${projectId}/risks`).then(r => r.data)
+
+export const createProjectRisk = (projectId: string, data: { description: string; mitigation?: string | null; order?: number }) =>
+  api.post<ProjectRisk>(`/projects/${projectId}/risks`, data).then(r => r.data)
+
+export const updateProjectRisk = (projectId: string, id: string, data: { description?: string; mitigation?: string | null; order?: number }) =>
+  api.put<ProjectRisk>(`/projects/${projectId}/risks/${id}`, data).then(r => r.data)
+
+export const deleteProjectRisk = (projectId: string, id: string) =>
+  api.delete(`/projects/${projectId}/risks/${id}`).then(r => r.data)
+
+export const reorderProjectRisks = (projectId: string, items: Array<{ id: string; order: number }>) =>
+  api.patch<ProjectRisk[]>(`/projects/${projectId}/risks/reorder`, { items }).then(r => r.data)
+
 export interface DuplicatedBacklogItem {
   type: BacklogItemType
   id: string

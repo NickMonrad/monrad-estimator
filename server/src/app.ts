@@ -25,6 +25,8 @@ import csvRoutes from './routes/csv.js'
 import reorderRoutes from './routes/reorder.js'
 import discountRoutes from './routes/discounts.js'
 import overheadRoutes from './routes/overhead.js'
+import projectDependencyRoutes from './routes/projectDependencies.js'
+import projectRiskRoutes from './routes/projectRisks.js'
 import resourceProfileRoutes from './routes/resourceProfile.js'
 import featureDependenciesRouter from './routes/featureDependencies.js'
 import epicDependenciesRouter from './routes/epicDependencies.js'
@@ -66,6 +68,8 @@ app.use('/api/projects/:projectId/backlog', csvRoutes)
 app.use('/api/projects/:projectId/reorder', reorderRoutes)
 app.use('/api/projects/:projectId/discounts', discountRoutes)
 app.use('/api/projects/:projectId/overhead', overheadRoutes)
+app.use('/api/projects/:projectId/dependencies', projectDependencyRoutes)
+app.use('/api/projects/:projectId/risks', projectRiskRoutes)
 app.use('/api/projects/:projectId/resource-profile', resourceProfileRoutes)
 app.use('/api/projects/:projectId/resource-types/:rtId/named-resources', namedResourceRoutes)
 app.use('/api/projects/:projectId/feature-dependencies', featureDependenciesRouter)

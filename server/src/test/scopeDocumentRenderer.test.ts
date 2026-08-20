@@ -157,3 +157,30 @@ describe('renderScopeDocumentHtml — scope hierarchy freshness', () => {
     expect(html).not.toContain('Old Out-of-Scope Feature')
   })
 })
+
+describe('renderScopeDocumentHtml — project context sections', () => {
+  it('renders dependencies and risks with mitigation and honours section toggles', () => {
+    const props = buildProps([])
+    const html = renderScopeDocumentHtml({
+      ...props,
+      sections: { ...props.sections, assumptions: false, dependencies: true, risks: true, ganttChart: false },
+      dependencies: [{ id: 'dependency-1', description: '<p>API access</p>', order: 0 }],
+      risks: [{ id: 'risk-1', description: '<p>Delivery risk</p>', mitigation: '<p>Use a fallback</p>', order: 0 }],
+    })
+
+    expect(html).toContain('Dependencies')
+    expect(html).toContain('API access')
+    expect(html).toContain('Risks')
+    expect(html).toContain('Delivery risk')
+    expect(html).toContain('Use a fallback')
+
+    const hiddenHtml = renderScopeDocumentHtml({
+      ...props,
+      sections: { ...props.sections, assumptions: false, dependencies: false, risks: false, ganttChart: false },
+      dependencies: [{ id: 'dependency-1', description: '<p>API access</p>', order: 0 }],
+      risks: [{ id: 'risk-1', description: '<p>Delivery risk</p>', mitigation: '<p>Use a fallback</p>', order: 0 }],
+    })
+    expect(hiddenHtml).not.toContain('API access')
+    expect(hiddenHtml).not.toContain('Delivery risk')
+  })
+})

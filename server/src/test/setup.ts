@@ -38,6 +38,8 @@ vi.mock('../lib/prisma.js', () => {
       rateCard: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
       rateCardEntry: { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
       projectDiscount: { findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
+      projectDependency: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+      projectRisk: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
       documentTemplate: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
       generatedDocument: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
       passwordResetToken: {
@@ -72,6 +74,8 @@ vi.mock('../lib/prisma.js', () => {
         epicDependency: { deleteMany: vi.fn(), createMany: vi.fn() },
         featureDependency: { deleteMany: vi.fn(), createMany: vi.fn() },
         projectOverhead: { deleteMany: vi.fn(), createMany: vi.fn() },
+        projectDependency: { update: vi.fn() },
+        projectRisk: { update: vi.fn() },
         backlogSnapshot: { create: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
         capacityProfile: capacityProfileMocks,
         capacitySegment: capacitySegmentMocks,
