@@ -70,30 +70,60 @@ function hasText(value: string): boolean {
 
 /**
  * TipTap stores top-level paragraphs and list items as HTML blocks. Extract
- * those blocks without adding a general HTML parser; unsupported shapes stay
- * as one complete field so wording and formatting remain unchanged.
+ * those blocks with a small balanced-tag scan; unsupported or ambiguous shapes
+ * stay as one complete field so wording and formatting remain unchanged.
  */
+const voidHtmlTags = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
+
+interface OpenHtmlTag {
+  name: string
+  start: number
+  isBlock: boolean
+}
+
 export function extractAssumptionEntries(value: string | null | undefined): string[] {
   if (!value || !hasText(value)) return []
   const trimmed = value.trim()
   if (!trimmed.startsWith('<')) return [trimmed]
 
-  const blockPattern = /<(p|li)\b[^>]*>/gi
-  const lower = trimmed.toLowerCase()
+  const tagPattern = /<!--[\s\S]*?-->|<\/?([a-z][\w:-]*)(?:\s[^<>]*?)?\/?>/gi
+  const stack: OpenHtmlTag[] = []
   const blocks: string[] = []
+  let cursor = 0
   let match: RegExpExecArray | null
-  while ((match = blockPattern.exec(trimmed)) !== null) {
-    const tag = match[1].toLowerCase()
-    const closing = `</${tag}>`
-    const closingIndex = lower.indexOf(closing, blockPattern.lastIndex)
-    if (closingIndex < 0) continue
-    const end = closingIndex + closing.length
-    const block = trimmed.slice(match.index, end)
-    if (hasText(block)) blocks.push(block)
-    blockPattern.lastIndex = end
+
+  while ((match = tagPattern.exec(trimmed)) !== null) {
+    const rawTag = match[0]
+    const textBeforeTag = trimmed.slice(cursor, match.index)
+    if (textBeforeTag.trim() && (stack.length === 0 || stack[stack.length - 1].name === 'ul' || stack[stack.length - 1].name === 'ol')) {
+      return [trimmed]
+    }
+    cursor = match.index + rawTag.length
+
+    if (!match[1]) continue
+    const name = match[1].toLowerCase()
+    const isClosing = rawTag.startsWith('</')
+    const isSelfClosing = /\/\s*>$/.test(rawTag) || voidHtmlTags.has(name)
+
+    if (isClosing) {
+      const openTag = stack.pop()
+      if (!openTag || openTag.name !== name) return [trimmed]
+      if (openTag.isBlock) blocks.push(trimmed.slice(openTag.start, cursor))
+      continue
+    }
+
+    if (stack.length === 0 && name !== 'p' && name !== 'ul' && name !== 'ol') return [trimmed]
+    if ((name === 'ul' || name === 'ol') && stack.length > 0) return [trimmed]
+    if (name === 'li' && stack.some(tag => tag.name === 'p' || tag.name === 'li')) return [trimmed]
+    if (name === 'p' && stack.some(tag => tag.name === 'p')) return [trimmed]
+
+    const isBlock = name === 'p' ? stack.length === 0 : name === 'li' && ['ul', 'ol'].includes(stack[stack.length - 1]?.name ?? '')
+    if (name === 'li' && !isBlock) return [trimmed]
+    if (!isSelfClosing) stack.push({ name, start: match.index, isBlock })
   }
 
-  return blocks.length > 0 ? blocks : [trimmed]
+  if (trimmed.slice(cursor).trim() || stack.length > 0 || blocks.length === 0) return [trimmed]
+  return blocks.filter(hasText)
 }
 
 export function assumptionComparisonKey(value: string): string {

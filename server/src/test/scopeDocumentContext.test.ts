@@ -15,6 +15,56 @@ describe('scope document context aggregation', () => {
     ])
   })
 
+  it('deduplicates exact and normalised duplicates across work items', () => {
+    const context = buildScopeDocumentContext([
+      {
+        id: 'epic-2', name: 'Second', order: 2, isActive: true, assumptions: '<p>client WILL provide   API access.</p>', features: [],
+      },
+      {
+        id: 'epic-1', name: 'First', order: 1, isActive: true, assumptions: '<p>Client will provide API access.</p>', features: [],
+      },
+    ], [], [])
+
+    expect(context.assumptions).toEqual([{ label: 'First', text: '<p>Client will provide API access.</p>' }])
+  })
+
+  it.each([
+    ['case-only difference', '<p>Client will provide API access.</p>', '<p>client WILL provide API access.</p>'],
+    ['leading/trailing whitespace difference', '<p>  Client will provide API access.  </p>', 'Client will provide API access.'],
+    ['repeated internal whitespace difference', '<p>Client will provide   API access.</p>', 'Client will provide API access.'],
+    ['rich-text/plain-text equivalence', '<p>Client will provide API access.</p>', 'Client will provide API access.'],
+    ['Unicode-normalised equivalent', '<p>Cafe\u0301 access.</p>', '<p>Café access.</p>'],
+  ])('deduplicates %s', (_name, first, second) => {
+    expect(deduplicateAssumptions([
+      { label: 'First', text: first },
+      { label: 'Second', text: second },
+    ])).toEqual([{ label: 'First', text: first }])
+  })
+
+  it('keeps materially different assumptions and ignores empty values', () => {
+    const context = buildScopeDocumentContext([
+      { id: 'epic-1', name: 'Epic', order: 0, isActive: true, assumptions: null, features: [] },
+      { id: 'epic-2', name: 'Empty', order: 1, isActive: true, assumptions: '<p></p>', features: [] },
+      { id: 'epic-3', name: 'Distinct', order: 2, isActive: true, assumptions: '<p>Client will provide production API access.</p>', features: [] },
+      { id: 'epic-4', name: 'Base', order: 3, isActive: true, assumptions: '<p>Client will provide API access.</p>', features: [] },
+    ], [], [])
+
+    expect(context.assumptions.map(item => item.text)).toEqual([
+      '<p>Client will provide production API access.</p>',
+      '<p>Client will provide API access.</p>',
+    ])
+  })
+
+  it('keeps nested list markup as one complete assumption entry', () => {
+    const nested = '<ul><li>Parent<ul><li>Child</li></ul></li></ul>'
+    expect(extractAssumptionEntries(nested)).toEqual([nested])
+  })
+
+  it('keeps malformed markup as one complete assumption entry', () => {
+    const malformed = '<p>First</p><p>Second'
+    expect(extractAssumptionEntries(malformed)).toEqual([malformed])
+  })
+
   it('deduplicates equivalent assumptions while preserving the first source label', () => {
     const entries = [
       { label: 'Epic A', text: '<p>Client will provide API access.</p>' },

@@ -102,12 +102,9 @@ jobs:
           VITE_API_URL: http://localhost:3001
 
       # ── Docker-first E2E lifecycle ────────────────────────────────
-      # ubuntu-latest already supplies Chromium's runtime libraries. Avoid
-      # Playwright's --with-deps apt phase, whose Azure mirror can hang.
       - name: Install Playwright Chromium
-        timeout-minutes: 10
         working-directory: e2e
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Run Docker-first E2E lifecycle
         run: npm run test:e2e:local
