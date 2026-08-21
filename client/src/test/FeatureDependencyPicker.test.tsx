@@ -59,6 +59,24 @@ describe('FeatureDependencyPicker', () => {
       'Release Beta / Beta Second',
     ])
   })
+  it('keeps features grouped when epics share an order', () => {
+    const equalOrderEntries = [
+      entry({ featureId: 'a-2', featureName: 'A2', epicId: 'epic-a', epicName: 'Epic A', epicOrder: 1, featureOrder: 2 }),
+      entry({ featureId: 'b-1', featureName: 'B1', epicId: 'epic-b', epicName: 'Epic B', epicOrder: 1, featureOrder: 1 }),
+      entry({ featureId: 'a-1', featureName: 'A1', epicId: 'epic-a', epicName: 'Epic A', epicOrder: 1, featureOrder: 1 }),
+      entry({ featureId: 'b-2', featureName: 'B2', epicId: 'epic-b', epicName: 'Epic B', epicOrder: 1, featureOrder: 2 }),
+    ]
+
+    renderPicker({ currentFeatureId: 'selected-feature', entries: equalOrderEntries })
+    fireEvent.click(screen.getByRole('button', { name: 'Add dependency' }))
+
+    expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual([
+      'Epic A / A1',
+      'Epic A / A2',
+      'Epic B / B1',
+      'Epic B / B2',
+    ])
+  })
 
   it('filters by feature, epic, and full path case-insensitively', () => {
     renderPicker()
