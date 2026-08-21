@@ -1,15 +1,8 @@
 /**
  * E2E tests for the Gantt chart on the Timeline page.
  *
- * The current implementation uses a CSS-grid Gantt layout rendered
- * directly in TimelinePage.tsx.  Feature bars are coloured <div> cells
- * (class "h-6 cursor-pointer") positioned via CSS grid-column.
- *
- * Tests cover:
- *   1. Update timeline populates the Gantt grid with feature bars.
- *   2. The epic feature-mode button toggles sequential ↔ parallel.
- *   3. Clicking a feature bar (or label) opens the inline edit panel.
- *   4. Saving a manual start week via inline edit marks the bar with ✏.
+ * Tests cover chart rendering, inline editing, and the searchable feature
+ * dependency picker.
  */
 import { test, expect, type Page } from '@playwright/test'
 import { login, createProject, quickSchedule } from './helpers'
@@ -154,6 +147,72 @@ test.describe('Gantt Chart', () => {
     // After the server persists isManual=true the Gantt re-renders and the
     // edit panel shows the "↺ Reset to auto" button (only visible when isManual=true)
     await expect(page.getByRole('button', { name: /reset to auto/i })).toBeVisible({ timeout: 10_000 })
+  })
+  test('searches and creates a feature dependency in Timeline order', async ({ page }) => {
+    test.setTimeout(60_000)
+    const suffix = Date.now()
+    const projectName = `E2E Dependency Picker ${suffix}`
+    const epics = [
+      { name: `Picker Alpha ${suffix}`, features: [`Alpha First ${suffix}`, `Alpha Second ${suffix}`] },
+      { name: `Picker Beta ${suffix}`, features: [`Beta First ${suffix}`, `Beta Second ${suffix}`] },
+    ]
+
+    await login(page)
+    await createProject(page, projectName)
+    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+    await page.getByRole('button', { name: /backlog/i }).click()
+
+    for (const epic of epics) {
+      await page.getByRole('button', { name: /add epic/i }).click()
+      await page.getByPlaceholder(/epic name/i).fill(epic.name)
+      await page.getByRole('button', { name: /save epic/i }).click()
+      await expect(page.getByText(epic.name, { exact: true })).toBeVisible()
+      for (const feature of epic.features) {
+        await page.getByText('+ Add feature').last().click()
+        await page.getByPlaceholder('Feature name *').fill(feature)
+        await page.getByRole('button', { name: /^save$/i }).click()
+        await expect(page.getByText(feature, { exact: true })).toBeVisible()
+      }
+    }
+
+    const hubUrl = page.url().replace('/backlog', '')
+    await page.goto(hubUrl)
+    await page.getByRole('button', { name: /timeline/i }).click()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible()
+    await page.locator('input[type="date"]').fill('2026-06-01')
+    await quickSchedule(page)
+    await expect(page.getByText(/features scheduled/)).toBeVisible({ timeout: 15_000 })
+
+    await page.locator(`[title="Alpha First ${suffix}"]`).click()
+    const picker = page.getByRole('button', { name: 'Add dependency' })
+    await picker.click()
+
+    const search = page.getByRole('combobox', { name: 'Search dependencies' })
+    await expect(search).toBeFocused()
+    await search.fill('second')
+    await expect(page.getByRole('option')).toHaveText([
+      `Picker Alpha ${suffix} / Alpha Second ${suffix}`,
+      `Picker Beta ${suffix} / Beta Second ${suffix}`,
+    ])
+
+    await search.fill('beta')
+    await expect(page.getByRole('option')).toHaveText([
+      `Picker Beta ${suffix} / Beta First ${suffix}`,
+      `Picker Beta ${suffix} / Beta Second ${suffix}`,
+    ])
+    await search.press('Escape')
+    await expect(page.getByRole('combobox', { name: 'Search dependencies' })).not.toBeVisible()
+
+    await picker.click()
+    await search.fill('second')
+    await search.press('ArrowDown')
+    await search.press('Enter')
+    await expect(page.getByTestId('dep-section')).toContainText(`Alpha Second ${suffix}`)
+
+    await page.reload()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible()
+    await page.locator(`[title="Alpha First ${suffix}"]`).click()
+    await expect(page.getByTestId('dep-section')).toContainText(`Alpha Second ${suffix}`)
   })
 })
 
