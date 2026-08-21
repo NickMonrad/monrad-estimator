@@ -32,7 +32,11 @@ vi.mock('@/components/layout/AppLayout', () => ({
 }))
 
 vi.mock('@/components/timeline/GanttChart', () => ({
-  default: () => <div data-testid="gantt-chart" />,
+  default: ({ setEditingFeatureId }: { setEditingFeatureId?: (id: string | null) => void }) => (
+    <div data-testid="gantt-chart">
+      <button onClick={() => setEditingFeatureId?.('feature-1')}>Open test feature</button>
+    </div>
+  ),
 }))
 
 vi.mock('@/components/timeline/ResourceHistogram', () => ({
@@ -159,6 +163,7 @@ describe('TimelinePage — Planning Settings', () => {
     mockGet.mockImplementation((url: string) => {
       if (url.includes('/timeline')) return Promise.resolve({ data: mockTimeline })
       if (url.includes('/resource-types')) return Promise.resolve({ data: mockResourceTypes })
+      if (url.includes('/feature-dependencies')) return Promise.resolve({ data: [] })
       return Promise.resolve({ data: mockProject })
     })
 
@@ -347,6 +352,23 @@ describe('TimelinePage — Planning Settings', () => {
     expect(
       screen.getByText(/update the timeline to recalculate dates from the latest backlog, dependencies, and resource setup/i),
     ).toBeInTheDocument()
+  })
+  it('surfaces feature dependency creation errors', async () => {
+    mockTimeline = createTimeline({
+      entries: [
+        defaultTimelineEntry,
+        { ...defaultTimelineEntry, featureId: 'feature-2', featureName: 'Feature Two', featureOrder: 2 },
+      ],
+    })
+    mockPost.mockRejectedValueOnce({ response: { data: { error: 'Dependency rejected' } } })
+
+    renderPage()
+    await screen.findByText('Planning Settings')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open test feature' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add dependency' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Epic One / Feature Two' }))
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Dependency rejected'))
   })
 })
 
