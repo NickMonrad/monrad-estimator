@@ -168,17 +168,10 @@ test.describe('Timeline', () => {
   test('feature dependency section visible in inline edit panel', async ({ page }) => {
     const { featureName } = await setupTimeline(page)
 
-    // Click the feature name label in the Gantt label column (a cursor-pointer div).
-    // Use .first() because the feature name text may also appear in other contexts.
     await page.getByText(featureName).first().click()
 
-    // The inline edit panel (bg-blue-50) should appear below the feature row.
-    // It contains the "Depends on" section and the "+ Add dependency…" select.
     await expect(page.getByText(/depends on/i).first()).toBeVisible({ timeout: 8_000 })
-
-    // The add-dependency select renders as a combobox role; its first option is
-    // the empty placeholder "+ Add dependency…"
-    await expect(page.getByRole('combobox').filter({ hasText: /add dependency/i })).toBeVisible({
+    await expect(page.getByRole('button', { name: 'Add dependency' })).toBeVisible({
       timeout: 8_000,
     })
   })

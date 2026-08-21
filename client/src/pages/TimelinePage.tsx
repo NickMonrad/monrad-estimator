@@ -9,6 +9,7 @@ import { useIsDark } from '../hooks/useIsDark'
 import AppLayout from '../components/layout/AppLayout'
 import type { Project, ResourceType, TimelineSummary, TimelineEntry, NamedResourceEntry } from '../types/backlog'
 import GanttChart from '../components/timeline/GanttChart'
+import FeatureDependencyPicker from '../components/timeline/FeatureDependencyPicker'
 import ResourceHistogram from '../components/timeline/ResourceHistogram'
 import TimelineTooltip from '../components/timeline/TimelineTooltip'
 import { getEpicColour } from '../lib/epicColours'
@@ -300,6 +301,7 @@ export default function TimelinePage() {
   const [editForm, setEditForm] = useState({ startWeek: '', durationWeeks: '' })
   const [editColour, setEditColour] = useState<string | null>(null)
   const [scheduleStale, setScheduleStale] = useState(false)
+  const [featureDepError, setFeatureDepError] = useState<string | null>(null)
   const [namedResourceError, setNamedResourceError] = useState<string | null>(null)
   const rlKey = `timeline.resourceLevel.${projectId}`
   const [resourceLevel, setResourceLevel] = useState(() => localStorage.getItem(rlKey) === 'true')
@@ -569,9 +571,13 @@ export default function TimelinePage() {
     onSuccess: () => {
       // Refresh both the dep list (sidebar badges) and the timeline (Gantt arrows).
       // Do NOT call updateEntry here — that would set isManual=true as a side effect.
+      setFeatureDepError(null)
       qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
       invalidateProjectPlanning(qc, projectId)
       setScheduleStale(true)
+    },
+    onError: (err: unknown) => {
+      setFeatureDepError(apiErrorMessage(err, 'Failed to add dependency'))
     },
   })
 
@@ -1641,23 +1647,15 @@ export default function TimelinePage() {
                           )}
                         </div>
                         <div className="flex items-center gap-2">
-                          <select
-                            className="border border-gray-200 dark:border-gray-600 rounded px-2 py-0.5 text-xs text-gray-700 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                            value=""
-                            onChange={e => {
-                              if (e.target.value) {
-                                addFeatureDep.mutate({ featureId: entry.featureId, dependsOnId: e.target.value })
-                                e.target.value = ''
-                              }
-                            }}
-                          >
-                            <option value="">+ Add dependency…</option>
-                            {timeline?.entries
-                              .filter(e2 => e2.featureId !== entry.featureId && !featureDeps.some(d => d.featureId === entry.featureId && d.dependsOnId === e2.featureId))
-                              .map(e2 => (
-                                <option key={e2.featureId} value={e2.featureId}>{e2.epicName} / {e2.featureName}</option>
-                              ))}
-                          </select>
+                          <FeatureDependencyPicker
+                            currentFeatureId={entry.featureId}
+                            entries={timeline?.entries ?? []}
+                            featureDependencies={featureDeps}
+                            onAddDependency={(featureId, dependsOnId) => addFeatureDep.mutate({ featureId, dependsOnId })}
+                            onOpen={() => setFeatureDepError(null)}
+                            error={featureDepError}
+                            isAdding={addFeatureDep.isPending}
+                          />
                         </div>
                       </div>
                     </div>

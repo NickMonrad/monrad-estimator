@@ -118,8 +118,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 | start date persists after navigation (bug #44) | Sets a start date, navigates away, returns — date is still present |
 | quick schedule shows projected end date | Create project with epic+feature, run Quick schedule, assert "Projected end:" appears |
 | sequential/parallel toggle is visible on epic rows | After scheduling, the mode-toggle button is rendered on every epic header row in the Gantt |
-| feature dependency section visible in inline edit panel | Clicking a feature label opens the inline panel which contains the "Depends on" section and the add-dependency select |
-
+| feature dependency section visible in inline edit panel | Clicking a feature label opens the inline panel which contains the "Depends on" section and the searchable "Add dependency" picker |
 #### `Starting Team Finder drawer — open and close` describe block (1 test — Phase 4, issue #233)
 
 | Test | Description |
@@ -182,9 +181,8 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `gantt.spec.ts` — Gantt Chart (4 tests)
-
-Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each test calls `setupTimeline()` which logs in, creates a project with 1 epic + 1 feature, navigates to the Timeline page, fills the start date, runs Quick schedule, and waits for the "X features scheduled" footer.
+### `gantt.spec.ts` — Gantt Chart (5 tests)
+Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each basic chart test calls `setupTimeline()` which logs in, creates a project with 1 epic + 1 feature, navigates to the Timeline page, fills the start date, runs Quick schedule, and waits for the "X features scheduled" footer. The dependency-picker test creates two epics with two features each and exercises the searchable picker.
 
 | Test | Description |
 |------|-------------|
@@ -192,6 +190,7 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 | epic feature-mode button toggles between sequential and parallel | Clicks the button with `aria-label="sequential"`, asserts it switches to `aria-label="parallel"` |
 | clicking a feature bar opens the inline edit panel | Clicks `[title="{featureName}"]` (a `<span>`), asserts Start week + duration inputs appear |
 | saving a manual start week shows the ✏ override indicator | Sets start week to 2, saves, asserts the "↺ Reset to auto" button appears (only rendered when `isManual=true`) |
+| searches and creates a feature dependency in Timeline order | Creates two epics with two features, verifies search focus and path filtering, checks Timeline-order options, selects with ArrowDown + Enter, escapes without changing dependencies, and confirms the persisted dependency after reload |
 
 ---
 
