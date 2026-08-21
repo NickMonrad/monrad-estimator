@@ -11,13 +11,13 @@ interface FeatureDependencyPickerProps {
   isAdding?: boolean
 }
 
-function compareTimelineOrder(a: TimelineEntry & { inputIndex: number }, b: TimelineEntry & { inputIndex: number }) {
-  const epicOrder = (a.epicOrder ?? 0) - (b.epicOrder ?? 0)
-  if (epicOrder !== 0) return epicOrder
+type IndexedTimelineEntry = TimelineEntry & { inputIndex: number }
 
+function compareFeatureOrder(a: IndexedTimelineEntry, b: IndexedTimelineEntry) {
   const featureOrder = (a.featureOrder ?? 0) - (b.featureOrder ?? 0)
   return featureOrder !== 0 ? featureOrder : a.inputIndex - b.inputIndex
 }
+
 
 export default function FeatureDependencyPicker({
   currentFeatureId,
@@ -42,10 +42,35 @@ export default function FeatureDependencyPicker({
         .map(dependency => dependency.dependsOnId),
     )
 
-    return entries
+    const indexedCandidates = entries
       .map((entry, inputIndex) => ({ ...entry, inputIndex }))
       .filter(entry => entry.featureId !== currentFeatureId && !existingDependencyIds.has(entry.featureId))
-      .sort(compareTimelineOrder)
+
+    const groups = new Map<string, {
+      epicOrder: number
+      firstInputIndex: number
+      entries: IndexedTimelineEntry[]
+    }>()
+
+    for (const candidate of indexedCandidates) {
+      let group = groups.get(candidate.epicId)
+      if (!group) {
+        group = {
+          epicOrder: candidate.epicOrder ?? 0,
+          firstInputIndex: candidate.inputIndex,
+          entries: [],
+        }
+        groups.set(candidate.epicId, group)
+      }
+      group.entries.push(candidate)
+    }
+
+    return Array.from(groups.values())
+      .sort((a, b) => {
+        const epicOrder = a.epicOrder - b.epicOrder
+        return epicOrder !== 0 ? epicOrder : a.firstInputIndex - b.firstInputIndex
+      })
+      .flatMap(group => group.entries.sort(compareFeatureOrder))
   }, [currentFeatureId, entries, featureDependencies])
 
   const filteredCandidates = useMemo(() => {
