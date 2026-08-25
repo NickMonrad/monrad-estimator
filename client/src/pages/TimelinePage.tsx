@@ -1491,7 +1491,7 @@ export default function TimelinePage() {
                   if (!entry) return
                   updateStoryTimeline.mutate({ storyId, startWeek: newStartWeek, durationWeeks: entry.durationWeeks })
                 }}
-                onAddFeatureDep={(featureId, dependsOnId) => addFeatureDep.mutate({ featureId, dependsOnId })}
+                onAddFeatureDep={(featureId, dependsOnId) => addFeatureDep.mutateAsync({ featureId, dependsOnId })}
                 onRemoveFeatureDep={(featureId, dependsOnId) => removeFeatureDep.mutate({ featureId, dependsOnId })}
                 onAddStoryDep={(storyId, dependsOnId) => addStoryDep.mutate({ storyId, dependsOnId })}
                 onRemoveStoryDep={(storyId, dependsOnId) => removeStoryDep.mutate({ storyId, dependsOnId })}
