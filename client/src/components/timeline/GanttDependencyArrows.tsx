@@ -20,6 +20,14 @@ function bezierArrow(x1: number, y1: number, x2: number, y2: number): string {
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
+export interface GanttDependencyDragPreview {
+  startX: number
+  startY: number
+  currentX: number
+  currentY: number
+  targetValid: boolean
+}
+
 interface GanttDependencyArrowsProps {
   featureDependencies: FeatureDependency[]
   storyDependencies: StoryDependency[]
@@ -31,6 +39,7 @@ interface GanttDependencyArrowsProps {
   weekOffset: number
   colW: number
   dragging: GanttDraggingState | null
+  dependencyPreview?: GanttDependencyDragPreview | null
 }
 
 // ---------------------------------------------------------------------------
@@ -47,6 +56,7 @@ export default function GanttDependencyArrows({
   weekOffset,
   colW,
   dragging,
+  dependencyPreview,
 }: GanttDependencyArrowsProps) {
   return (
     <>
@@ -55,6 +65,23 @@ export default function GanttDependencyArrows({
           <path d="M0,0 L0,6 L8,3 z" fill={DEP_ARROW_COLOR} />
         </marker>
       </defs>
+      {dependencyPreview && (
+        <path
+          data-testid="dependency-drag-preview"
+          d={bezierArrow(
+            dependencyPreview.startX,
+            dependencyPreview.startY,
+            dependencyPreview.currentX,
+            dependencyPreview.currentY,
+          )}
+          stroke={dependencyPreview.targetValid ? '#2563eb' : '#dc2626'}
+          strokeWidth={2}
+          strokeDasharray="6 4"
+          fill="none"
+          markerEnd="url(#arrow)"
+          style={{ pointerEvents: 'none' }}
+        />
+      )}
 
       {/* Feature dependency arrows */}
       {featureDependencies.map(dep => {
@@ -79,6 +106,7 @@ export default function GanttDependencyArrows({
         return (
           <path
             key={`fdep-${dep.dependsOnId}-${dep.featureId}`}
+            data-testid={`dependency-arrow-${dep.dependsOnId}-${dep.featureId}`}
             d={bezierArrow(x1, y1, x2, y2)}
             stroke={DEP_ARROW_COLOR}
             strokeWidth={1.5}

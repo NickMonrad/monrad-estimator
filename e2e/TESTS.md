@@ -181,8 +181,8 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `gantt.spec.ts` — Gantt Chart (5 tests)
-Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each basic chart test calls `setupTimeline()` which logs in, creates a project with 1 epic + 1 feature, navigates to the Timeline page, fills the start date, runs Quick schedule, and waits for the "X features scheduled" footer. The dependency-picker test creates two epics with two features each and exercises the searchable picker.
+### `gantt.spec.ts` — Gantt Chart (9 tests)
+Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each basic chart test calls `setupTimeline()` which logs in, creates a project with 1 epic + 1 feature, navigates to the Timeline page, fills the start date, runs Quick schedule, and waits for the "X features scheduled" footer. Dependency-drag tests create two features and exercise right/left handles, persistence, target validation, duplicate prevention, and server cycle rejection.
 
 | Test | Description |
 |------|-------------|
@@ -191,6 +191,10 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 | clicking a feature bar opens the inline edit panel | Clicks `[title="{featureName}"]` (a `<span>`), asserts Start week + duration inputs appear |
 | saving a manual start week shows the ✏ override indicator | Sets start week to 2, saves, asserts the "↺ Reset to auto" button appears (only rendered when `isManual=true`) |
 | searches and creates a feature dependency in Timeline order | Creates two epics with two features, verifies search focus and path filtering, checks Timeline-order options, selects with ArrowDown + Enter, escapes without changing dependencies, and confirms the persisted dependency after reload |
+| dragging a right dependency handle creates and persists an edge | Creates two features, drags Feature A's right handle to Feature B, confirms the arrow and dependency after reload |
+| dragging a left dependency handle maps the reverse direction | Drags Feature B's left handle to Feature A and confirms the same `Feature B depends on Feature A` edge |
+| self and duplicate dependency drops are blocked | Attempts a self-drop, creates a valid dependency, then repeats it and asserts clear inline feedback |
+| cyclic dependency rejection is surfaced | Creates one edge, attempts the reverse edge, and asserts the server's circular-reference error is shown |
 
 ---
 

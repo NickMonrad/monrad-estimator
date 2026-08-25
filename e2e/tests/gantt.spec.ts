@@ -4,7 +4,7 @@
  * Tests cover chart rendering, inline editing, and the searchable feature
  * dependency picker.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Page, type Locator } from '@playwright/test'
 import { login, createProject, quickSchedule } from './helpers'
 
 // ---------------------------------------------------------------------------
@@ -18,11 +18,14 @@ import { login, createProject, quickSchedule } from './helpers'
  */
 async function setupTimeline(
   page: Page,
-): Promise<{ projectName: string; epicName: string; featureName: string }> {
+  featureCount = 1,
+): Promise<{ projectName: string; epicName: string; featureName: string; featureNames: string[] }> {
   const suffix = Date.now()
   const projectName = `E2E Gantt ${suffix}`
-  const epicName    = `GanttEpic ${suffix}`
-  const featureName = `GanttFeat ${suffix}`
+  const epicName = `GanttEpic ${suffix}`
+  const featureNames = Array.from({ length: featureCount }, (_, index) =>
+    index === 0 ? `GanttFeat ${suffix}` : `GanttFeat ${suffix} ${index + 1}`,
+  )
 
   await login(page)
   await createProject(page, projectName)
@@ -39,12 +42,14 @@ async function setupTimeline(
   await page.getByRole('button', { name: /save epic/i }).click()
   await expect(page.getByText(epicName)).toBeVisible({ timeout: 8_000 })
 
-  // Add feature (epic expands after creation, revealing "+ Add feature")
-  await expect(page.getByText('+ Add feature')).toBeVisible({ timeout: 5_000 })
-  await page.getByText('+ Add feature').click()
-  await page.getByPlaceholder('Feature name *').fill(featureName)
-  await page.getByRole('button', { name: /^save$/i }).click()
-  await expect(page.getByText(featureName)).toBeVisible({ timeout: 8_000 })
+  // Add features (the epic expands after each creation, revealing "+ Add feature")
+  for (const featureName of featureNames) {
+    await expect(page.getByText('+ Add feature')).toBeVisible({ timeout: 5_000 })
+    await page.getByText('+ Add feature').click()
+    await page.getByPlaceholder('Feature name *').fill(featureName)
+    await page.getByRole('button', { name: /^save$/i }).click()
+    await expect(page.getByText(featureName)).toBeVisible({ timeout: 8_000 })
+  }
 
   // Navigate hub → Timeline
   const hubUrl = page.url().replace('/backlog', '')
@@ -64,13 +69,25 @@ async function setupTimeline(
 
   // Wait until the Gantt footer appears — it is only rendered once
   // timeline.entries.length > 0, so it's the earliest reliable signal
-  // that the CSS-grid chart has been fully populated.
+  // that the chart has been fully populated.
   await expect(page.getByText(/features scheduled/)).toBeVisible({ timeout: 15_000 })
 
-  return { projectName, epicName, featureName }
+  return { projectName, epicName, featureName: featureNames[0], featureNames }
 }
 
-// ---------------------------------------------------------------------------
+async function dragDependencyHandle(page: Page, handle: Locator, targetFeature: Locator) {
+  await handle.scrollIntoViewIfNeeded()
+  await targetFeature.scrollIntoViewIfNeeded()
+  const handleBox = await handle.boundingBox()
+  const targetBox = await targetFeature.locator('rect').first().boundingBox()
+  if (!handleBox || !targetBox) throw new Error('Dependency drag geometry is unavailable')
+  const handlePoint = { x: handleBox.x + handleBox.width / 2, y: handleBox.y + handleBox.height / 2 }
+  await page.mouse.move(handlePoint.x, handlePoint.y)
+  await page.mouse.down()
+  await expect(page.getByTestId('dependency-drag-preview')).toBeVisible()
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 5 })
+  await page.mouse.up()
+}
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -206,14 +223,71 @@ test.describe('Gantt Chart', () => {
     await picker.click()
     await search.fill('second')
     await search.press('ArrowDown')
+    await expect(page.getByRole('option', { name: `Picker Alpha ${suffix} / Alpha Second ${suffix}` })).toHaveAttribute('aria-selected', 'true')
     await search.press('Enter')
-    await expect(page.getByTestId('dep-section')).toContainText(`Alpha Second ${suffix}`)
 
     await page.reload()
     await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible()
     await page.locator(`[title="Alpha First ${suffix}"]`).click()
     await expect(page.getByTestId('dep-section')).toContainText(`Alpha Second ${suffix}`)
   })
+  test('dragging a right handle creates and persists a feature dependency', async ({ page }) => {
+    test.setTimeout(60_000)
+    const { featureNames } = await setupTimeline(page, 2)
+    const source = page.locator(`[data-feature-name="${featureNames[0]}"]`)
+    const target = page.locator(`[data-feature-name="${featureNames[1]}"]`)
+
+    const rightHandle = source.getByRole('button', { name: 'Create dependency from this feature' })
+    await expect(rightHandle).toBeVisible()
+    await dragDependencyHandle(page, rightHandle, target)
+    await expect(page.getByRole('status')).toHaveText('Dependency created.')
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible()
+    await page.locator(`[title="${featureNames[1]}"]`).click()
+    await expect(page.getByTestId('dep-section')).toContainText(featureNames[0])
+  })
+
+  test('dragging a left handle uses the reverse UI direction mapping', async ({ page }) => {
+    test.setTimeout(60_000)
+    const { featureNames } = await setupTimeline(page, 2)
+    const source = page.locator(`[data-feature-name="${featureNames[1]}"]`)
+    const target = page.locator(`[data-feature-name="${featureNames[0]}"]`)
+
+    await dragDependencyHandle(page, source.getByRole('button', { name: 'Create dependency to this feature' }), target)
+    await expect(page.getByRole('status')).toHaveText('Dependency created.')
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toBeVisible()
+  })
+
+  test('blocks self and duplicate dependency drops in the chart', async ({ page }) => {
+    test.setTimeout(60_000)
+    const { featureNames } = await setupTimeline(page, 2)
+    const source = page.locator(`[data-feature-name="${featureNames[0]}"]`)
+    const target = page.locator(`[data-feature-name="${featureNames[1]}"]`)
+
+    const rightHandle = source.getByRole('button', { name: 'Create dependency from this feature' })
+    await dragDependencyHandle(page, rightHandle, source)
+    await expect(page.getByRole('alert')).toHaveText(/cannot depend on itself/i)
+
+    await dragDependencyHandle(page, rightHandle, target)
+    await expect(page.getByRole('status')).toHaveText('Dependency created.')
+    await dragDependencyHandle(page, rightHandle, target)
+    await expect(page.getByRole('alert')).toHaveText(/already exists/i)
+  })
+
+  test('surfaces a server-rejected cyclic dependency drop', async ({ page }) => {
+    test.setTimeout(60_000)
+    const { featureNames } = await setupTimeline(page, 2)
+    const first = page.locator(`[data-feature-name="${featureNames[0]}"]`)
+    const second = page.locator(`[data-feature-name="${featureNames[1]}"]`)
+
+    await dragDependencyHandle(page, second.getByRole('button', { name: 'Create dependency to this feature' }), first)
+    await expect(page.getByRole('status')).toHaveText('Dependency created.')
+    await dragDependencyHandle(page, first.getByRole('button', { name: 'Create dependency to this feature' }), second)
+    await expect(page.getByRole('alert')).toHaveText(/circular reference/i)
+  })
+
 })
 
 test.describe('Timeline Gantt UX — scale toggle, expand/collapse, allocation', () => {
