@@ -184,7 +184,6 @@ export default function FeatureDependencyPicker({
                     id={`${listboxId}-${candidate.featureId}`}
                     role="option"
                     aria-selected={activeIndex === index}
-                    onMouseEnter={() => setActiveIndex(index)}
                     onMouseDown={event => event.preventDefault()}
                     onClick={() => selectCandidate(candidate.featureId)}
                     className={`cursor-pointer rounded px-2 py-1 text-xs text-gray-700 dark:text-gray-200 ${activeIndex === index ? 'bg-blue-100 dark:bg-blue-900/50' : 'hover:bg-gray-50 dark:hover:bg-gray-700'}`}

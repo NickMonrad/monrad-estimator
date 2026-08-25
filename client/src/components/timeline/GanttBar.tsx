@@ -1,5 +1,5 @@
 import type { TimelineEntry } from '../../types/backlog'
-import type { GanttRow, StoryTimelineEntry, GanttDraggingState } from '../../hooks/useGanttLayout'
+import type { GanttRow, StoryTimelineEntry, GanttDraggingState, DependencyDragDirection } from '../../hooks/useGanttLayout'
 import { EPIC_ROW_H, FEAT_ROW_H, STORY_ROW_H } from '../../hooks/useGanttLayout'
 import { getEpicColour } from '../../lib/epicColours'
 
@@ -25,6 +25,9 @@ interface GanttBarProps {
   onStoryDragStart: (e: React.MouseEvent, storyEntry: StoryTimelineEntry) => void
   onFeatureEdit: (featureId: string) => void
   onStoryEdit: (storyId: string) => void
+  onDependencyDragStart: (e: React.MouseEvent | React.PointerEvent, entry: TimelineEntry, direction: DependencyDragDirection) => void
+  dependencyDragActive: boolean
+  dependencyTargetState: 'valid' | 'invalid' | null
   onTooltipShow: (x: number, y: number, content: string) => void
   onTooltipHide: () => void
 }
@@ -63,6 +66,9 @@ export default function GanttBar({
   onStoryDragStart,
   onFeatureEdit,
   onStoryEdit,
+  onDependencyDragStart,
+  dependencyDragActive,
+  dependencyTargetState,
   onTooltipShow,
   onTooltipHide,
 }: GanttBarProps) {
@@ -111,17 +117,24 @@ export default function GanttBar({
     const effectiveStart = isDragging ? dragging!.currentStart : entry.startWeek
     const effectiveEnd = effectiveStart + entry.durationWeeks
     const barW = Math.max(entry.durationWeeks * colW, 4)
+    const barX = (effectiveStart + weekOffset) * colW
+    const barY = y + 4
+    const handleOffset = 6
+    const leftHandleX = Math.max(handleOffset, barX - handleOffset)
+    const rightHandleX = Math.min(totalWeeks * colW - handleOffset, barX + barW + handleOffset)
+    const barMidY = y + FEAT_ROW_H / 2
     const isOverAllocated = weeklyDemand.some(d =>
       d.week >= effectiveStart &&
       d.week < effectiveEnd &&
       d.demandDays > d.capacityDays + 0.01,
     )
     const tooltipContent = buildFeatureTooltip(entry)
+    const targetStroke = dependencyTargetState === 'invalid' ? '#dc2626' : '#2563eb'
     return (
-      <g>
+      <g data-feature-id={entry.featureId} data-feature-name={entry.featureName}>
         <rect
-          x={(effectiveStart + weekOffset) * colW}
-          y={y + 4}
+          x={barX}
+          y={barY}
           width={barW}
           height={FEAT_ROW_H - 8}
           fill={barColor}
@@ -133,10 +146,25 @@ export default function GanttBar({
           onMouseLeave={onTooltipHide}
           onMouseMove={e => onTooltipShow(e.clientX, e.clientY, tooltipContent)}
         />
+        {dependencyTargetState && (
+          <rect
+            data-testid={`dependency-target-${entry.featureId}`}
+            x={barX - 2}
+            y={barY - 2}
+            width={barW + 4}
+            height={FEAT_ROW_H - 4}
+            fill="none"
+            stroke={targetStroke}
+            strokeWidth={2}
+            strokeDasharray="4 2"
+            rx={4}
+            style={{ pointerEvents: 'none' }}
+          />
+        )}
         {isOverAllocated && (
           <circle
-            cx={(effectiveStart + weekOffset) * colW + barW - 8}
-            cy={y + FEAT_ROW_H / 2}
+            cx={barX + barW - 8}
+            cy={barMidY}
             r={4}
             fill="#ef4444"
             style={{ pointerEvents: 'none' }}
@@ -144,14 +172,44 @@ export default function GanttBar({
         )}
         {entry.isManual && (
           <text
-            x={(effectiveStart + weekOffset) * colW + 6}
-            y={y + FEAT_ROW_H / 2 + 4}
+            x={barX + 6}
+            y={barMidY + 4}
             fontSize={10}
             style={{ pointerEvents: 'none' }}
           >
             ✏️
           </text>
         )}
+        <circle
+          role="button"
+          tabIndex={0}
+          aria-label="Create dependency to this feature"
+          data-testid={`dependency-handle-left-${entry.featureId}`}
+          cx={leftHandleX}
+          cy={barMidY}
+          r={6}
+          fill="white"
+          stroke={barColor}
+          strokeWidth={2}
+          style={{ cursor: 'crosshair', opacity: dependencyDragActive ? 1 : 0.8, pointerEvents: 'all' }}
+          onMouseDown={e => onDependencyDragStart(e, entry, 'from-left')}
+          onClick={e => e.stopPropagation()}
+        />
+        <circle
+          role="button"
+          tabIndex={0}
+          aria-label="Create dependency from this feature"
+          data-testid={`dependency-handle-right-${entry.featureId}`}
+          cx={rightHandleX}
+          cy={barMidY}
+          r={6}
+          fill="white"
+          stroke={barColor}
+          strokeWidth={2}
+          style={{ cursor: 'crosshair', opacity: dependencyDragActive ? 1 : 0.8, pointerEvents: 'all' }}
+          onMouseDown={e => onDependencyDragStart(e, entry, 'from-right')}
+          onClick={e => e.stopPropagation()}
+        />
         <line
           x1={0} y1={y + FEAT_ROW_H}
           x2={totalWeeks * colW} y2={y + FEAT_ROW_H}

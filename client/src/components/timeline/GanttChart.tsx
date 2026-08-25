@@ -1,9 +1,11 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { TimelineEntry } from '../../types/backlog'
+import { apiErrorMessage } from '../../lib/api'
 import { useIsDark } from '../../hooks/useIsDark'
 import {
   useGanttLayout,
   HEADER_H,
+  FEAT_ROW_H,
   colWForScale,
 } from '../../hooks/useGanttLayout'
 import type {
@@ -13,9 +15,10 @@ import type {
   StoryDependency,
   EpicDependency,
   GanttDraggingState,
+  DependencyDragDirection,
 } from '../../hooks/useGanttLayout'
 import GanttBar from './GanttBar'
-import GanttDependencyArrows from './GanttDependencyArrows'
+import GanttDependencyArrows, { type GanttDependencyDragPreview } from './GanttDependencyArrows'
 import GanttLabelPanel from './GanttLabelPanel'
 import TimelineTooltip from './TimelineTooltip'
 
@@ -121,9 +124,70 @@ function buildHalfYearGroups(totalWeeks: number, startDate: Date | null): GroupB
   return groups
 }
 
-// ---------------------------------------------------------------------------
-// Props
-// ---------------------------------------------------------------------------
+interface DependencyDragState {
+  sourceFeatureId: string
+  direction: DependencyDragDirection
+  startX: number
+  startY: number
+  currentX: number
+  currentY: number
+  hoveredTargetFeatureId: string | null
+}
+
+interface DependencyFeedback {
+  kind: 'success' | 'error'
+  message: string
+}
+
+function dependencyEdge(
+  sourceFeatureId: string,
+  targetFeatureId: string,
+  direction: DependencyDragDirection,
+) {
+  return direction === 'from-right'
+    ? { featureId: targetFeatureId, dependsOnId: sourceFeatureId }
+    : { featureId: sourceFeatureId, dependsOnId: targetFeatureId }
+}
+
+function isValidDependencyTarget(
+  drag: DependencyDragState,
+  targetFeatureId: string | null,
+  featureDependencies: FeatureDependency[],
+): boolean {
+  if (!targetFeatureId || targetFeatureId === drag.sourceFeatureId) return false
+  const edge = dependencyEdge(drag.sourceFeatureId, targetFeatureId, drag.direction)
+  return !featureDependencies.some(dep => dep.featureId === edge.featureId && dep.dependsOnId === edge.dependsOnId)
+}
+
+function dependencyDropError(drag: DependencyDragState, targetFeatureId: string | null, featureDependencies: FeatureDependency[]): string {
+  if (!targetFeatureId) return 'Drop on another feature to create a dependency.'
+  if (targetFeatureId === drag.sourceFeatureId) return 'A feature cannot depend on itself.'
+  if (!isValidDependencyTarget(drag, targetFeatureId, featureDependencies)) return 'That dependency already exists.'
+  return 'This feature cannot be used as a dependency target.'
+}
+
+function featureAtPoint(
+  rows: ReturnType<typeof useGanttLayout>['rows'],
+  rowY: Map<string, number>,
+  x: number,
+  y: number,
+  weekOffset: number,
+  colW: number,
+  totalWeeks: number,
+): string | null {
+  if (x < 0 || x > totalWeeks * colW || y < 0) return null
+  const row = rows.find(candidate => {
+    if (candidate.type !== 'feature') return false
+    const top = rowY.get(candidate.key)
+    if (top === undefined || y < top || y >= top + FEAT_ROW_H) return false
+    const barX = (candidate.entry.startWeek + weekOffset) * colW
+    const barW = Math.max(candidate.entry.durationWeeks * colW, 4)
+    const targetPadding = 6
+    return x >= barX - targetPadding && x <= barX + barW + targetPadding
+  })
+  return row?.type === 'feature' ? row.entry.featureId : null
+}
+
 interface GanttChartProps {
   entries: TimelineEntry[]
   storyEntries?: StoryTimelineEntry[]
@@ -135,7 +199,7 @@ interface GanttChartProps {
   scale?: GanttScale
   onDragFeature: (featureId: string, newStartWeek: number) => void
   onDragStory: (storyId: string, newStartWeek: number) => void
-  onAddFeatureDep: (featureId: string, dependsOnId: string) => void
+  onAddFeatureDep: (featureId: string, dependsOnId: string) => void | Promise<unknown>
   onAddStoryDep: (storyId: string, dependsOnId: string) => void
   onRemoveFeatureDep: (featureId: string, dependsOnId: string) => void
   onRemoveStoryDep: (storyId: string, dependsOnId: string) => void
@@ -170,6 +234,7 @@ export default function GanttChart({
   scale = 'week',
   onDragFeature,
   onDragStory,
+  onAddFeatureDep,
   onMoveEpic,
   onMoveFeature,
   onUpdateEpicMode,
@@ -221,6 +286,17 @@ export default function GanttChart({
 
   const [tooltip, setTooltip] = useState<{ x: number; y: number; content: string } | null>(null)
   const [dragging, setDragging] = useState<GanttDraggingState | null>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [dependencyDrag, setDependencyDrag] = useState<DependencyDragState | null>(null)
+  const [dependencyFeedback, setDependencyFeedback] = useState<DependencyFeedback | null>(null)
+
+  const getSvgPoint = useCallback((clientX: number, clientY: number) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    return {
+      x: clientX - (rect?.left ?? 0),
+      y: clientY - (rect?.top ?? 0),
+    }
+  }, [])
 
   // -----------------------------------------------------------------------
   // Layout (rows, positions)
@@ -260,7 +336,29 @@ export default function GanttChart({
 
   // -----------------------------------------------------------------------
   // Drag handlers
-  // -----------------------------------------------------------------------
+  function startDependencyDrag(
+    e: React.MouseEvent | React.PointerEvent,
+    entry: TimelineEntry,
+    direction: DependencyDragDirection,
+  ) {
+    e.preventDefault()
+    e.stopPropagation()
+    setTooltip(null)
+    const rowTop = rowY.get(`feature-${entry.featureId}`) ?? 0
+    const startX = (entry.startWeek + weekOffset + (direction === 'from-right' ? entry.durationWeeks : 0)) * colW
+    const startY = rowTop + FEAT_ROW_H / 2
+    const point = getSvgPoint(e.clientX, e.clientY)
+    setDependencyDrag({
+      sourceFeatureId: entry.featureId,
+      direction,
+      startX,
+      startY,
+      currentX: point.x,
+      currentY: point.y,
+      hoveredTargetFeatureId: null,
+    })
+  }
+
   function startFeatureDrag(e: React.MouseEvent, entry: TimelineEntry) {
     e.preventDefault(); setTooltip(null)
     setDragging({ id: entry.featureId, type: 'feature', origStart: entry.startWeek, startX: e.clientX, currentStart: entry.startWeek })
@@ -269,6 +367,53 @@ export default function GanttChart({
     e.preventDefault(); setTooltip(null)
     setDragging({ id: storyEntry.storyId, type: 'story', origStart: storyEntry.startWeek, startX: e.clientX, currentStart: storyEntry.startWeek })
   }
+
+  useEffect(() => {
+    if (!dependencyDrag) return
+    const activeDrag = dependencyDrag
+
+    function onMouseMove(e: MouseEvent) {
+      const point = getSvgPoint(e.clientX, e.clientY)
+      setDependencyDrag(current => current
+        ? {
+            ...current,
+            currentX: point.x,
+            currentY: point.y,
+            hoveredTargetFeatureId: featureAtPoint(rows, rowY, point.x, point.y, weekOffset, colW, totalWeeks),
+          }
+        : null)
+    }
+
+    async function onMouseUp(e: MouseEvent) {
+      const point = getSvgPoint(e.clientX, e.clientY)
+      const targetFeatureId = featureAtPoint(rows, rowY, point.x, point.y, weekOffset, colW, totalWeeks)
+      const isValid = isValidDependencyTarget(activeDrag, targetFeatureId, featureDependencies)
+      setDependencyDrag(null)
+
+      if (!isValid || !targetFeatureId) {
+        setDependencyFeedback({
+          kind: 'error',
+          message: dependencyDropError(activeDrag, targetFeatureId, featureDependencies),
+        })
+        return
+      }
+
+      const edge = dependencyEdge(activeDrag.sourceFeatureId, targetFeatureId, activeDrag.direction)
+      try {
+        await onAddFeatureDep(edge.featureId, edge.dependsOnId)
+        setDependencyFeedback({ kind: 'success', message: 'Dependency created.' })
+      } catch (error) {
+        setDependencyFeedback({ kind: 'error', message: apiErrorMessage(error, 'Failed to create dependency.') })
+      }
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [colW, dependencyDrag, featureDependencies, getSvgPoint, onAddFeatureDep, rowY, rows, totalWeeks, weekOffset])
 
   useEffect(() => {
     function onMouseMove(e: MouseEvent) {
@@ -323,12 +468,38 @@ export default function GanttChart({
     () => buildHalfYearGroups(totalWeeks, projectStartDate),
     [totalWeeks, projectStartDate],
   )
+  const dependencyPreview: GanttDependencyDragPreview | null = dependencyDrag
+    ? {
+        startX: dependencyDrag.startX,
+        startY: dependencyDrag.startY,
+        currentX: dependencyDrag.currentX,
+        currentY: dependencyDrag.currentY,
+        targetValid: isValidDependencyTarget(
+          dependencyDrag,
+          dependencyDrag.hoveredTargetFeatureId,
+          featureDependencies,
+        ),
+      }
+    : null
+
 
   // Two-row header mid-line Y position
   const HEADER_MID = 24
 
   return (
-    <div className="flex overflow-hidden border border-gray-100 dark:border-gray-700 rounded-lg">
+    <div className="space-y-2">
+      {dependencyFeedback && (
+        <div
+          role={dependencyFeedback.kind === 'error' ? 'alert' : 'status'}
+          aria-live="polite"
+          className={dependencyFeedback.kind === 'error'
+            ? 'rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300'
+            : 'rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300'}
+        >
+          {dependencyFeedback.message}
+        </div>
+      )}
+      <div className="flex overflow-hidden border border-gray-100 dark:border-gray-700 rounded-lg">
       <GanttLabelPanel
         rows={rows}
         storyEntryIds={featuresWithStories}
@@ -348,7 +519,7 @@ export default function GanttChart({
 
       {/* Right SVG area — horizontally scrollable */}
       <div className="overflow-x-auto flex-1" ref={rightPanelRef} onScroll={onRightPanelScroll}>
-        <svg width={totalWeeks * colW} height={totalHeight} style={{ display: 'block' }}>
+        <svg ref={svgRef} width={totalWeeks * colW} height={totalHeight} style={{ display: 'block' }}>
           {/* Background fill */}
           <rect x={0} y={0} width={totalWeeks * colW} height={totalHeight} fill={svgColors.bg} style={{ pointerEvents: 'none' }} />
 
@@ -363,6 +534,7 @@ export default function GanttChart({
             weekOffset={weekOffset}
             colW={colW}
             dragging={dragging}
+            dependencyPreview={dependencyPreview}
           />
 
           {/* Onboarding zone */}
@@ -572,6 +744,9 @@ export default function GanttChart({
           {rows.map(row => {
             const y = rowY.get(row.key)
             if (y === undefined) return null
+            const dependencyTargetState = row.type === 'feature' && dependencyDrag?.hoveredTargetFeatureId === row.entry.featureId
+              ? isValidDependencyTarget(dependencyDrag, row.entry.featureId, featureDependencies) ? 'valid' : 'invalid'
+              : null
             return (
               <GanttBar
                 key={row.key}
@@ -588,6 +763,9 @@ export default function GanttChart({
                 onStoryDragStart={startStoryDrag}
                 onFeatureEdit={setEditingFeatureId}
                 onStoryEdit={setEditingStoryId}
+                onDependencyDragStart={startDependencyDrag}
+                dependencyDragActive={dependencyDrag !== null}
+                dependencyTargetState={dependencyTargetState}
                 onTooltipShow={(x, y, content) => setTooltip({ x, y, content })}
                 onTooltipHide={() => setTooltip(null)}
               />
@@ -602,6 +780,7 @@ export default function GanttChart({
         visible={tooltip !== null}
         content={tooltip?.content ?? ''}
       />
+    </div>
     </div>
   )
 }
