@@ -146,10 +146,10 @@ historical timeline viewer is out of scope for this issue.
   removed, project must be replanned.
 - **Planning needs attention** banner (Resource Profile + Timeline pages) — copy:
   "This project's resource planning is no longer current. Review the resource
-  inputs and replan from the existing backlog." Primary action **Replan project**:
-  runs the completion validation; on success the project returns to `CURRENT`; on
-  `REPLAN_INCOMPLETE` the actionable findings are shown inline with a link into
-  Resource Profile.
+  inputs and replan from the existing backlog." Primary action **Complete replan**:
+  validates the configured planning inputs; on success the project returns to
+  `CURRENT`. When incomplete, the banner gives a concise blocker count and links
+  to the actionable Resource Profile recovery checklist.
 - **Zero-demand roles stay visible while NEEDS_REPLAN.** Reset preserves every
   ResourceType, and canonical completion requires a profile per preserved role.
   While `NEEDS_REPLAN` the Resource Profile surface therefore exposes EVERY
@@ -182,6 +182,17 @@ historical timeline viewer is out of scope for this issue.
   failure. The project stays `NEEDS_REPLAN` — the existing completion operation
   remains the only path back to `CURRENT` — and the response reports any
   remaining completeness findings by human-readable resource name.
+- **Named-resource recovery (issue #474).** While `NEEDS_REPLAN`, Resource Profile
+  shows each missing named person's name, parent role and next action. Eligible
+  persisted named people can be repaired together with **Use As needed for eligible
+  named people**, which creates only canonical `NAMED_PERSON` profiles
+  (`DEMAND_FOLLOWING`, 100%, `MANUAL`, no fixed window or provenance) through
+  `POST /api/projects/:projectId/capacity-profiles/bulk-named-as-needed`. The batch
+  is atomic, create-only and idempotent; existing, planner-owned, planned-resource
+  and ambiguous authority is never overwritten or reinterpreted. Remaining blocked
+  people stay visible with direct individual or Squad Planner actions. A role with
+  no named resources does not receive an attention-style People indicator merely
+  because its panel is expanded.
 - No planning option is automatically selected because of migration history; the
   user picks the approach (As needed, fixed whole project, fixed selected weeks,
   manually shaped, Squad Planner) in the existing surfaces.

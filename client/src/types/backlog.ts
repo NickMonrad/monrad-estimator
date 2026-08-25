@@ -334,6 +334,12 @@ export interface ResourceProfileRow {
       segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
       resolutionSource: CapacityProfileResolutionSource
     }
+    /** NEEDS_REPLAN recovery state for persisted named resources. */
+    replanStatus?: 'COMPLETE' | 'NEEDS_AVAILABILITY' | 'BLOCKED'
+    /** True only when the resource is safe for the explicit named-person bulk action. */
+    canUseAsNeeded?: boolean
+    /** Direct next action for a blocked recovery item. */
+    replanAction?: 'SET_AVAILABILITY' | 'OPEN_SQUAD_PLANNER'
   }>
   capacityProfile?: {
     planningBasis: CapacityProfilePlanningBasis

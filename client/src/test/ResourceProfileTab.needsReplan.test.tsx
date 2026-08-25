@@ -21,11 +21,11 @@ import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import ResourceProfileTab from '@/components/resource-profile/ResourceProfileTab'
-import { applyRoleCountsAsNeeded } from '@/lib/api'
-
+import { applyNamedPeopleAsNeeded, applyRoleCountsAsNeeded } from '@/lib/api'
+import type { ResourceProfileRow } from '@/types/backlog'
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, applyRoleCountsAsNeeded: vi.fn() }
+  return { ...actual, applyNamedPeopleAsNeeded: vi.fn(), applyRoleCountsAsNeeded: vi.fn() }
 })
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -42,6 +42,13 @@ interface TestRow {
   name: string
   missingCapacityProfile?: boolean
   capacityProfile?: Record<string, unknown>
+  namedResources?: Array<{
+    id: string
+    name: string
+    replanStatus?: 'COMPLETE' | 'NEEDS_AVAILABILITY' | 'BLOCKED'
+    canUseAsNeeded?: boolean
+    replanAction?: 'SET_AVAILABILITY' | 'OPEN_SQUAD_PLANNER'
+  }>
 }
 
 function row(r: TestRow) {
@@ -64,7 +71,7 @@ function row(r: TestRow) {
     derivedEndWeek: null,
     estimatedCost: null,
     epics: [],
-    namedResources: [],
+    namedResources: (r.namedResources ?? []) as ResourceProfileRow['namedResources'],
     ...(r.missingCapacityProfile !== undefined ? { missingCapacityProfile: r.missingCapacityProfile } : {}),
     ...(r.capacityProfile ? { capacityProfile: r.capacityProfile } : {}),
   }
@@ -276,7 +283,7 @@ describe('ResourceProfileTab — bulk Use role counts as As needed (issue #456)'
     })
   })
 
-  it('shows remaining human-readable findings after the bulk action', async () => {
+  it('separates successful role writes from remaining recovery blockers', async () => {
     vi.mocked(applyRoleCountsAsNeeded).mockResolvedValue({
       projectId: 'project-1',
       planningState: 'NEEDS_REPLAN',
@@ -296,8 +303,9 @@ describe('ResourceProfileTab — bulk Use role counts as As needed (issue #456)'
     fireEvent.click(screen.getByRole('button', { name: 'Use role counts as As needed' }))
 
     await waitFor(() => {
-      expect(screen.getByTestId('bulk-as-needed-feedback')).toHaveTextContent('Alice Example')
+      expect(screen.getByTestId('bulk-as-needed-feedback')).toHaveTextContent('Role profiles were created')
     })
+    expect(screen.getByTestId('bulk-as-needed-feedback')).not.toHaveTextContent('Alice Example')
   })
 
   it('surfaces a bulk action failure instead of failing silently', async () => {
@@ -319,5 +327,78 @@ describe('ResourceProfileTab — bulk Use role counts as As needed (issue #456)'
         'This action is only available while the project needs replanning.',
       )
     })
+  })
+})
+
+describe('ResourceProfileTab — named-person recovery (issue #474)', () => {
+  const namedBlocker = {
+    id: 'nr-alice',
+    name: 'Alice Example',
+    replanStatus: 'NEEDS_AVAILABILITY' as const,
+    canUseAsNeeded: true,
+    replanAction: 'SET_AVAILABILITY' as const,
+  }
+
+  it('shows the named resource, parent role, and direct availability action', () => {
+    renderWithProviders(
+      <ResourceProfileTab
+        {...createProps([
+          { resourceTypeId: 'rt-engineering', name: 'Platform Engineer', namedResources: [namedBlocker] },
+        ])}
+      />,
+    )
+
+    expect(screen.getByTestId('replan-recovery-summary')).toHaveTextContent('Alice Example')
+    expect(screen.getByTestId('replan-recovery-summary')).toHaveTextContent('Role: Platform Engineer')
+    fireEvent.click(screen.getByTestId('set-availability-nr-alice'))
+    expect(screen.getByRole('dialog', { name: 'Edit capacity profile' })).toBeInTheDocument()
+    expect(screen.getByText('Create Capacity Profile')).toBeInTheDocument()
+  })
+
+  it('offers the safe named-person bulk action and separates its success from remaining blockers', async () => {
+    vi.mocked(applyNamedPeopleAsNeeded).mockResolvedValue({
+      projectId: 'project-1',
+      planningState: 'NEEDS_REPLAN',
+      created: 1,
+      remainingFindings: ['Named resource "Planner Person" lacks persisted profile'],
+    })
+    renderWithProviders(
+      <ResourceProfileTab
+        {...createProps([
+          {
+            resourceTypeId: 'rt-engineering',
+            name: 'Platform Engineer',
+            namedResources: [
+              namedBlocker,
+              {
+                id: 'nr-planner',
+                name: 'Planner Person',
+                replanStatus: 'BLOCKED',
+                canUseAsNeeded: false,
+                replanAction: 'OPEN_SQUAD_PLANNER',
+              },
+            ],
+          },
+        ])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use As needed for eligible named people' }))
+    await waitFor(() => expect(applyNamedPeopleAsNeeded).toHaveBeenCalledWith('project-1'))
+    await waitFor(() => expect(screen.getByTestId('bulk-named-as-needed-feedback')).toHaveTextContent('Created As needed availability for 1 named resource.'))
+    expect(screen.getByTestId('bulk-named-as-needed-feedback')).toHaveTextContent('Replanning is still incomplete')
+  })
+
+  it('does not show a People indicator for an expanded empty role', () => {
+    renderWithProviders(
+      <ResourceProfileTab
+        {...createProps(
+          [{ resourceTypeId: 'rt-empty', name: 'Empty Role' }],
+          { expandedNamedResources: new Set(['rt-empty']) },
+        )}
+      />,
+    )
+
+    expect(screen.queryByTestId('people-indicator-rt-empty')).not.toBeInTheDocument()
   })
 })

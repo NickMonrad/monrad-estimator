@@ -15,6 +15,7 @@ import { Prisma } from '@prisma/client'
 
 import {
   applyRoleCountsAsNeeded,
+  applyNamedPeopleAsNeeded,
   BulkAsNeededError,
 } from '../lib/bulkAsNeededProfiles.js'
 
@@ -58,6 +59,25 @@ function p2002RoleProfileDuplicate(): Prisma.PrismaClientKnownRequestError {
           cause: {
             originalMessage:
               'insert into "CapacityProfile" ... violates unique constraint "CapacityProfile_resourceTypeId_key"',
+          },
+        },
+      },
+    },
+  )
+}
+
+function p2002NamedProfileDuplicate(): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError(
+    'Unique constraint failed on the fields: (`namedResourceId`)',
+    {
+      code: 'P2002',
+      clientVersion: '7.8.0',
+      meta: {
+        modelName: 'CapacityProfile',
+        driverAdapterError: {
+          cause: {
+            originalMessage:
+              'insert into "CapacityProfile" ... violates unique constraint "CapacityProfile_namedResourceId_key"',
           },
         },
       },
@@ -279,5 +299,91 @@ describe('applyRoleCountsAsNeeded', () => {
     const { db } = makeDb(NEEDS_REPLAN_PROJECT())
     const result = await applyRoleCountsAsNeeded(db as never, 'proj-1', 'user-1')
     expect(result.planningState).toBe('NEEDS_REPLAN')
+  })
+})
+
+const NAMED_PEOPLE_PROJECT = (overrides: Record<string, unknown> = {}) => ({
+  id: 'proj-1',
+  planningState: 'NEEDS_REPLAN',
+  resourceTypes: [
+    { id: 'rt-engineering', namedResources: [{ id: 'nr-alice' }, { id: 'nr-bob' }] },
+    { id: 'rt-planner', namedResources: [{ id: 'nr-planner' }] },
+  ],
+  capacityProfiles: [
+    { resourceTypeId: 'rt-planner', namedResourceId: null, ownerKind: 'ROLE', source: 'SQUAD_PLANNER' },
+    { resourceTypeId: null, namedResourceId: 'nr-bob', ownerKind: 'NAMED_PERSON', source: 'MANUAL' },
+  ],
+  ...overrides,
+})
+
+describe('applyNamedPeopleAsNeeded', () => {
+  it('creates canonical profiles only for eligible missing named people', async () => {
+    const { db, tx } = makeDb(NAMED_PEOPLE_PROJECT())
+
+    const result = await applyNamedPeopleAsNeeded(db as never, 'proj-1', 'user-1')
+
+    expect(result).toMatchObject({ projectId: 'proj-1', planningState: 'NEEDS_REPLAN', created: 1 })
+    expect(tx.capacityProfile.create).toHaveBeenCalledWith({
+      data: {
+        projectId: 'proj-1',
+        ownerKind: 'NAMED_PERSON',
+        resourceTypeId: null,
+        namedResourceId: 'nr-alice',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'MANUAL',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        provenance: null,
+      },
+    })
+    expect(tx.capacityProfile.create).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ namedResourceId: 'nr-planner' }),
+    }))
+  })
+
+  it('is create-only and idempotent for existing named profiles', async () => {
+    const { db, tx } = makeDb(NAMED_PEOPLE_PROJECT({
+      resourceTypes: [{ id: 'rt-engineering', namedResources: [{ id: 'nr-alice' }] }],
+      capacityProfiles: [{ resourceTypeId: null, namedResourceId: 'nr-alice', ownerKind: 'NAMED_PERSON', source: 'AVAILABILITY_WINDOW' }],
+    }))
+
+    const first = await applyNamedPeopleAsNeeded(db as never, 'proj-1', 'user-1')
+    const second = await applyNamedPeopleAsNeeded(db as never, 'proj-1', 'user-1')
+
+    expect(first.created).toBe(0)
+    expect(second.created).toBe(0)
+    expect(tx.capacityProfile.create).not.toHaveBeenCalled()
+    expect(tx.capacityProfile.update).not.toHaveBeenCalled()
+  })
+
+  it('rolls back the batch when a later named profile write fails', async () => {
+    const { db, tx } = makeDb(NAMED_PEOPLE_PROJECT({
+      resourceTypes: [{ id: 'rt-engineering', namedResources: [{ id: 'nr-alice' }, { id: 'nr-charlie' }] }],
+      capacityProfiles: [],
+    }))
+    tx.capacityProfile.findFirst.mockResolvedValue(null)
+    tx.capacityProfile.create
+      .mockResolvedValueOnce({ id: 'created-alice' })
+      .mockRejectedValueOnce(new Error('unexpected database failure'))
+
+    await expect(applyNamedPeopleAsNeeded(db as never, 'proj-1', 'user-1')).rejects.toThrow('unexpected database failure')
+    expect(tx.capacityProfile.create).toHaveBeenCalledTimes(2)
+  })
+
+  it('treats a concurrent named-owner unique conflict as an unchanged skip', async () => {
+    const { db, tx } = makeDb(NAMED_PEOPLE_PROJECT({
+      resourceTypes: [{ id: 'rt-engineering', namedResources: [{ id: 'nr-alice' }, { id: 'nr-charlie' }] }],
+      capacityProfiles: [],
+    }))
+    tx.capacityProfile.findFirst.mockResolvedValue(null)
+    tx.capacityProfile.create
+      .mockRejectedValueOnce(p2002NamedProfileDuplicate())
+      .mockResolvedValueOnce({ id: 'created-charlie' })
+
+    const result = await applyNamedPeopleAsNeeded(db as never, 'proj-1', 'user-1')
+
+    expect(result.created).toBe(1)
+    expect(tx.capacityProfile.update).not.toHaveBeenCalled()
   })
 })

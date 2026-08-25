@@ -26,7 +26,7 @@ import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
 
 import { app } from '../app.js'
-import { applyRoleCountsAsNeeded } from '../lib/bulkAsNeededProfiles.js'
+import { applyRoleCountsAsNeeded, applyNamedPeopleAsNeeded } from '../lib/bulkAsNeededProfiles.js'
 // Override the global prisma mock so route handlers use real PostgreSQL.
 vi.mock('../lib/prisma.js', async importOriginal => await importOriginal())
 
@@ -182,6 +182,109 @@ async function createNeedsReplanFixture(): Promise<ReplanFixture> {
     namedRtId: namedRt.id,
     namedResourceId: namedResource.id,
     demandedRtId: demandedRt.id,
+  }
+}
+
+interface NamedRecoveryFixture {
+  projectId: string
+  roleOneId: string
+  roleTwoId: string
+  emptyRoleId: string
+  plannerRoleId: string
+  aliceId: string
+  bobId: string
+  existingId: string
+  plannerPersonId: string
+}
+
+async function createNamedRecoveryFixture(): Promise<NamedRecoveryFixture> {
+  const project = await prisma.project.create({
+    data: {
+      name: `Named recovery fixture ${Date.now()}`,
+      status: 'ACTIVE',
+      hoursPerDay: 8,
+      ownerId: userId,
+      resourceTypes: {
+        create: [
+          { name: 'Platform Engineer', category: 'ENGINEERING', count: 1 },
+          { name: 'Product Analyst', category: 'PROJECT_MANAGEMENT', count: 1 },
+          { name: 'Empty Role', category: 'GOVERNANCE', count: 1 },
+          { name: 'Planner Role', category: 'ENGINEERING', count: 1 },
+        ],
+      },
+      epics: {
+        create: [{
+          name: 'Named recovery epic',
+          features: {
+            create: [{
+              name: 'Named recovery feature',
+              userStories: {
+                create: [{
+                  name: 'Named recovery story',
+                  tasks: { create: [{ name: 'Named recovery task', hoursEffort: 16, durationDays: 2 }] },
+                }],
+              },
+            }],
+          },
+        }],
+      },
+    },
+    include: {
+      resourceTypes: true,
+      epics: { include: { features: { include: { userStories: { include: { tasks: true } } } } } },
+    },
+  })
+
+  const roleOne = project.resourceTypes.find(rt => rt.name === 'Platform Engineer')!
+  const roleTwo = project.resourceTypes.find(rt => rt.name === 'Product Analyst')!
+  const emptyRole = project.resourceTypes.find(rt => rt.name === 'Empty Role')!
+  const plannerRole = project.resourceTypes.find(rt => rt.name === 'Planner Role')!
+  const task = project.epics[0]!.features[0]!.userStories[0]!.tasks[0]!
+  await prisma.task.update({ where: { id: task.id }, data: { resourceTypeId: roleOne.id } })
+
+  const [alice, bob, existing, plannerPerson] = await Promise.all([
+    prisma.namedResource.create({ data: { resourceTypeId: roleOne.id, name: 'Alice Platform' } }),
+    prisma.namedResource.create({ data: { resourceTypeId: roleTwo.id, name: 'Bob Analysis' } }),
+    prisma.namedResource.create({ data: { resourceTypeId: roleTwo.id, name: 'Existing Profile' } }),
+    prisma.namedResource.create({ data: { resourceTypeId: plannerRole.id, name: 'Planner-Owned Person' } }),
+  ])
+
+  for (const rt of project.resourceTypes) {
+    await prisma.capacityProfile.create({
+      data: {
+        projectId: project.id,
+        resourceTypeId: rt.id,
+        ownerKind: 'ROLE',
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: rt.id === plannerRole.id ? 'SQUAD_PLANNER' : 'MANUAL',
+        defaultPercent: 100,
+      },
+    })
+  }
+  await prisma.capacityProfile.create({
+    data: {
+      projectId: project.id,
+      namedResourceId: existing.id,
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'AVAILABILITY_WINDOW',
+      source: 'MANUAL',
+      defaultPercent: 80,
+      startWeek: 1,
+      endWeek: 4,
+    },
+  })
+  await prisma.project.update({ where: { id: project.id }, data: { planningState: 'NEEDS_REPLAN' } })
+
+  return {
+    projectId: project.id,
+    roleOneId: roleOne.id,
+    roleTwoId: roleTwo.id,
+    emptyRoleId: emptyRole.id,
+    plannerRoleId: plannerRole.id,
+    aliceId: alice.id,
+    bobId: bob.id,
+    existingId: existing.id,
+    plannerPersonId: plannerPerson.id,
   }
 }
 
@@ -491,5 +594,130 @@ describeIf('NEEDS_REPLAN Resource Profile — missing ROLE profiles (issue #456)
     expect(res.body.code).toBe('REPLAN_ACTION_UNAVAILABLE')
 
     await prisma.project.delete({ where: { id: project.id } })
+  })
+})
+
+describeIf('NEEDS_REPLAN Resource Profile — named-person recovery (issue #474)', () => {
+  it('exposes named blockers by role and preserves valid and planner-owned state', async () => {
+    const f = await createNamedRecoveryFixture()
+    const res = await request(app)
+      .get(`/api/projects/${f.projectId}/resource-profile`)
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.planningState).toBe('NEEDS_REPLAN')
+    const rows = new Map((res.body.resourceRows as Array<{
+      resourceTypeId: string
+      name: string
+      namedResources: Array<{
+        id: string
+        name: string
+        replanStatus?: string
+        canUseAsNeeded?: boolean
+        replanAction?: string
+        capacityProfile?: unknown
+      }>
+    }>).map(row => [row.resourceTypeId, row] as const))
+
+    const platform = rows.get(f.roleOneId)!
+    const analysis = rows.get(f.roleTwoId)!
+    const empty = rows.get(f.emptyRoleId)!
+    const planner = rows.get(f.plannerRoleId)!
+    expect(platform.namedResources[0]).toMatchObject({ name: 'Alice Platform', replanStatus: 'NEEDS_AVAILABILITY', canUseAsNeeded: true })
+    expect(analysis.namedResources.find(resource => resource.id === f.bobId)).toMatchObject({
+      name: 'Bob Analysis',
+      replanStatus: 'NEEDS_AVAILABILITY',
+      canUseAsNeeded: true,
+    })
+    expect(analysis.namedResources.find(resource => resource.id === f.existingId)).toMatchObject({
+      name: 'Existing Profile',
+      replanStatus: 'COMPLETE',
+      capacityProfile: expect.objectContaining({ defaultPercent: 80 }),
+    })
+    expect(planner.namedResources[0]).toMatchObject({
+      name: 'Planner-Owned Person',
+      replanStatus: 'BLOCKED',
+      canUseAsNeeded: false,
+      replanAction: 'OPEN_SQUAD_PLANNER',
+    })
+    expect(empty.namedResources).toEqual([])
+  })
+
+  it('bulk repairs eligible people, remains idempotent, and completion stays fail-closed until the last blocker is resolved', async () => {
+    const f = await createNamedRecoveryFixture()
+    const existingBefore = await prisma.capacityProfile.findFirst({ where: { namedResourceId: f.existingId } })
+
+    const first = await request(app)
+      .post(`/api/projects/${f.projectId}/capacity-profiles/bulk-named-as-needed`)
+      .set('Authorization', authHeader)
+    expect(first.status).toBe(200)
+    expect(first.body.created).toBe(2)
+    expect(first.body.remainingFindings.join(' | ')).toContain('Planner-Owned Person')
+
+    const namedProfiles = await prisma.capacityProfile.findMany({ where: { projectId: f.projectId, namedResourceId: { not: null } } })
+    expect(namedProfiles.filter(profile => [f.aliceId, f.bobId].includes(profile.namedResourceId!))).toHaveLength(2)
+    for (const profile of namedProfiles.filter(profile => [f.aliceId, f.bobId].includes(profile.namedResourceId!))) {
+      expect(profile.ownerKind).toBe('NAMED_PERSON')
+      expect(profile.planningBasis).toBe('DEMAND_FOLLOWING')
+      expect(profile.source).toBe('MANUAL')
+      expect(profile.defaultPercent).toBe(100)
+      expect(profile.startWeek).toBeNull()
+      expect(profile.endWeek).toBeNull()
+      expect(profile.provenance).toBeNull()
+    }
+    const existingAfter = await prisma.capacityProfile.findFirst({ where: { namedResourceId: f.existingId } })
+    expect(existingAfter?.id).toBe(existingBefore?.id)
+    expect(existingAfter?.defaultPercent).toBe(80)
+    expect(await prisma.capacityProfile.findFirst({ where: { namedResourceId: f.plannerPersonId } })).toBeNull()
+
+    const second = await request(app)
+      .post(`/api/projects/${f.projectId}/capacity-profiles/bulk-named-as-needed`)
+      .set('Authorization', authHeader)
+    expect(second.status).toBe(200)
+    expect(second.body.created).toBe(0)
+
+    const incomplete = await request(app)
+      .post(`/api/projects/${f.projectId}/planning/complete`)
+      .set('Authorization', authHeader)
+    expect(incomplete.status).toBe(422)
+    expect(incomplete.body.code).toBe('REPLAN_INCOMPLETE')
+    expect(incomplete.body.findings.join(' | ')).toContain('Planner-Owned Person')
+
+    const plannerPut = await request(app)
+      .put(`/api/projects/${f.projectId}/capacity-profiles/NAMED_PERSON/${f.plannerPersonId}`)
+      .set('Authorization', authHeader)
+      .send({ planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 100 })
+    expect(plannerPut.status).toBe(200)
+
+    const complete = await request(app)
+      .post(`/api/projects/${f.projectId}/planning/complete`)
+      .set('Authorization', authHeader)
+    expect(complete.status).toBe(200)
+    expect(complete.body.planningState).toBe('CURRENT')
+
+    const schedule = await request(app)
+      .post(`/api/projects/${f.projectId}/timeline/schedule`)
+      .set('Authorization', authHeader)
+      .send({})
+    expect(schedule.status).toBe(200)
+    expect(schedule.body.entries.length).toBeGreaterThan(0)
+  })
+
+  it('rolls back all named-person writes when an injected batch failure occurs', async () => {
+    const f = await createNamedRecoveryFixture()
+    const before = await profileCount(f.projectId)
+
+    await expect(
+      applyNamedPeopleAsNeeded(prisma, f.projectId, userId, {
+        afterCreate: async () => {
+          throw new Error('injected named batch failure')
+        },
+      }),
+    ).rejects.toThrow('injected named batch failure')
+
+    expect(await profileCount(f.projectId)).toBe(before)
+    expect(await prisma.capacityProfile.findFirst({ where: { namedResourceId: f.aliceId } })).toBeNull()
+    expect(await prisma.capacityProfile.findFirst({ where: { namedResourceId: f.bobId } })).toBeNull()
+    expect((await prisma.project.findUnique({ where: { id: f.projectId } }))!.planningState).toBe('NEEDS_REPLAN')
   })
 })

@@ -374,11 +374,11 @@ import { login, createProject, createTestUser, createUserAndLogin, TEST_EMAIL, T
 
 ---
 
-### `replan-profile-repair.spec.ts` — NEEDS_REPLAN profile repair (1 test — issue #456)
+### `replan-profile-repair.spec.ts` — NEEDS_REPLAN named-resource recovery (1 test — issue #474)
 
 | Test | Description |
 |------|-------------|
-| missing profiles are visible and bulk As-needed + completion restore CURRENT | Creates a project and seeds a backlog referencing three preserved role-only ResourceTypes via CSV, runs Reset Planning. Asserts Resource Profile visibly marks each preserved role-only row with a "Needs capacity profile" badge (the effective As-needed draft is not presented as persisted canonical state), triggers the explicit bulk **Use role counts as As needed** action, verifies the created-count feedback and that all missing markers clear while the project stays NEEDS_REPLAN, then runs the existing Replan project completion — the project returns to CURRENT and Update Timeline succeeds |
+| named people are actionable, bulk recovery persists, and completion restores CURRENT | Creates a project, seeds three roles and named people across two roles, leaves one role empty, resets planning, repairs role profiles in fixture setup, verifies named blockers by person and role plus the absence of a false People indicator, uses the browser bulk **Use As needed for eligible named people** action, reloads to prove persisted profiles, completes the replan, and verifies Timeline Update Timeline succeeds after reload |
 
 ---
 

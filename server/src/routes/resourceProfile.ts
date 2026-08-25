@@ -221,6 +221,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     // profiles are planner-owned (PLANNED_RESOURCE / SQUAD_PLANNER) — the
     // same boundary checkPersistedCompleteness enforces.
     const profileByRtId = new Map<string, (typeof project.capacityProfiles)[number]>()
+    const namedProfileById = new Map<string, (typeof project.capacityProfiles)[number]>()
     const plannerOwnedRtIds = new Set<string>()
     const rtIdByNamedResourceId = new Map<string, string>()
     for (const rt of project.resourceTypes) {
@@ -230,6 +231,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       if (profile.ownerKind === 'ROLE' && profile.resourceTypeId) {
         profileByRtId.set(profile.resourceTypeId, profile)
       }
+      if (profile.namedResourceId) namedProfileById.set(profile.namedResourceId, profile)
       if (profile.ownerKind === 'PLANNED_RESOURCE' || profile.source === 'SQUAD_PLANNER') {
         const rtId = profile.resourceTypeId
           ?? (profile.namedResourceId ? rtIdByNamedResourceId.get(profile.namedResourceId) : undefined)
@@ -240,6 +242,60 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     // matches the camelCase contract the client types and badge logic use.
     const toCamel = (value: string) =>
       value.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+    const mapProfile = (profile: (typeof project.capacityProfiles)[number]) => ({
+      planningBasis: toCamel(String(profile.planningBasis)),
+      source: toCamel(String(profile.source)),
+      defaultPercent: profile.defaultPercent,
+      startWeek: profile.startWeek,
+      endWeek: profile.endWeek,
+      segments: profile.segments.map(segment => ({
+        startWeek: segment.startWeek,
+        endWeek: segment.endWeek,
+        capacityPercent: segment.capacityPercent,
+      })),
+      resolutionSource: 'PROFILE' as const,
+    })
+    const mapNamedResources = (resourceType: (typeof project.resourceTypes)[number]) =>
+      resourceType.namedResources.map(nr => {
+        const namedProfile = namedProfileById.get(nr.id)
+        const plannerEvidence = plannerOwnedRtIds.has(resourceType.id)
+          || namedProfile?.ownerKind === 'PLANNED_RESOURCE'
+          || namedProfile?.source === 'SQUAD_PLANNER'
+        const replanStatus = namedProfile
+          ? 'COMPLETE' as const
+          : plannerEvidence
+            ? 'BLOCKED' as const
+            : 'NEEDS_AVAILABILITY' as const
+        return {
+          id: nr.id,
+          name: nr.name,
+          resourceTypeId: nr.resourceTypeId,
+          pricingModel: nr.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
+          allocationMode: 'EFFORT',
+          allocationPercent: 100,
+          allocationPct: 100,
+          allocationStartWeek: null,
+          allocationEndWeek: null,
+          startWeek: null,
+          endWeek: null,
+          allocatedDays: 0,
+          derivedStartWeek: null,
+          derivedEndWeek: null,
+          actualAllocatedDays: 0,
+          actualAllocationStartWeek: null,
+          actualAllocationEndWeek: null,
+          actualAllocatedWeeks: [],
+          actualAllocationSegments: [],
+          synthetic: false,
+          resourceIdentity: namedProfile?.ownerKind === 'PLANNED_RESOURCE'
+            ? 'PLANNED_RESOURCE' as const
+            : 'NAMED_PERSON' as const,
+          capacityProfile: namedProfile ? mapProfile(namedProfile) : undefined,
+          replanStatus,
+          canUseAsNeeded: replanStatus === 'NEEDS_AVAILABILITY',
+          replanAction: plannerEvidence ? 'OPEN_SQUAD_PLANNER' as const : 'SET_AVAILABILITY' as const,
+        }
+      })
 
     // Reset Planning discarded the capacity model. Serve the estimation and
     // business inputs the user needs to replan — roles, counts, rates, effort
@@ -279,43 +335,9 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
           derivedEndWeek: null,
           estimatedCost: null,
           epics: [],
-          capacityProfile: persistedRoleProfile ? {
-            planningBasis: toCamel(String(persistedRoleProfile.planningBasis)),
-            source: toCamel(String(persistedRoleProfile.source)),
-            defaultPercent: persistedRoleProfile.defaultPercent,
-            startWeek: persistedRoleProfile.startWeek,
-            endWeek: persistedRoleProfile.endWeek,
-            segments: persistedRoleProfile.segments.map(segment => ({
-              startWeek: segment.startWeek,
-              endWeek: segment.endWeek,
-              capacityPercent: segment.capacityPercent,
-            })),
-            resolutionSource: 'PROFILE' as const,
-          } : undefined,
+          capacityProfile: persistedRoleProfile ? mapProfile(persistedRoleProfile) : undefined,
           missingCapacityProfile: requiresRoleProfile && !persistedRoleProfile,
-          namedResources: resourceType.namedResources.map(nr => ({
-            id: nr.id,
-            name: nr.name,
-            resourceTypeId: nr.resourceTypeId,
-            pricingModel: nr.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
-            allocationMode: 'EFFORT',
-            allocationPercent: 100,
-            allocationPct: 100,
-            allocationStartWeek: null,
-            allocationEndWeek: null,
-            startWeek: null,
-            endWeek: null,
-            allocatedDays: 0,
-            derivedStartWeek: null,
-            derivedEndWeek: null,
-            actualAllocatedDays: 0,
-            actualAllocationStartWeek: null,
-            actualAllocationEndWeek: null,
-            actualAllocatedWeeks: [],
-            actualAllocationSegments: [],
-            synthetic: false,
-            resourceIdentity: 'NAMED_PERSON' as const,
-          })),
+          namedResources: mapNamedResources(resourceType),
         }
       })
 
@@ -350,43 +372,9 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
         derivedEndWeek: null,
         estimatedCost: null,
         epics: [],
-        capacityProfile: persistedRoleProfile ? {
-          planningBasis: toCamel(String(persistedRoleProfile.planningBasis)),
-          source: toCamel(String(persistedRoleProfile.source)),
-          defaultPercent: persistedRoleProfile.defaultPercent,
-          startWeek: persistedRoleProfile.startWeek,
-          endWeek: persistedRoleProfile.endWeek,
-          segments: persistedRoleProfile.segments.map(segment => ({
-            startWeek: segment.startWeek,
-            endWeek: segment.endWeek,
-            capacityPercent: segment.capacityPercent,
-          })),
-          resolutionSource: 'PROFILE' as const,
-        } : undefined,
+        capacityProfile: persistedRoleProfile ? mapProfile(persistedRoleProfile) : undefined,
         missingCapacityProfile: requiresRoleProfile && !persistedRoleProfile,
-        namedResources: resourceType.namedResources.map(nr => ({
-          id: nr.id,
-          name: nr.name,
-          resourceTypeId: nr.resourceTypeId,
-          pricingModel: nr.pricingModel === 'PRO_RATA' ? 'PRO_RATA' : 'ACTUAL_DAYS',
-          allocationMode: 'EFFORT',
-          allocationPercent: 100,
-          allocationPct: 100,
-          allocationStartWeek: null,
-          allocationEndWeek: null,
-          startWeek: null,
-          endWeek: null,
-          allocatedDays: 0,
-          derivedStartWeek: null,
-          derivedEndWeek: null,
-          actualAllocatedDays: 0,
-          actualAllocationStartWeek: null,
-          actualAllocationEndWeek: null,
-          actualAllocatedWeeks: [],
-          actualAllocationSegments: [],
-          synthetic: false,
-          resourceIdentity: 'NAMED_PERSON' as const,
-        })),
+        namedResources: mapNamedResources(resourceType),
       })
     }
 

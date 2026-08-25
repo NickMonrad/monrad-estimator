@@ -15,7 +15,7 @@ import {
 } from '../../lib/capacityProfileFormatting'
 import NamedResourcesPanel from './NamedResourcesPanel'
 import CapacityProfileEditorModal from './CapacityProfileEditorModal'
-import { transferToManualCapacity, applyRoleCountsAsNeeded, apiErrorMessage } from '../../lib/api'
+import { transferToManualCapacity, applyRoleCountsAsNeeded, applyNamedPeopleAsNeeded, apiErrorMessage } from '../../lib/api'
 import { invalidateProjectResourceProfile } from '../../lib/projectInvalidation'
 import type { CapacityProfileEditorDraft } from '../../lib/capacityProfileFormatting'
 
@@ -49,6 +49,10 @@ export default function ResourceProfileTab({
     isPersisted: boolean
   } | null>(null)
   const [transferConfirm, setTransferConfirm] = useState<{ resourceTypeId: string; resourceTypeName: string } | null>(null)
+  const [editingNamedProfile, setEditingNamedProfile] = useState<{
+    ownerId: string
+    initialProfile: CapacityProfileEditorDraft
+  } | null>(null)
   const transferMutation = useMutation({
     mutationFn: (resourceTypeId: string) =>
       transferToManualCapacity(projectId, resourceTypeId),
@@ -62,6 +66,46 @@ export default function ResourceProfileTab({
       invalidateProjectResourceProfile(qc, projectId)
     },
   })
+  const bulkNamedAsNeededMutation = useMutation({
+    mutationFn: () => applyNamedPeopleAsNeeded(projectId),
+    onSuccess: () => {
+      invalidateProjectResourceProfile(qc, projectId)
+    },
+  })
+  const isNeedsReplan = profile?.planningState === 'NEEDS_REPLAN'
+  const recoveryRows = isNeedsReplan ? (profile?.resourceRows ?? []) : []
+  const missingRoleCount = recoveryRows.filter(row => row.missingCapacityProfile).length
+  const namedBlockers = recoveryRows.flatMap(row =>
+    (row.namedResources ?? [])
+      .filter(namedResource => namedResource.replanStatus && namedResource.replanStatus !== 'COMPLETE')
+      .map(namedResource => ({ row, namedResource })),
+  )
+  const namedAvailabilityCount = namedBlockers.filter(({ namedResource }) => namedResource.replanStatus === 'NEEDS_AVAILABILITY').length
+  const namedBlockedCount = namedBlockers.filter(({ namedResource }) => namedResource.replanStatus === 'BLOCKED').length
+  const namedEligibleCount = namedBlockers.filter(({ namedResource }) => namedResource.canUseAsNeeded).length
+
+  function openNamedAvailabilityProfile(
+    namedResource: NonNullable<NonNullable<typeof profile>['resourceRows'][number]['namedResources']>[number],
+  ) {
+    setEditingNamedProfile({
+      ownerId: namedResource.id,
+      initialProfile: namedResource.capacityProfile
+        ? {
+            planningBasis: namedResource.capacityProfile.planningBasis,
+            defaultPercent: namedResource.capacityProfile.defaultPercent ?? null,
+            startWeek: namedResource.capacityProfile.startWeek ?? null,
+            endWeek: namedResource.capacityProfile.endWeek ?? null,
+            segments: namedResource.capacityProfile.segments,
+          }
+        : {
+            planningBasis: 'demandFollowing',
+            defaultPercent: 100,
+            startWeek: null,
+            endWeek: null,
+            segments: [],
+          },
+    })
+  }
   return (
     <>
     <section className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
@@ -81,6 +125,96 @@ export default function ResourceProfileTab({
           </button>
         )}
       </header>
+      {isNeedsReplan && (
+        <div className="px-6 py-4 border-b border-amber-200 dark:border-amber-900 bg-amber-50/70 dark:bg-amber-950/20 space-y-3" data-testid="replan-recovery-summary">
+          <div>
+            <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200">Complete your replan</h3>
+            <p className="text-xs text-amber-800 dark:text-amber-300 mt-1">
+              Review the configured role capacity and set availability for each named person before completing replanning.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-gray-700 dark:text-gray-300" data-testid="replan-recovery-counts">
+            <span>Role capacity: {Math.max(0, recoveryRows.length - missingRoleCount)} configured</span>
+            {missingRoleCount > 0 && <span className="text-amber-800 dark:text-amber-300">{missingRoleCount} role{missingRoleCount === 1 ? '' : 's'} still need capacity</span>}
+            {namedAvailabilityCount > 0 && <span className="text-amber-800 dark:text-amber-300">{namedAvailabilityCount} named resource{namedAvailabilityCount === 1 ? '' : 's'} still need availability</span>}
+            {namedBlockedCount > 0 && <span className="text-red-700 dark:text-red-300">{namedBlockedCount} named resource{namedBlockedCount === 1 ? '' : 's'} need another planning action</span>}
+            {namedBlockers.length === 0 && <span className="text-green-700 dark:text-green-400">All named resources have availability configured</span>}
+          </div>
+          {namedEligibleCount > 0 && (
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => bulkNamedAsNeededMutation.mutate()}
+                disabled={bulkNamedAsNeededMutation.isPending}
+                className="bg-lab3-navy text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-lab3-blue transition-colors disabled:opacity-50"
+                data-testid="bulk-named-as-needed-button"
+              >
+                {bulkNamedAsNeededMutation.isPending ? 'Creating profiles…' : 'Use As needed for eligible named people'}
+              </button>
+              <span className="text-xs text-gray-600 dark:text-gray-400">Creates only missing, unambiguous named-person profiles.</span>
+            </div>
+          )}
+          {bulkNamedAsNeededMutation.isSuccess && bulkNamedAsNeededMutation.data && (
+            <div className="rounded border border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950 px-3 py-2" role="status" data-testid="bulk-named-as-needed-feedback">
+              <p className="text-xs text-green-700 dark:text-green-400">
+                {bulkNamedAsNeededMutation.data.created > 0
+                  ? `Created As needed availability for ${bulkNamedAsNeededMutation.data.created} named resource${bulkNamedAsNeededMutation.data.created === 1 ? '' : 's'}.`
+                  : 'All eligible named resources already have availability configured.'}
+              </p>
+              {bulkNamedAsNeededMutation.data.remainingFindings.length > 0 && (
+                <p className="text-xs text-amber-800 dark:text-amber-300 mt-1">Replanning is still incomplete; continue with the outstanding actions below.</p>
+              )}
+            </div>
+          )}
+          {bulkNamedAsNeededMutation.isError && (
+            <p role="alert" className="text-xs text-red-700 dark:text-red-400" data-testid="bulk-named-as-needed-error">
+              {apiErrorMessage(bulkNamedAsNeededMutation.error, 'Could not create named-person availability')}
+            </p>
+          )}
+          {namedBlockers.length > 0 && (
+            <div className="space-y-2" data-testid="named-replan-blockers">
+              <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300">Named resources needing attention</h4>
+              {namedBlockers.map(({ row, namedResource }) => (
+                <div key={namedResource.id} className="flex flex-wrap items-center justify-between gap-3 rounded border border-amber-200 dark:border-amber-800 bg-white dark:bg-gray-800 px-3 py-2" data-testid={`named-replan-blocker-${namedResource.id}`}>
+                  <div>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">{namedResource.name}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Role: {row.name}</p>
+                    <p className="text-xs text-amber-800 dark:text-amber-300 mt-0.5">
+                      {namedResource.replanStatus === 'BLOCKED' ? 'Planner ownership needs review' : 'Availability is not configured'}
+                    </p>
+                  </div>
+                  {namedResource.replanAction === 'OPEN_SQUAD_PLANNER' ? (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/projects/${projectId}/timeline?panel=squad-planner`)}
+                      className="text-xs font-medium text-lab3-blue hover:underline"
+                    >
+                      Open Squad Planner
+                    </button>
+                  ) : namedResource.canUseAsNeeded ? (
+                    <button
+                      type="button"
+                      onClick={() => openNamedAvailabilityProfile(namedResource)}
+                      className="text-xs font-medium text-lab3-blue hover:underline"
+                      data-testid={`set-availability-${namedResource.id}`}
+                    >
+                      Set availability
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => toggleNamedResources(row.resourceTypeId)}
+                      className="text-xs font-medium text-lab3-blue hover:underline"
+                    >
+                      Review People
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {profile?.planningState === 'NEEDS_REPLAN' && bulkAsNeededMutation.isSuccess && bulkAsNeededMutation.data && (
         <div className="px-6 py-3 border-b border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950" role="status" data-testid="bulk-as-needed-feedback">
           <p className="text-xs text-green-700 dark:text-green-400">
@@ -89,16 +223,9 @@ export default function ResourceProfileTab({
               : 'All eligible roles already have a persisted As needed profile.'}
           </p>
           {bulkAsNeededMutation.data.remainingFindings.length > 0 && (
-            <>
-              <ul className="list-disc pl-5 mt-1 space-y-1">
-                {bulkAsNeededMutation.data.remainingFindings.map((finding, index) => (
-                  <li key={index} className="text-xs text-amber-800 dark:text-amber-300">{finding}</li>
-                ))}
-              </ul>
-              <p className="text-xs text-amber-800 dark:text-amber-300 mt-1">
-                Remaining findings need manual review before the project can return to CURRENT.
-              </p>
-            </>
+            <p className="text-xs text-amber-800 dark:text-amber-300 mt-1">
+              Role profiles were created, but replanning is still incomplete. Continue with the recovery checklist above.
+            </p>
           )}
         </div>
       )}
@@ -161,8 +288,8 @@ export default function ResourceProfileTab({
                         <button className="text-left hover:text-lab3-navy transition-colors font-medium" onClick={() => toggleRow(row.resourceTypeId)}>
                           {row.count > 1 ? `${row.count} × ${row.name}` : row.name}
                         </button>
-                        {expandedNamedResources.has(row.resourceTypeId) && (
-                          <span className="ml-2 text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-medium uppercase tracking-wide">People</span>
+                        {row.namedResources && row.namedResources.length > 0 && expandedNamedResources.has(row.resourceTypeId) && (
+                          <span data-testid={`people-indicator-${row.resourceTypeId}`} className="ml-2 text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-medium uppercase tracking-wide">People</span>
                         )}
                       </div>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{row.category.replace('_', ' ')}</p>
@@ -606,6 +733,19 @@ export default function ResourceProfileTab({
           onCancel={() => {
             setEditingRoleProfile(null)
           }}
+        />
+      )}
+      {editingNamedProfile && (
+        <CapacityProfileEditorModal
+          isOpen={true}
+          projectId={projectId}
+          ownerKind="NAMED_PERSON"
+          ownerId={editingNamedProfile.ownerId}
+          initialProfile={editingNamedProfile.initialProfile}
+          isPersisted={false}
+          onClose={() => setEditingNamedProfile(null)}
+          onSaved={() => setEditingNamedProfile(null)}
+          onCancel={() => setEditingNamedProfile(null)}
         />
       )}
 
