@@ -78,27 +78,25 @@ export default function PlanningNeedsAttentionBanner({ projectId }: PlanningNeed
           className="shrink-0 bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors disabled:opacity-50"
           data-testid="replan-project-button"
         >
-          {completeMutation.isPending ? 'Checking plan…' : 'Replan project'}
+          {completeMutation.isPending ? 'Checking plan…' : 'Complete replan'}
         </button>
       </div>
 
       {findings && findings.length > 0 && (
-        <div className="mt-3 rounded-lg bg-white dark:bg-gray-800 border border-amber-200 dark:border-amber-800 px-4 py-3 space-y-2">
+        <div className="mt-3 rounded-lg bg-white dark:bg-gray-800 border border-amber-200 dark:border-amber-800 px-4 py-3 space-y-2" data-testid="replan-incomplete-summary">
           <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-            Replanning is not complete yet. Fix the following in Resource Profile:
+            Replanning is not complete yet. This action validates the configured resource planning and returns the project to normal planning when all required inputs are ready.
           </p>
-          <ul className="list-disc pl-5 space-y-1">
-            {findings.map((finding, index) => (
-              <li key={index} className="text-xs text-amber-800 dark:text-amber-300">
-                {finding}
-              </li>
-            ))}
-          </ul>
+          <p className="text-xs text-amber-800 dark:text-amber-300">
+            {findings.filter(finding => finding.startsWith('Named resource "')).length > 0
+              ? `${findings.filter(finding => finding.startsWith('Named resource "')).length} named resource${findings.filter(finding => finding.startsWith('Named resource "')).length === 1 ? '' : 's'} still need availability.`
+              : `${findings.length} planning input${findings.length === 1 ? '' : 's'} still need attention.`}
+          </p>
           <button
             onClick={() => navigate(`/projects/${projectId}/resource-profile`)}
             className="text-xs font-medium text-lab3-navy dark:text-lab3-blue underline hover:text-lab3-blue dark:hover:text-lab3-blue"
           >
-            Open Resource Profile to review inputs
+            Review recovery actions in Resource Profile
           </button>
         </div>
       )}

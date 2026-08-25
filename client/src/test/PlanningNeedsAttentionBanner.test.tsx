@@ -71,9 +71,9 @@ describe('PlanningNeedsAttentionBanner', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Replanning is not complete yet/i)).toBeInTheDocument()
-      expect(screen.getByText(/lacks a ROLE profile/)).toBeInTheDocument()
+      expect(screen.getByText(/1 planning input still need attention/i)).toBeInTheDocument()
     })
-    expect(screen.getByRole('button', { name: 'Open Resource Profile to review inputs' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Review recovery actions in Resource Profile' })).toBeInTheDocument()
   })
 
   it('surfaces unexpected completion errors', async () => {

@@ -269,3 +269,190 @@ export async function applyRoleCountsAsNeeded(
     }
   })
 }
+export interface BulkNamedPeopleAsNeededResult {
+  projectId: string
+  /** The action never transitions planning state — completion owns that. */
+  planningState: 'NEEDS_REPLAN'
+  /** Number of canonical NAMED_PERSON profiles created by this call. */
+  created: number
+  /** Remaining canonical completeness findings (human-readable names). */
+  remainingFindings: string[]
+}
+
+export interface BulkNamedPeopleAsNeededHooks {
+  /** Invoked after each successful named-person profile create. */
+  afterCreate?: (namedResourceId: string, created: number) => Promise<void> | void
+}
+
+function isNamedProfileAlreadyExistsConflict(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false
+  if (err.code !== 'P2002') return false
+  const meta = err.meta as Record<string, unknown> | null | undefined
+  if (!meta || meta.modelName !== 'CapacityProfile') return false
+  const adapterErr = meta.driverAdapterError as Record<string, unknown> | undefined
+  const cause = adapterErr?.cause as Record<string, unknown> | undefined
+  return typeof cause?.originalMessage === 'string'
+    && cause.originalMessage.includes('CapacityProfile_namedResourceId_key')
+}
+
+async function createMissingNamedPersonAsNeededProfile(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+  namedResourceId: string,
+  resourceTypeIds: ReadonlySet<string>,
+  namedResourceIds: ReadonlySet<string>,
+): Promise<boolean> {
+  const existing = await tx.capacityProfile.findFirst({
+    where: { projectId, namedResourceId: namedResourceId },
+    select: { id: true },
+  })
+  if (existing) return false
+
+  const structuralErrors = validateProfileStructure(
+    {
+      id: 'pending-create',
+      projectId,
+      resourceTypeId: null,
+      namedResourceId,
+      ownerKind: 'NAMED_PERSON',
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'MANUAL',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      segments: [],
+    },
+    { projectId, resourceTypeIds, namedResourceIds },
+  )
+  if (structuralErrors.length > 0) {
+    throw new Error(
+      `Refusing to create a non-canonical As-needed profile for named resource ${namedResourceId}: ` +
+        structuralErrors.join('; '),
+    )
+  }
+
+  try {
+    await tx.capacityProfile.create({
+      data: {
+        projectId,
+        ownerKind: 'NAMED_PERSON',
+        resourceTypeId: null,
+        namedResourceId,
+        planningBasis: 'DEMAND_FOLLOWING',
+        source: 'MANUAL',
+        defaultPercent: 100,
+        startWeek: null,
+        endWeek: null,
+        provenance: null,
+      },
+    })
+    return true
+  } catch (error) {
+    if (isNamedProfileAlreadyExistsConflict(error)) return false
+    throw error
+  }
+}
+
+/**
+ * Persist canonical As-needed NAMED_PERSON profiles for every unambiguous
+ * missing named resource in one atomic transaction. Planner-owned and mixed
+ * authority remains untouched for explicit manual recovery.
+ */
+export async function applyNamedPeopleAsNeeded(
+  prisma: PrismaClient,
+  projectId: string,
+  userId: string,
+  hooks: BulkNamedPeopleAsNeededHooks = {},
+): Promise<BulkNamedPeopleAsNeededResult> {
+  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const project = await tx.project.findFirst({
+      where: { id: projectId, ownerId: userId },
+      select: {
+        id: true,
+        planningState: true,
+        resourceTypes: {
+          select: {
+            id: true,
+            namedResources: { select: { id: true } },
+          },
+        },
+        capacityProfiles: {
+          select: {
+            resourceTypeId: true,
+            namedResourceId: true,
+            ownerKind: true,
+            source: true,
+          },
+        },
+      },
+    })
+
+    if (!project) {
+      throw new BulkAsNeededError(404, 'PROJECT_NOT_FOUND', 'Project not found or access denied')
+    }
+    if (project.planningState !== 'NEEDS_REPLAN') {
+      throw new BulkAsNeededError(
+        409,
+        'REPLAN_ACTION_UNAVAILABLE',
+        'This action is only available while the project needs replanning. ' +
+          'Complete or reset the plan before retrying.',
+      )
+    }
+
+    const resourceTypeIds = new Set(project.resourceTypes.map(rt => rt.id))
+    const namedResourceIds = new Set(project.resourceTypes.flatMap(rt => rt.namedResources.map(nr => nr.id)))
+    const namedResourceToRole = new Map<string, string>()
+    for (const rt of project.resourceTypes) {
+      for (const nr of rt.namedResources) namedResourceToRole.set(nr.id, rt.id)
+    }
+
+    const existingNamedIds = new Set<string>()
+    const plannerOwnedRoleIds = new Set<string>()
+    for (const profile of project.capacityProfiles) {
+      if (profile.namedResourceId) existingNamedIds.add(profile.namedResourceId)
+      const roleId = profile.resourceTypeId ?? (
+        profile.namedResourceId ? namedResourceToRole.get(profile.namedResourceId) : undefined
+      )
+      if (roleId && (profile.ownerKind === 'PLANNED_RESOURCE' || profile.source === 'SQUAD_PLANNER')) {
+        plannerOwnedRoleIds.add(roleId)
+      }
+    }
+
+    const eligibleNamedResourceIds = project.resourceTypes.flatMap(rt =>
+      plannerOwnedRoleIds.has(rt.id)
+        ? []
+        : rt.namedResources
+          .filter(nr => !existingNamedIds.has(nr.id))
+          .map(nr => nr.id),
+    )
+
+    let created = 0
+    for (const namedResourceId of eligibleNamedResourceIds) {
+      const didCreate = await createMissingNamedPersonAsNeededProfile(
+        tx,
+        projectId,
+        namedResourceId,
+        resourceTypeIds,
+        namedResourceIds,
+      )
+      if (didCreate) {
+        created++
+        await hooks.afterCreate?.(namedResourceId, created)
+      }
+    }
+
+    if (created > 0) {
+      await tx.project.update({
+        where: { id: projectId },
+        data: { weeklyDemandCache: {} },
+      })
+    }
+
+    return {
+      projectId,
+      planningState: 'NEEDS_REPLAN' as const,
+      created,
+      remainingFindings: await collectReplanningFindings(tx, projectId),
+    }
+  })
+}
