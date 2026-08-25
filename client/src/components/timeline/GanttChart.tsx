@@ -166,11 +166,24 @@ function dependencyDropError(drag: DependencyDragState, targetFeatureId: string 
   return 'This feature cannot be used as a dependency target.'
 }
 
-function featureAtY(rows: ReturnType<typeof useGanttLayout>['rows'], rowY: Map<string, number>, y: number): string | null {
+function featureAtPoint(
+  rows: ReturnType<typeof useGanttLayout>['rows'],
+  rowY: Map<string, number>,
+  x: number,
+  y: number,
+  weekOffset: number,
+  colW: number,
+  totalWeeks: number,
+): string | null {
+  if (x < 0 || x > totalWeeks * colW || y < 0) return null
   const row = rows.find(candidate => {
     if (candidate.type !== 'feature') return false
     const top = rowY.get(candidate.key)
-    return top !== undefined && y >= top && y < top + FEAT_ROW_H
+    if (top === undefined || y < top || y >= top + FEAT_ROW_H) return false
+    const barX = (candidate.entry.startWeek + weekOffset) * colW
+    const barW = Math.max(candidate.entry.durationWeeks * colW, 4)
+    const targetPadding = 6
+    return x >= barX - targetPadding && x <= barX + barW + targetPadding
   })
   return row?.type === 'feature' ? row.entry.featureId : null
 }
@@ -366,14 +379,14 @@ export default function GanttChart({
             ...current,
             currentX: point.x,
             currentY: point.y,
-            hoveredTargetFeatureId: featureAtY(rows, rowY, point.y),
+            hoveredTargetFeatureId: featureAtPoint(rows, rowY, point.x, point.y, weekOffset, colW, totalWeeks),
           }
         : null)
     }
 
     async function onMouseUp(e: MouseEvent) {
       const point = getSvgPoint(e.clientX, e.clientY)
-      const targetFeatureId = featureAtY(rows, rowY, point.y) ?? activeDrag.hoveredTargetFeatureId
+      const targetFeatureId = featureAtPoint(rows, rowY, point.x, point.y, weekOffset, colW, totalWeeks)
       const isValid = isValidDependencyTarget(activeDrag, targetFeatureId, featureDependencies)
       setDependencyDrag(null)
 
@@ -400,7 +413,7 @@ export default function GanttChart({
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
     }
-  }, [colW, dependencyDrag, featureDependencies, getSvgPoint, onAddFeatureDep, rowY, rows])
+  }, [colW, dependencyDrag, featureDependencies, getSvgPoint, onAddFeatureDep, rowY, rows, totalWeeks, weekOffset])
 
   useEffect(() => {
     function onMouseMove(e: MouseEvent) {
