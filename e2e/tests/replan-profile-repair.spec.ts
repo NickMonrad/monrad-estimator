@@ -1,7 +1,6 @@
 /**
- * replan-profile-repair.spec.ts — Targeted E2E regression for issue #456:
- * making a NEEDS_REPLAN Resource Profile actionable when ROLE profiles are
- * missing.
+ * replan-profile-repair.spec.ts — Targeted E2E regression for issue #474:
+ * making NEEDS_REPLAN Resource Profile recovery actionable for named people.
  *
  *  1. Create a project and seed a backlog referencing THREE preserved
  *     role-only ResourceTypes (CSV import creates role-only roles with
@@ -12,9 +11,10 @@
  *     As-needed draft as canonical state.
  *  4. The user chooses the explicit bulk **Use role counts as As needed**
  *     action → exactly one canonical ROLE profile per eligible role.
- *  5. The missing markers disappear; the existing **Replan project**
- *     completion returns the project to CURRENT.
- *  6. Update Timeline succeeds again.
+ *  5. Named people are shown with recovery actions, including the expanded
+ *     empty People panel without a false attention indicator.
+ *  6. The **Complete replan** action returns the project to CURRENT.
+ *  7. Update Timeline succeeds again.
  */
 
 import { test, expect, type Page } from '@playwright/test'
@@ -121,6 +121,8 @@ test.describe('NEEDS_REPLAN Resource Profile repair (issue #474)', () => {
     await expect(page.getByText('Role: Business Analyst')).toBeVisible()
     const emptyRoleRow = page.locator('tr[data-testid^="resource-profile-row-"]', { hasText: 'UX Designer' })
     await expect(emptyRoleRow).toBeVisible()
+    await emptyRoleRow.getByRole('button', { name: 'People ↗', exact: true }).click()
+    await expect(page.getByText(/No named resources - using aggregate count \(\d+\)/)).toBeVisible()
     await expect(emptyRoleRow.getByTestId(/people-indicator-/)).toHaveCount(0)
 
     // ── Explicit named-person bulk user choice ────────────────────────────
@@ -135,7 +137,7 @@ test.describe('NEEDS_REPLAN Resource Profile repair (issue #474)', () => {
     await page.reload()
     await expect(page.getByTestId('replan-recovery-summary')).toContainText('All named resources have availability configured')
 
-    // ── Existing Replan project completion → CURRENT ───────────────────────
+    // ── Complete replan → CURRENT ─────────────────────────────────────────
     await page.getByTestId('replan-project-button').click()
     await expect(page.getByTestId('planning-needs-attention')).not.toBeVisible({ timeout: 10_000 })
 
