@@ -17,6 +17,7 @@ export interface FeatureDependency {
   featureId: string
   dependsOnId: string
 }
+export type DependencyDragDirection = 'from-right' | 'from-left'
 
 export interface StoryDependency {
   storyId: string
