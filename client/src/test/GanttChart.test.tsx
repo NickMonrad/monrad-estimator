@@ -62,11 +62,11 @@ async function visibleHandles() {
   return { rightOne, leftOne, rightTwo, leftTwo }
 }
 
-async function dragTo(handle: HTMLElement, targetY: number) {
+async function dragTo(handle: HTMLElement, targetX: number, targetY: number) {
   fireEvent.mouseDown(handle, { clientX: 64, clientY: 110 })
   await waitFor(() => expect(screen.getByTestId('dependency-drag-preview')).toBeInTheDocument())
-  fireEvent.mouseMove(window, { clientX: 128, clientY: targetY })
-  fireEvent.mouseUp(window, { clientX: 128, clientY: targetY })
+  fireEvent.mouseMove(window, { clientX: targetX, clientY: targetY })
+  fireEvent.mouseUp(window, { clientX: targetX, clientY: targetY })
 }
 
 describe('Gantt feature dependency drag', () => {
@@ -76,10 +76,10 @@ describe('Gantt feature dependency drag', () => {
 
     fireEvent.mouseDown(rightOne, { clientX: 64, clientY: 110 })
     await waitFor(() => expect(screen.getByTestId('dependency-drag-preview')).toBeInTheDocument())
-    fireEvent.mouseMove(window, { clientX: 128, clientY: 150 })
+    fireEvent.mouseMove(window, { clientX: 96, clientY: 150 })
 
     expect(screen.getByTestId('dependency-target-feature-2')).toBeInTheDocument()
-    fireEvent.mouseUp(window, { clientX: 128, clientY: 150 })
+    fireEvent.mouseUp(window, { clientX: 96, clientY: 150 })
 
     await waitFor(() => expect(onAddFeatureDep).toHaveBeenCalledWith('feature-2', 'feature-1'))
     expect(onDragFeature).not.toHaveBeenCalled()
@@ -90,16 +90,29 @@ describe('Gantt feature dependency drag', () => {
     const { onAddFeatureDep } = renderChart()
     const { leftTwo } = await visibleHandles()
 
-    await dragTo(leftTwo, 114)
+    await dragTo(leftTwo, 32, 114)
 
     await waitFor(() => expect(onAddFeatureDep).toHaveBeenCalledWith('feature-2', 'feature-1'))
+  })
+
+  it('rejects a release outside a feature target even when the row aligns', async () => {
+    const { onAddFeatureDep } = renderChart()
+    const { rightOne } = await visibleHandles()
+
+    fireEvent.mouseDown(rightOne, { clientX: 64, clientY: 110 })
+    await waitFor(() => expect(screen.getByTestId('dependency-drag-preview')).toBeInTheDocument())
+    fireEvent.mouseMove(window, { clientX: 200, clientY: 150 })
+    fireEvent.mouseUp(window, { clientX: 200, clientY: 150 })
+
+    expect(onAddFeatureDep).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Drop on another feature to create a dependency.')
   })
 
   it('blocks self-dependency without calling the API', async () => {
     const { onAddFeatureDep } = renderChart()
     const { rightOne } = await visibleHandles()
 
-    await dragTo(rightOne, 114)
+    await dragTo(rightOne, 32, 114)
 
     expect(onAddFeatureDep).not.toHaveBeenCalled()
     expect(screen.getByRole('alert')).toHaveTextContent('A feature cannot depend on itself')
@@ -111,7 +124,7 @@ describe('Gantt feature dependency drag', () => {
     })
     const { rightOne } = await visibleHandles()
 
-    await dragTo(rightOne, 150)
+    await dragTo(rightOne, 96, 150)
 
     expect(onAddFeatureDep).not.toHaveBeenCalled()
     expect(screen.getByRole('alert')).toHaveTextContent('That dependency already exists')
