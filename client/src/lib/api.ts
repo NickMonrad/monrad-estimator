@@ -277,3 +277,22 @@ export const applyRoleCountsAsNeeded = (projectId: string): Promise<BulkAsNeeded
   api
     .post<BulkAsNeededResult>(`/projects/${projectId}/capacity-profiles/bulk-as-needed`)
     .then(r => r.data)
+
+export interface BulkNamedPeopleAsNeededResult {
+  projectId: string
+  /** The bulk action never transitions planning state — completion owns that. */
+  planningState: 'NEEDS_REPLAN'
+  /** Number of canonical NAMED_PERSON profiles created by this call. */
+  created: number
+  /** Remaining canonical completeness findings (human-readable names). */
+  remainingFindings: string[]
+}
+
+/**
+ * Persist canonical As-needed profiles for eligible missing named people while
+ * NEEDS_REPLAN; never overwrites profiles or transitions the project state.
+ */
+export const applyNamedPeopleAsNeeded = (projectId: string): Promise<BulkNamedPeopleAsNeededResult> =>
+  api
+    .post<BulkNamedPeopleAsNeededResult>(`/projects/${projectId}/capacity-profiles/bulk-named-as-needed`)
+    .then(r => r.data)
