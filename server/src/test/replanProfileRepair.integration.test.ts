@@ -703,6 +703,30 @@ describeIf('NEEDS_REPLAN Resource Profile — named-person recovery (issue #474)
     expect(schedule.body.entries.length).toBeGreaterThan(0)
   })
 
+  it('concurrent named-person bulk calls create each eligible profile once', async () => {
+    const f = await createNamedRecoveryFixture()
+
+    const [first, second] = await Promise.all([
+      applyNamedPeopleAsNeeded(prisma, f.projectId, userId),
+      applyNamedPeopleAsNeeded(prisma, f.projectId, userId),
+    ])
+
+    expect(first.created + second.created).toBe(2)
+    const namedProfiles = await prisma.capacityProfile.findMany({
+      where: { projectId: f.projectId, namedResourceId: { in: [f.aliceId, f.bobId] } },
+    })
+    expect(namedProfiles).toHaveLength(2)
+    expect(namedProfiles.every(profile =>
+      profile.ownerKind === 'NAMED_PERSON'
+      && profile.planningBasis === 'DEMAND_FOLLOWING'
+      && profile.source === 'MANUAL'
+      && profile.defaultPercent === 100
+      && profile.startWeek === null
+      && profile.endWeek === null
+      && profile.provenance === null,
+    )).toBe(true)
+  })
+
   it('rolls back all named-person writes when an injected batch failure occurs', async () => {
     const f = await createNamedRecoveryFixture()
     const before = await profileCount(f.projectId)

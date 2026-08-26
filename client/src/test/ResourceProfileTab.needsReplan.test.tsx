@@ -350,6 +350,7 @@ describe('ResourceProfileTab — named-person recovery (issue #474)', () => {
 
     expect(screen.getByTestId('replan-recovery-summary')).toHaveTextContent('Alice Example')
     expect(screen.getByTestId('replan-recovery-summary')).toHaveTextContent('Role: Platform Engineer')
+    expect(screen.getByRole('button', { name: 'Set availability for Alice Example' })).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('set-availability-nr-alice'))
     expect(screen.getByRole('dialog', { name: 'Edit capacity profile' })).toBeInTheDocument()
     expect(screen.getByText('Create Capacity Profile')).toBeInTheDocument()

@@ -197,6 +197,7 @@ export default function ResourceProfileTab({
                       onClick={() => openNamedAvailabilityProfile(namedResource)}
                       className="text-xs font-medium text-lab3-blue hover:underline"
                       data-testid={`set-availability-${namedResource.id}`}
+                      aria-label={`Set availability for ${namedResource.name}`}
                     >
                       Set availability
                     </button>

@@ -284,17 +284,6 @@ export interface BulkNamedPeopleAsNeededHooks {
   afterCreate?: (namedResourceId: string, created: number) => Promise<void> | void
 }
 
-function isNamedProfileAlreadyExistsConflict(err: unknown): boolean {
-  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false
-  if (err.code !== 'P2002') return false
-  const meta = err.meta as Record<string, unknown> | null | undefined
-  if (!meta || meta.modelName !== 'CapacityProfile') return false
-  const adapterErr = meta.driverAdapterError as Record<string, unknown> | undefined
-  const cause = adapterErr?.cause as Record<string, unknown> | undefined
-  return typeof cause?.originalMessage === 'string'
-    && cause.originalMessage.includes('CapacityProfile_namedResourceId_key')
-}
-
 async function createMissingNamedPersonAsNeededProfile(
   tx: Prisma.TransactionClient,
   projectId: string,
@@ -331,26 +320,22 @@ async function createMissingNamedPersonAsNeededProfile(
     )
   }
 
-  try {
-    await tx.capacityProfile.create({
-      data: {
-        projectId,
-        ownerKind: 'NAMED_PERSON',
-        resourceTypeId: null,
-        namedResourceId,
-        planningBasis: 'DEMAND_FOLLOWING',
-        source: 'MANUAL',
-        defaultPercent: 100,
-        startWeek: null,
-        endWeek: null,
-        provenance: null,
-      },
-    })
-    return true
-  } catch (error) {
-    if (isNamedProfileAlreadyExistsConflict(error)) return false
-    throw error
-  }
+  const result = await tx.capacityProfile.createMany({
+    data: [{
+      projectId,
+      ownerKind: 'NAMED_PERSON',
+      resourceTypeId: null,
+      namedResourceId,
+      planningBasis: 'DEMAND_FOLLOWING',
+      source: 'MANUAL',
+      defaultPercent: 100,
+      startWeek: null,
+      endWeek: null,
+      provenance: null,
+    }],
+    skipDuplicates: true,
+  })
+  return result.count > 0
 }
 
 /**
