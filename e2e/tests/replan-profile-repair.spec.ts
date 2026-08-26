@@ -1,7 +1,6 @@
 /**
- * replan-profile-repair.spec.ts — Targeted E2E regression for issue #456:
- * making a NEEDS_REPLAN Resource Profile actionable when ROLE profiles are
- * missing.
+ * replan-profile-repair.spec.ts — Targeted E2E regression for issue #474:
+ * making NEEDS_REPLAN Resource Profile recovery actionable for named people.
  *
  *  1. Create a project and seed a backlog referencing THREE preserved
  *     role-only ResourceTypes (CSV import creates role-only roles with
@@ -12,9 +11,10 @@
  *     As-needed draft as canonical state.
  *  4. The user chooses the explicit bulk **Use role counts as As needed**
  *     action → exactly one canonical ROLE profile per eligible role.
- *  5. The missing markers disappear; the existing **Replan project**
- *     completion returns the project to CURRENT.
- *  6. Update Timeline succeeds again.
+ *  5. Named people are shown with recovery actions, including the expanded
+ *     empty People panel without a false attention indicator.
+ *  6. The **Complete replan** action returns the project to CURRENT.
+ *  7. Update Timeline succeeds again.
  */
 
 import { test, expect, type Page } from '@playwright/test'
@@ -48,8 +48,46 @@ async function seedBacklogViaCsv(page: Page) {
   await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
 }
 
-test.describe('NEEDS_REPLAN Resource Profile repair (issue #456)', () => {
-  test('missing profiles are visible and bulk As-needed + completion restore CURRENT', async ({ page }) => {
+async function seedNamedPeopleAndRepairRoleProfiles(page: Page, projectId: string) {
+  const token = await page.evaluate(() => localStorage.getItem('token'))
+  expect(token).toBeTruthy()
+  const headers = { Authorization: `Bearer ${token}` }
+  const resourceTypesResponse = await page.request.get(`/api/projects/${projectId}/resource-types`, { headers })
+  expect(resourceTypesResponse.ok()).toBeTruthy()
+  const resourceTypes = await resourceTypesResponse.json() as Array<{ id: string; name: string }>
+  const byName = new Map(resourceTypes.map(resourceType => [resourceType.name, resourceType]))
+
+  for (const [roleName, personName] of [
+    ['Tech Lead', 'Alice Platform'],
+    ['Business Analyst', 'Bob Analysis'],
+  ] as const) {
+    const resourceType = byName.get(roleName)
+    expect(resourceType, `resource type ${roleName}`).toBeDefined()
+    const response = await page.request.post(
+      `/api/projects/${projectId}/resource-types/${resourceType!.id}/named-resources`,
+      { headers, data: { name: personName } },
+    )
+    expect(response.ok()).toBeTruthy()
+  }
+
+  return { headers, resourceTypes }
+}
+
+async function seedValidRoleProfiles(page: Page, projectId: string, headers: Record<string, string>, resourceTypes: Array<{ id: string; name: string }>) {
+  for (const resourceType of resourceTypes) {
+    const response = await page.request.put(
+      `/api/projects/${projectId}/capacity-profiles/ROLE/${resourceType.id}`,
+      {
+        headers,
+        data: { planningBasis: 'DEMAND_FOLLOWING', defaultPercent: 100 },
+      },
+    )
+    expect(response.ok(), `role profile ${resourceType.name}`).toBeTruthy()
+  }
+}
+
+test.describe('NEEDS_REPLAN Resource Profile repair (issue #474)', () => {
+  test('named people are actionable, bulk recovery persists, and completion restores CURRENT', async ({ page }) => {
     const projectName = `E2E Replan Repair ${Date.now()}`
     await login(page)
     await createProject(page, projectName)
@@ -60,6 +98,7 @@ test.describe('NEEDS_REPLAN Resource Profile repair (issue #456)', () => {
     await seedBacklogViaCsv(page)
     const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
     expect(projectId).toBeTruthy()
+    const fixture = await seedNamedPeopleAndRepairRoleProfiles(page, projectId)
 
     // ── Reset planning with explicit confirmation ─────────────────────────
     await page.goto(`/projects/${projectId}/resource-profile`)
@@ -69,37 +108,36 @@ test.describe('NEEDS_REPLAN Resource Profile repair (issue #456)', () => {
     await page.getByRole('button', { name: 'Reset planning', exact: true }).click()
     await expect(page.getByTestId('reset-feedback')).toBeVisible({ timeout: 10_000 })
     await expect(page.getByTestId('planning-needs-attention')).toBeVisible()
+    // The fixture starts with valid role profiles; only named-person recovery
+    // is exercised through the browser below.
+    await seedValidRoleProfiles(page, projectId, fixture.headers, fixture.resourceTypes)
+    await page.reload()
+    await expect(page.getByTestId('replan-recovery-summary')).toBeVisible({ timeout: 10_000 })
 
-    // ── The defect shape: preserved role-only rows are marked missing ──────
-    // The project carries the CSV-seeded roles plus any default role-only
-    // types created with the project — every preserved role-only row must be
-    // visibly marked as missing a persisted ROLE profile.
-    const missingBadges = page.locator('[data-testid^="missing-profile-badge-"]')
-    await expect(missingBadges.first()).toBeVisible({ timeout: 10_000 })
-    expect(await missingBadges.count()).toBeGreaterThanOrEqual(3)
-    // The preserved roles themselves are visible (names come from the
-    // CSV-seeded resource types) and each carries the missing marker.
-    for (const roleName of ['Tech Lead', 'Business Analyst', 'UX Designer']) {
-      const roleRow = page.locator('tr[data-testid^="resource-profile-row-"]', { hasText: roleName })
-      await expect(roleRow).toBeVisible()
-      await expect(roleRow.locator('[data-testid^="missing-profile-badge-"]')).toBeVisible()
-    }
+    // ── Named blockers are identified by person and parent role ───────────
+    await expect(page.getByText('Alice Platform')).toBeVisible()
+    await expect(page.getByText('Role: Tech Lead')).toBeVisible()
+    await expect(page.getByText('Bob Analysis')).toBeVisible()
+    await expect(page.getByText('Role: Business Analyst')).toBeVisible()
+    const emptyRoleRow = page.locator('tr[data-testid^="resource-profile-row-"]', { hasText: 'UX Designer' })
+    await expect(emptyRoleRow).toBeVisible()
+    await emptyRoleRow.getByRole('button', { name: 'People ↗', exact: true }).click()
+    await expect(page.getByText(/No named resources - using aggregate count \(\d+\)/)).toBeVisible()
+    await expect(emptyRoleRow.getByTestId(/people-indicator-/)).toHaveCount(0)
 
-    // ── Explicit bulk user choice: Use role counts as As needed ───────────
-    await page.getByRole('button', { name: 'Use role counts as As needed' }).click()
-    await expect(page.getByTestId('bulk-as-needed-feedback')).toContainText(
-      /Created As needed capacity profiles for \d+ roles?\./,
+    // ── Explicit named-person bulk user choice ────────────────────────────
+    await page.getByRole('button', { name: 'Use As needed for eligible named people' }).click()
+    await expect(page.getByTestId('bulk-named-as-needed-feedback')).toContainText(
+      'Created As needed availability for 2 named resources.',
       { timeout: 10_000 },
     )
-    // Every missing marker is resolved — the rows now carry persisted
-    // As-needed profiles.
-    await expect(missingBadges).toHaveCount(0, { timeout: 10_000 })
+    await expect(page.getByTestId('named-replan-blockers')).not.toBeVisible({ timeout: 10_000 })
 
-    // The project must still be quarantined — completion owns the
-    // state transition.
-    await expect(page.getByTestId('planning-needs-attention')).toBeVisible()
+    // Reload proves the two canonical named profiles persisted.
+    await page.reload()
+    await expect(page.getByTestId('replan-recovery-summary')).toContainText('All named resources have availability configured')
 
-    // ── Existing Replan project completion → CURRENT ───────────────────────
+    // ── Complete replan → CURRENT ─────────────────────────────────────────
     await page.getByTestId('replan-project-button').click()
     await expect(page.getByTestId('planning-needs-attention')).not.toBeVisible({ timeout: 10_000 })
 

@@ -19,7 +19,7 @@ process.env.JWT_SECRET = 'test-secret'
 const token = jwt.sign({ userId }, 'test-secret')
 const authHeader = `Bearer ${token}`
 
-const { applyRoleCountsAsNeeded, BulkAsNeededError } = vi.hoisted(() => {
+const { applyRoleCountsAsNeeded, applyNamedPeopleAsNeeded, BulkAsNeededError } = vi.hoisted(() => {
   class BulkAsNeededError extends Error {
     status: number
     code: string
@@ -29,11 +29,12 @@ const { applyRoleCountsAsNeeded, BulkAsNeededError } = vi.hoisted(() => {
       this.code = code
     }
   }
-  return { applyRoleCountsAsNeeded: vi.fn(), BulkAsNeededError }
+  return { applyRoleCountsAsNeeded: vi.fn(), applyNamedPeopleAsNeeded: vi.fn(), BulkAsNeededError }
 })
 
 vi.mock('../lib/bulkAsNeededProfiles.js', () => ({
   applyRoleCountsAsNeeded,
+  applyNamedPeopleAsNeeded,
   BulkAsNeededError,
 }))
 
@@ -97,5 +98,38 @@ describe('POST /api/projects/:projectId/capacity-profiles/bulk-as-needed', () =>
 
     expect(res.status).toBe(404)
     expect(res.body.code).toBe('PROJECT_NOT_FOUND')
+  })
+})
+
+describe('POST /api/projects/:projectId/capacity-profiles/bulk-named-as-needed', () => {
+  it('creates eligible named profiles and returns remaining findings', async () => {
+    applyNamedPeopleAsNeeded.mockResolvedValue({
+      projectId: 'proj-1',
+      planningState: 'NEEDS_REPLAN',
+      created: 2,
+      remainingFindings: ['Named resource "Planner slot" lacks persisted profile'],
+    })
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/capacity-profiles/bulk-named-as-needed')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(200)
+    expect(res.body.created).toBe(2)
+    expect(res.body.remainingFindings).toEqual(['Named resource "Planner slot" lacks persisted profile'])
+    expect(applyNamedPeopleAsNeeded).toHaveBeenCalledWith(expect.anything(), 'proj-1', userId)
+  })
+
+  it('surfaces the named bulk NEEDS_REPLAN guard', async () => {
+    applyNamedPeopleAsNeeded.mockRejectedValue(
+      new BulkAsNeededError(409, 'REPLAN_ACTION_UNAVAILABLE', 'This action is only available while the project needs replanning.'),
+    )
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/capacity-profiles/bulk-named-as-needed')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('REPLAN_ACTION_UNAVAILABLE')
   })
 })

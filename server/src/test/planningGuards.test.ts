@@ -156,6 +156,52 @@ describe('accessible surfaces while NEEDS_REPLAN', () => {
     expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
   })
 
+  it('GET /resource-profile fails closed on malformed persisted profiles while NEEDS_REPLAN', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue({
+      ...NEEDS_REPLAN_PROJECT,
+      resourceTypes: [{
+        id: 'rt-1',
+        name: 'Engineer',
+        category: 'ENGINEERING',
+        count: 1,
+        hoursPerDay: 7.6,
+        dayRate: null,
+        globalType: null,
+        namedResources: [{
+          id: 'nr-1',
+          resourceTypeId: 'rt-1',
+          name: 'Alice',
+          pricingModel: 'ACTUAL_DAYS',
+        }],
+      }],
+      epics: [],
+      overheads: [],
+      timelineEntries: [],
+      storyTimelineEntries: [],
+      capacityPlans: [],
+      capacityProfiles: [{
+        id: 'cp-bad',
+        projectId: 'proj-1',
+        resourceTypeId: null,
+        namedResourceId: 'nr-1',
+        ownerKind: 'NAMED_PERSON',
+        source: 'MANUAL',
+        planningBasis: 'DEMAND_FOLLOWING',
+        defaultPercent: 100,
+        startWeek: 8,
+        endWeek: 3,
+        segments: [],
+      }],
+    } as never)
+
+    const res = await request(app)
+      .get('/api/projects/proj-1/resource-profile')
+      .set('Authorization', authHeader)
+
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('CAPACITY_INTEGRITY_ERROR')
+  })
+
   it('GET /resource-profile returns effort/inputs with neutral planning values and the marker', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue({
       ...NEEDS_REPLAN_PROJECT,
