@@ -35,6 +35,7 @@ function makeDb(projectRow: unknown) {
     capacityProfile: {
       findFirst: vi.fn().mockResolvedValue(null),
       create: vi.fn().mockResolvedValue({ id: 'profile-created' }),
+      createMany: vi.fn().mockResolvedValue({ count: 1 }),
       // The bulk action is strictly create-only — never called; present so
       // tests can assert the update path is never taken.
       update: vi.fn(),
@@ -66,24 +67,6 @@ function p2002RoleProfileDuplicate(): Prisma.PrismaClientKnownRequestError {
   )
 }
 
-function p2002NamedProfileDuplicate(): Prisma.PrismaClientKnownRequestError {
-  return new Prisma.PrismaClientKnownRequestError(
-    'Unique constraint failed on the fields: (`namedResourceId`)',
-    {
-      code: 'P2002',
-      clientVersion: '7.8.0',
-      meta: {
-        modelName: 'CapacityProfile',
-        driverAdapterError: {
-          cause: {
-            originalMessage:
-              'insert into "CapacityProfile" ... violates unique constraint "CapacityProfile_namedResourceId_key"',
-          },
-        },
-      },
-    },
-  )
-}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -323,8 +306,8 @@ describe('applyNamedPeopleAsNeeded', () => {
     const result = await applyNamedPeopleAsNeeded(db as never, 'proj-1', 'user-1')
 
     expect(result).toMatchObject({ projectId: 'proj-1', planningState: 'NEEDS_REPLAN', created: 1 })
-    expect(tx.capacityProfile.create).toHaveBeenCalledWith({
-      data: {
+    expect(tx.capacityProfile.createMany).toHaveBeenCalledWith({
+      data: [{
         projectId: 'proj-1',
         ownerKind: 'NAMED_PERSON',
         resourceTypeId: null,
@@ -335,7 +318,8 @@ describe('applyNamedPeopleAsNeeded', () => {
         startWeek: null,
         endWeek: null,
         provenance: null,
-      },
+      }],
+      skipDuplicates: true,
     })
     expect(tx.capacityProfile.create).not.toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ namedResourceId: 'nr-planner' }),
@@ -363,12 +347,12 @@ describe('applyNamedPeopleAsNeeded', () => {
       capacityProfiles: [],
     }))
     tx.capacityProfile.findFirst.mockResolvedValue(null)
-    tx.capacityProfile.create
-      .mockResolvedValueOnce({ id: 'created-alice' })
+    tx.capacityProfile.createMany
+      .mockResolvedValueOnce({ count: 1 })
       .mockRejectedValueOnce(new Error('unexpected database failure'))
 
     await expect(applyNamedPeopleAsNeeded(db as never, 'proj-1', 'user-1')).rejects.toThrow('unexpected database failure')
-    expect(tx.capacityProfile.create).toHaveBeenCalledTimes(2)
+    expect(tx.capacityProfile.createMany).toHaveBeenCalledTimes(2)
   })
 
   it('treats a concurrent named-owner unique conflict as an unchanged skip', async () => {
@@ -377,9 +361,9 @@ describe('applyNamedPeopleAsNeeded', () => {
       capacityProfiles: [],
     }))
     tx.capacityProfile.findFirst.mockResolvedValue(null)
-    tx.capacityProfile.create
-      .mockRejectedValueOnce(p2002NamedProfileDuplicate())
-      .mockResolvedValueOnce({ id: 'created-charlie' })
+    tx.capacityProfile.createMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 })
 
     const result = await applyNamedPeopleAsNeeded(db as never, 'proj-1', 'user-1')
 

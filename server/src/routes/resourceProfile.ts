@@ -8,6 +8,7 @@ import { buildResourceCapacityProfileMap } from '../lib/capacityProfileResourceA
 import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
 import { deriveProjectPlanningModel } from '../lib/projectPlanningModel.js'
 import { projectCapacityProfileToLegacyAllocation } from '../lib/capacityProfileLegacyProjection.js'
+import { validatePersistedCapacityProfiles } from '../lib/persistedCapacityProfileValidation.js'
 type AllocationMode = 'EFFORT' | 'TIMELINE' | 'FULL_PROJECT' | 'CAPACITY_PLAN'
 
 const router = Router({ mergeParams: true })
@@ -220,6 +221,21 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     // ROLE profile when it has no named resources, or when any of its
     // profiles are planner-owned (PLANNED_RESOURCE / SQUAD_PLANNER) — the
     // same boundary checkPersistedCompleteness enforces.
+    const resourceTypeIds = new Set(project.resourceTypes.map(rt => rt.id))
+    const namedResourceIds = new Set(
+      project.resourceTypes.flatMap(rt => rt.namedResources.map(nr => nr.id)),
+    )
+    const validation = validatePersistedCapacityProfiles(
+      project.capacityProfiles as Parameters<typeof validatePersistedCapacityProfiles>[0],
+      { projectId: project.id, resourceTypeIds, namedResourceIds },
+    )
+    if (!validation.valid) {
+      res.status(409).json({
+        error: 'Persisted capacity profiles are invalid: ' + validation.errors.join('; '),
+        code: 'CAPACITY_INTEGRITY_ERROR',
+      })
+      return
+    }
     const profileByRtId = new Map<string, (typeof project.capacityProfiles)[number]>()
     const namedProfileById = new Map<string, (typeof project.capacityProfiles)[number]>()
     const plannerOwnedRtIds = new Set<string>()
