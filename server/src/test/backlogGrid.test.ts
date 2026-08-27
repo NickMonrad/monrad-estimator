@@ -150,6 +150,74 @@ describe('POST /api/projects/:projectId/backlog/grid-commit', () => {
       ]),
     })
   })
+  it('rejects two existing siblings renamed to the same proposed name', async () => {
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([
+      { id: 'epic-1', name: 'Epic A', features: [] },
+      { id: 'epic-2', name: 'Epic B', features: [] },
+    ] as never)
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/backlog/grid-commit`)
+      .set('Authorization', authHeader)
+      .send({ rows: [
+        { id: 'epic-1', type: 'epic', name: 'X' },
+        { id: 'epic-2', type: 'epic', name: 'X' },
+      ] })
+
+    expect(response.status).toBe(400)
+    expect(response.body.fieldErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ row: 0, message: 'duplicate proposed hierarchy path' }),
+      expect.objectContaining({ row: 1, message: 'duplicate proposed hierarchy path' }),
+    ]))
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('rejects an existing rename that collides with a newly staged sibling', async () => {
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([{ id: 'epic-1', name: 'Epic A', features: [] }] as never)
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/backlog/grid-commit`)
+      .set('Authorization', authHeader)
+      .send({ rows: [
+        { id: 'epic-1', type: 'epic', name: 'X' },
+        { type: 'epic', name: 'X' },
+      ] })
+
+    expect(response.status).toBe(400)
+    expect(response.body.fieldErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ row: 0, message: 'duplicate proposed hierarchy path' }),
+      expect.objectContaining({ row: 1, message: 'duplicate proposed hierarchy path' }),
+    ]))
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('rejects duplicate proposed task paths within one existing story', async () => {
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([{
+      id: 'epic-1', name: 'E', features: [{
+        id: 'feature-1', name: 'F', epicId: 'epic-1', userStories: [{
+          id: 'story-1', name: 'S', featureId: 'feature-1', tasks: [
+            { id: 'task-1', name: 'Task A' },
+            { id: 'task-2', name: 'Task B' },
+          ],
+        }],
+      }],
+    }] as never)
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/backlog/grid-commit`)
+      .set('Authorization', authHeader)
+      .send({ rows: [
+        { id: 'task-1', type: 'task', epicName: 'E', featureName: 'F', storyName: 'S', name: 'X', resourceTypeId: 'rt-dev', hoursEffort: 4 },
+        { id: 'task-2', type: 'task', epicName: 'E', featureName: 'F', storyName: 'S', name: 'X', resourceTypeId: 'rt-dev', hoursEffort: 4 },
+      ] })
+
+    expect(response.status).toBe(400)
+    expect(response.body.fieldErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ row: 0, message: 'duplicate proposed hierarchy path' }),
+      expect.objectContaining({ row: 1, message: 'duplicate proposed hierarchy path' }),
+    ]))
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
 
   it('assigns contiguous order to new tasks without counting existing updates', async () => {
     vi.mocked(prisma.epic.findMany).mockResolvedValue([{
