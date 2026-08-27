@@ -180,6 +180,7 @@ npm run test:e2e:local
 
 # Externally managed test database (Docker unavailable or CI with managed service):
 # MONRAD_TEST_DATABASE_URL="postgresql://user@host:5432/db_name" MONRAD_ALLOW_EXTERNAL_TEST_DATABASE=1 npm run test:integration:local
+```
 
 Temporary test databases are managed within disposable PostgreSQL 15 Docker
 containers per worktree/run. Before removing the container the local runner
