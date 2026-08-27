@@ -4,7 +4,8 @@ import jwt from 'jsonwebtoken'
 
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
-import { validateBacklogGrid } from '../lib/backlogGrid.js'
+import { commitBacklogGrid, validateBacklogGrid } from '../lib/backlogGrid.js'
+import * as projectSnapshotService from '../lib/projectSnapshotService.js'
 
 process.env.JWT_SECRET = 'test-secret'
 const userId = 'grid-user'
@@ -119,5 +120,61 @@ describe('POST /api/projects/:projectId/backlog/grid-commit', () => {
     expect(response.body.message).toBe('Grid entry committed')
     expect(prisma.$transaction).toHaveBeenCalledTimes(1)
     expect(response.body.rowIds).toEqual(['task-id', 'story-id', 'feature-id', 'epic-id'])
+  })
+  it('rejects existing-row renames that collide with a sibling hierarchy item', async () => {
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([{
+      id: 'epic-1', name: 'E', features: [{
+        id: 'feature-1', name: 'F', epicId: 'epic-1', userStories: [{
+          id: 'story-1', name: 'S', featureId: 'feature-1', tasks: [{ id: 'task-1', name: 'T' }, { id: 'task-2', name: 'T2' }],
+        }, {
+          id: 'story-2', name: 'S2', featureId: 'feature-1', tasks: [],
+        }],
+      }, {
+        id: 'feature-2', name: 'F2', epicId: 'epic-1', userStories: [],
+      }],
+    }, {
+      id: 'epic-2', name: 'E2', features: [],
+    }] as never)
+
+    await expect(validateBacklogGrid(projectId, [
+      { id: 'epic-1', type: 'epic', name: 'E2' },
+      { id: 'feature-1', type: 'feature', epicName: 'E', name: 'F2' },
+      { id: 'story-1', type: 'story', epicName: 'E', featureName: 'F', name: 'S2' },
+      { id: 'task-1', type: 'task', epicName: 'E', featureName: 'F', storyName: 'S', name: 'T2', resourceTypeId: 'rt-dev', hoursEffort: 4 },
+    ])).rejects.toMatchObject({
+      fieldErrors: expect.arrayContaining([
+        expect.objectContaining({ row: 0, field: 'name', message: expect.stringContaining('existing epic') }),
+        expect.objectContaining({ row: 1, field: 'name', message: expect.stringContaining('existing feature') }),
+        expect.objectContaining({ row: 2, field: 'name', message: expect.stringContaining('existing story') }),
+        expect.objectContaining({ row: 3, field: 'name', message: expect.stringContaining('existing task') }),
+      ]),
+    })
+  })
+
+  it('assigns contiguous order to new tasks without counting existing updates', async () => {
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([{
+      id: 'epic-1', name: 'E', features: [{
+        id: 'feature-1', name: 'F', epicId: 'epic-1', userStories: [{
+          id: 'story-1', name: 'S', featureId: 'feature-1', tasks: [{ id: 'task-1', name: 'Existing' }],
+        }],
+      }],
+    }] as never)
+    vi.spyOn(projectSnapshotService, 'buildSnapshot').mockResolvedValue({} as never)
+    const taskCreate = vi.fn()
+      .mockResolvedValueOnce({ id: 'task-2' })
+      .mockResolvedValueOnce({ id: 'task-3' })
+    vi.mocked(prisma.$transaction).mockImplementationOnce(async callback => callback({
+      backlogSnapshot: { create: vi.fn().mockResolvedValue({ id: 'snapshot-1' }), findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn() },
+      task: { update: vi.fn(), create: taskCreate },
+      project: { update: vi.fn() },
+    } as never) as never)
+
+    await commitBacklogGrid(projectId, userId, [
+      { id: 'task-1', type: 'task', epicName: 'E', featureName: 'F', storyName: 'S', name: 'Existing', resourceTypeId: 'rt-dev', hoursEffort: 4 },
+      { type: 'task', epicName: 'E', featureName: 'F', storyName: 'S', name: 'New 1', resourceTypeId: 'rt-dev', hoursEffort: 4 },
+      { type: 'task', epicName: 'E', featureName: 'F', storyName: 'S', name: 'New 2', resourceTypeId: 'rt-dev', hoursEffort: 4 },
+    ])
+
+    expect(taskCreate.mock.calls.map(([args]) => args.data.order)).toEqual([1, 2])
   })
 })
