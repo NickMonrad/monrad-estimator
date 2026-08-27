@@ -128,6 +128,32 @@ function findExistingRow(tree: ExistingTree, type: GridRowType, id: string) {
   }
   return null
 }
+function existingRenameConflict(tree: ExistingTree, type: GridRowType, id: string, name: unknown): string | null {
+  const existing = findExistingRow(tree, type, id)
+  if (!existing) return null
+  const normalizedName = key(text(name))
+  if (type === 'epic') {
+    return tree.epics.some(epic => epic.id !== id && key(epic.name) === normalizedName)
+      ? 'an existing epic already has this name'
+      : null
+  }
+  if (type === 'feature') {
+    return existing.epic.features.some(feature => feature.id !== id && key(feature.name) === normalizedName)
+      ? 'an existing feature already has this name under the same Epic'
+      : null
+  }
+  if (type === 'story') {
+    if (!existing.feature) return null
+    return existing.feature.userStories.some(story => story.id !== id && key(story.name) === normalizedName)
+      ? 'an existing story already has this name under the same Feature'
+      : null
+  }
+  if (!existing.story) return null
+  return existing.story.tasks.some(task => task.id !== id && key(task.name) === normalizedName)
+    ? 'an existing task already has this name under the same Story'
+    : null
+}
+
 
 export async function validateBacklogGrid(projectId: string, rows: BacklogGridRowInput[]) {
   const tree = await loadTree(projectId)
@@ -148,7 +174,12 @@ export async function validateBacklogGrid(projectId: string, rows: BacklogGridRo
     if (row.id) {
       if (seenIds.has(row.id)) addError(errors, rowIndex, 'id', 'the same existing item appears more than once')
       seenIds.add(row.id)
-      if (!findExistingRow(tree, row.type, row.id)) addError(errors, rowIndex, 'id', 'existing item was not found in this project')
+      const existing = findExistingRow(tree, row.type, row.id)
+      if (!existing) addError(errors, rowIndex, 'id', 'existing item was not found in this project')
+      else {
+        const renameConflict = existingRenameConflict(tree, row.type, row.id, row.name)
+        if (renameConflict) addError(errors, rowIndex, 'name', renameConflict)
+      }
     }
 
     if (row.type !== 'epic') requireText(errors, rowIndex, 'epicName', row.epicName, 'Epic')
@@ -325,8 +356,8 @@ export async function commitBacklogGrid(projectId: string, userId: string, rows:
         else {
           const created = await tx.task.create({ data: { name: text(row.name), description, assumptions, resourceTypeId, hoursEffort, durationDays, userStoryId: storyId, order: taskOrder.get(storyId) ?? 0 } })
           committedId = created.id
+          taskOrder.set(storyId, (taskOrder.get(storyId) ?? 0) + 1)
         }
-        taskOrder.set(storyId, (taskOrder.get(storyId) ?? 0) + 1)
       }
       rowIds[index] = committedId
     }
