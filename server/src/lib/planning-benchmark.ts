@@ -171,17 +171,50 @@ export function measurePlanningQuality(
 
   const scheduleById = new Map(output.featureSchedule.map(entry => [entry.featureId, entry]))
   const dependencyViolations: PlanningQualityMetrics['dependencyViolations'] = []
+  const dependencyViolationKeys = new Set<string>()
+  const addDependencyViolation = (featureId: string, dependsOnId: string) => {
+    const key = `${featureId}|${dependsOnId}`
+    if (dependencyViolationKeys.has(key)) return
+    dependencyViolationKeys.add(key)
+    dependencyViolations.push({ featureId, dependsOnId })
+  }
+  const checkDependency = (featureId: string, dependsOnId: string) => {
+    const entry = scheduleById.get(featureId)
+    const predecessor = scheduleById.get(dependsOnId)
+    if (!entry || !predecessor) return
+    if (entry.startWeek + EPSILON < predecessor.startWeek + predecessor.durationWeeks) {
+      addDependencyViolation(featureId, dependsOnId)
+    }
+  }
+
   for (const epic of input.epics) {
     for (const feature of epic.features) {
-      const entry = scheduleById.get(feature.id)
-      if (!entry) continue
       for (const dependency of feature.dependencies ?? []) {
-        const predecessor = scheduleById.get(dependency.dependsOnId)
-        if (!predecessor) continue
-        if (entry.startWeek + EPSILON < predecessor.startWeek + predecessor.durationWeeks) {
-          dependencyViolations.push({ featureId: feature.id, dependsOnId: dependency.dependsOnId })
-        }
+        checkDependency(feature.id, dependency.dependsOnId)
       }
+    }
+  }
+
+  const epicById = new Map(input.epics.map(epic => [epic.id, epic]))
+  for (const dependency of input.epicDeps) {
+    const predecessorEpic = epicById.get(dependency.dependsOnId)
+    const dependentEpic = epicById.get(dependency.epicId)
+    if (!predecessorEpic || !dependentEpic) continue
+    for (const predecessor of predecessorEpic.features) {
+      for (const dependent of dependentEpic.features) {
+        checkDependency(dependent.id, predecessor.id)
+      }
+    }
+  }
+
+  const manualFeatureIds = new Set(input.manualFeatureEntries.map(entry => entry.featureId))
+  for (const epic of input.epics) {
+    if ((epic.featureMode ?? 'sequential') !== 'sequential') continue
+    const sortedFeatures = [...epic.features].sort((a, b) => a.order - b.order)
+    for (let index = 1; index < sortedFeatures.length; index++) {
+      const predecessor = sortedFeatures[index - 1]
+      if (manualFeatureIds.has(predecessor.id)) continue
+      checkDependency(sortedFeatures[index].id, predecessor.id)
     }
   }
 
