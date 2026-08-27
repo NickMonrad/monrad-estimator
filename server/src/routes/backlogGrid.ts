@@ -6,7 +6,7 @@ import { ownedProject } from '../lib/ownership.js'
 import {
   BacklogGridValidationError,
   commitBacklogGrid,
-  type BacklogGridRowInput,
+  parseBacklogGridRows,
 } from '../lib/backlogGrid.js'
 
 const router = Router({ mergeParams: true })
@@ -19,12 +19,13 @@ router.post('/grid-commit', asyncHandler(async (req: AuthRequest, res: Response)
     res.status(404).json({ error: 'Project not found' })
     return
   }
-  const rows = req.body?.rows as BacklogGridRowInput[] | undefined
-  if (!Array.isArray(rows) || rows.length === 0) {
+  const rawRows = req.body?.rows
+  if (!Array.isArray(rawRows) || rawRows.length === 0) {
     res.status(400).json({ error: 'rows array is required' })
     return
   }
   try {
+    const rows = parseBacklogGridRows(rawRows)
     const result = await commitBacklogGrid(projectId, req.userId!, rows)
     res.json({ message: 'Grid entry committed', ...result })
   } catch (error) {

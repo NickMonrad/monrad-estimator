@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken'
 
 import { app } from '../index.js'
 import { prisma } from '../lib/prisma.js'
+import { validateBacklogGrid } from '../lib/backlogGrid.js'
 
 process.env.JWT_SECRET = 'test-secret'
 const userId = 'grid-user'
@@ -30,6 +31,58 @@ describe('POST /api/projects/:projectId/backlog/grid-commit', () => {
     expect(response.status).toBe(404)
     expect(response.body.error).toBe('Project not found')
   })
+  it('rejects malformed rows with field errors', async () => {
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/backlog/grid-commit`)
+      .set('Authorization', authHeader)
+      .send({ rows: [null] })
+
+    expect(response.status).toBe(400)
+    expect(response.body.fieldErrors).toEqual(expect.arrayContaining([expect.objectContaining({ row: 0, field: 'row' })]))
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('rejects a new Story that conflicts with an existing Story', async () => {
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([{
+      id: 'epic-1', name: 'E', features: [{ id: 'feature-1', name: 'F', epicId: 'epic-1', userStories: [{ id: 'story-1', name: 'S', featureId: 'feature-1', tasks: [] }] }],
+    }] as never)
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/backlog/grid-commit`)
+      .set('Authorization', authHeader)
+      .send({ rows: [{ type: 'story', epicName: 'E', featureName: 'F', name: 'S' }] })
+
+    expect(response.status).toBe(400)
+    expect(response.body.fieldErrors).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining('existing story') })]))
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('rejects a new Task that conflicts with an existing Task', async () => {
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([{
+      id: 'epic-1', name: 'E', features: [{ id: 'feature-1', name: 'F', epicId: 'epic-1', userStories: [{ id: 'story-1', name: 'S', featureId: 'feature-1', tasks: [{ id: 'task-1', name: 'T' }] }] }],
+    }] as never)
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/backlog/grid-commit`)
+      .set('Authorization', authHeader)
+      .send({ rows: [{ type: 'task', epicName: 'E', featureName: 'F', storyName: 'S', name: 'T', resourceTypeId: 'rt-dev', hoursEffort: 4 }] })
+
+    expect(response.status).toBe(400)
+    expect(response.body.fieldErrors).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining('existing task') })]))
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+  it('allows same names under different parent paths', async () => {
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([{
+      id: 'epic-1', name: 'E1', features: [{ id: 'feature-1', name: 'F', epicId: 'epic-1', userStories: [{ id: 'story-1', name: 'S', featureId: 'feature-1', tasks: [{ id: 'task-1', name: 'T' }] }] }],
+    }] as never)
+
+    await expect(validateBacklogGrid(projectId, [
+      { type: 'epic', name: 'E2' },
+      { type: 'feature', epicName: 'E2', name: 'F' },
+      { type: 'story', epicName: 'E2', featureName: 'F', name: 'S' },
+      { type: 'task', epicName: 'E2', featureName: 'F', storyName: 'S', name: 'T', resourceTypeId: 'rt-dev', hoursEffort: 4 },
+    ])).resolves.toBeDefined()
+  })
+
+
 
   it('rejects an unresolved resource type before opening a transaction', async () => {
     const response = await request(app)
@@ -65,5 +118,6 @@ describe('POST /api/projects/:projectId/backlog/grid-commit', () => {
     expect(response.status).toBe(200)
     expect(response.body.message).toBe('Grid entry committed')
     expect(prisma.$transaction).toHaveBeenCalledTimes(1)
+    expect(response.body.rowIds).toEqual(['task-id', 'story-id', 'feature-id', 'epic-id'])
   })
 })

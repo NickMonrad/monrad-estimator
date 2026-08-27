@@ -50,6 +50,35 @@ describe('BacklogGrid', () => {
     fireEvent.keyDown(secondName, { key: 'ArrowRight' })
     expect(screen.getByLabelText('Row 2 active')).toHaveFocus()
   })
+  it('skips disabled Task Active cell during horizontal navigation', () => {
+    render(<BacklogGrid projectId="p1" epics={[]} resourceTypes={resourceTypes} onCommitted={vi.fn()} onExit={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('New row type'), { target: { value: 'task' } })
+    fireEvent.click(screen.getByRole('button', { name: '+ Add row' }))
+    const name = screen.getByLabelText('Row 1 name')
+    const resourceType = screen.getByLabelText('Row 1 resource type')
+    name.focus()
+    fireEvent.keyDown(name, { key: 'ArrowRight' })
+    expect(resourceType).toHaveFocus()
+    fireEvent.keyDown(resourceType, { key: 'ArrowLeft' })
+    expect(name).toHaveFocus()
+  })
+
+  it('uses persisted row identities for a second same-session save', async () => {
+    vi.mocked(api.post)
+      .mockResolvedValueOnce({ data: { message: 'Grid entry committed', rowIds: ['epic-1'] } } as never)
+      .mockResolvedValueOnce({ data: { message: 'Grid entry committed', rowIds: ['epic-1'] } } as never)
+    render(<BacklogGrid projectId="p1" epics={[]} resourceTypes={resourceTypes} onCommitted={vi.fn()} onExit={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '+ Add row' }))
+    fireEvent.change(screen.getByLabelText('Row 1 name'), { target: { value: 'New Epic' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Grid Entry' }))
+    await waitFor(() => expect(screen.getByText('Saved')).toBeVisible())
+    fireEvent.change(screen.getByLabelText('Row 1 name'), { target: { value: 'Renamed Epic' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Grid Entry' }))
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.post).mock.calls[1][0]).toBe('/projects/p1/backlog/grid-commit')
+    expect(vi.mocked(api.post).mock.calls[1][1]).toEqual(expect.objectContaining({ rows: [expect.objectContaining({ id: 'epic-1', name: 'Renamed Epic' })] }))
+  })
+
 
 
   it('commits valid rows explicitly and reports success', async () => {
