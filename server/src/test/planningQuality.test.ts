@@ -8,6 +8,7 @@ import {
 import { runSAPlanner } from '../lib/sa-planner.js'
 import { runScheduler } from '../lib/scheduler.js'
 import {
+  epicDependencyViolation,
   explicitRoleMaximum,
   factorySupplyChainBenchmark,
   manualCapacityAndScheduleLock,
@@ -23,6 +24,8 @@ const TOLERANCE = 1e-6
 function evaluate(input: ReturnType<typeof serialCriticalPath>, targetDurationWeeks: number) {
   const output = runScheduler(input)
   const metrics = measurePlanningQuality(input, output, targetDurationWeeks)
+  const repeatMetrics = measurePlanningQuality(input, runScheduler(input), targetDurationWeeks)
+  expect(repeatMetrics).toEqual(metrics)
   expect(totalConsumedEffortDays(output)).toBeCloseTo(totalExpectedEffortDays(input), 6)
   expect(metrics.capacityViolations).toEqual([])
   expect(metrics.dependencyViolations).toEqual([])
@@ -85,6 +88,9 @@ describe('deterministic planning-quality scenarios', () => {
   it('records an explicit role maximum as the concrete reason a target is not reached', () => {
     const { input, config } = explicitRoleMaximum()
     const result = computeCapacityPlan(input, config)
+    const repeatResult = computeCapacityPlan(input, config)
+    expect(repeatResult.periods).toEqual(result.periods)
+    expect(repeatResult.deliveryWeeks).toBe(result.deliveryWeeks)
     const cappedRole = result.periods.flatMap(period => period.resources)
       .filter(resource => resource.resourceTypeId === 'rt-dev')
 
@@ -109,6 +115,7 @@ describe('deterministic planning-quality scenarios', () => {
 
     expect(locked).toMatchObject({ startWeek: 3, durationWeeks: 2, isManual: true })
     expect(following.startWeek).toBeGreaterThanOrEqual(5 - TOLERANCE)
+    expect(metrics.demandWeeksByRole['rt-dev']).toEqual([3, 4, 5])
     expect(metrics.effortByRole['rt-dev']).toBeCloseTo(15, 6)
   })
 
@@ -127,30 +134,48 @@ describe('deterministic planning-quality scenarios', () => {
     expect(second.deterministicFingerprint).toBe(first.deterministicFingerprint)
     expect(second).toEqual(first)
   })
+
+  it('reports violations in explicit epic dependencies', () => {
+    const input = epicDependencyViolation()
+    const output = runScheduler(input)
+    const metrics = measurePlanningQuality(input, output, 2)
+
+    expect(metrics.dependencyViolations).toContainEqual({
+      featureId: 'dependency-dependent',
+      dependsOnId: 'dependency-predecessor',
+    })
+  })
 })
 
 describe('Factory / Supply Chain representative benchmark', () => {
-  it('reproduces the current Squad Planner failure under an existing profile window', () => {
+  it('reproduces the current failure mode on the sanitised Factory/Supply Chain proxy', () => {
     const benchmark = factorySupplyChainBenchmark()
     const { input, config, facts } = benchmark
-    let failure: unknown
-
-    try {
-      computeCapacityPlan(input, config)
-    } catch (error) {
-      failure = error
+    const runFailure = () => {
+      try {
+        computeCapacityPlan(input, config)
+        return null
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error)
+      }
     }
-
+    const failure = runFailure()
+    expect(runFailure()).toBe(failure)
     expect(facts.epicCount).toBe(23)
     expect(facts.featureCount).toBe(248)
+    const totalEffortHours = input.epics
+      .flatMap(epic => epic.features)
+      .flatMap(feature => feature.userStories)
+      .flatMap(story => story.tasks)
+      .reduce((sum, task) => sum + task.hoursEffort, 0)
+    expect(totalEffortHours).toBe(facts.sanitizedEffortHours)
     expect(input.epics.reduce((sum, epic) => sum + epic.features.length, 0)).toBe(facts.featureCount)
     expect(input.resourceTypes).toHaveLength(facts.roleCount)
     expect(config.maxCap).toBeUndefined()
     expect(config.maxParallelismPerFeature).toBe(2)
     expect(config.maxConcurrentEpics).toBe(6)
-    expect(failure).toBeInstanceOf(Error)
-    expect((failure as Error).message).toContain('Fractional planner could not finish feature')
-    expect((failure as Error).message).toMatch(/within \d+ weeks$/)
+    expect(failure).toContain('Fractional planner could not finish feature')
+    expect(failure).toMatch(/within \d+ weeks$/)
 
     const constrainedRole = input.resourceTypes.find(rt => rt.id === facts.constrainedRoleId)!
     expect(constrainedRole.count).toBe(3)
@@ -171,6 +196,9 @@ describe('Factory / Supply Chain representative benchmark', () => {
       })),
     }
     const result = computeCapacityPlan(unconstrainedInput, benchmark.config)
+    const repeatResult = computeCapacityPlan(unconstrainedInput, benchmark.config)
+    expect(repeatResult.periods).toEqual(result.periods)
+    expect(repeatResult.deliveryWeeks).toBe(result.deliveryWeeks)
 
     expect(result.deliveryWeeks).toBeGreaterThan(0)
     expect(result.levellingResult.totalDeliveryWeeks).toBe(result.deliveryWeeks)

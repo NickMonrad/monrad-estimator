@@ -95,12 +95,18 @@ export function makeInput(
 const dev = () => makeResourceType('rt-dev', 'Developer', 1)
 
 export function serialCriticalPath(): SchedulerInput {
-  const features = [0, 1].map(index => makeFeature(
-    `serial-f${index}`,
-    [makeStory(`serial-s${index}`, [makeTask(40, 'rt-dev', 'Developer', 8, 10)])],
-    index,
-  ))
-  return makeInput([makeEpic('serial-epic', features)], [dev()])
+  const first = makeFeature(
+    'serial-f0',
+    [makeStory('serial-s0', [makeTask(40, 'rt-dev', 'Developer', 8, 10)])],
+    0,
+  )
+  const second = makeFeature(
+    'serial-f1',
+    [makeStory('serial-s1', [makeTask(40, 'rt-dev', 'Developer', 8, 10)])],
+    1,
+    [{ featureId: 'serial-f1', dependsOnId: 'serial-f0' }],
+  )
+  return makeInput([makeEpic('serial-epic', [first, second])], [dev()])
 }
 
 export function parallelSameRole(): SchedulerInput {
@@ -177,10 +183,28 @@ export function manualCapacityAndScheduleLock(): SchedulerInput {
     1,
     [{ featureId: 'following-f', dependsOnId: 'locked-f' }],
   )
+  const lockedRole = makeResourceType('rt-dev', 'Developer', 1, 8, {
+    roleSegments: [{ startWeek: 3, endWeek: 7, allocationPercent: 100 }],
+  })
   return makeInput([
     makeEpic('locked-epic', [locked, following]),
-  ], [dev()], {
+  ], [lockedRole], {
     manualFeatureEntries: [{ featureId: 'locked-f', startWeek: 3, durationWeeks: 2 }],
+  })
+}
+export function epicDependencyViolation(): SchedulerInput {
+  const predecessor = makeFeature('dependency-predecessor', [
+    makeStory('dependency-predecessor-story', [makeTask(40, 'rt-dev', 'Developer')]),
+  ])
+  const dependent = makeFeature('dependency-dependent', [
+    makeStory('dependency-dependent-story', [makeTask(40, 'rt-dev', 'Developer')]),
+  ])
+  return makeInput([
+    makeEpic('dependency-source-epic', [predecessor]),
+    makeEpic('dependency-dependent-epic', [dependent], 1),
+  ], [dev()], {
+    epicDeps: [{ epicId: 'dependency-dependent-epic', dependsOnId: 'dependency-source-epic' }],
+    manualFeatureEntries: [{ featureId: 'dependency-dependent', startWeek: 0, durationWeeks: 1 }],
   })
 }
 
@@ -210,18 +234,20 @@ export function mixedProgramme(): SchedulerInput {
 }
 
 /**
- * Sanitised Factory / Supply Chain representative.
+ * Sanitised Factory / Supply Chain structural proxy.
  *
  * No Factory/Supply Chain CSV or workbook exists in this repository or its git
  * history. The published planning facts are retained here: 23 epics, 248
- * features, roughly 26k hours, and seven role types. Names, work-item text,
- * customer data, and exact weekly profiles are intentionally absent.
+ * features, roughly 26k hours, and seven role types. The topology and effort
+ * distribution are synthetic; names, work-item text, customer data, and exact
+ * weekly profiles are intentionally absent.
  */
 export const FACTORY_SUPPLY_CHAIN_FACTS = {
   epicCount: 23,
   featureCount: 248,
   roleCount: 7,
   approximateEffortHours: 26_000,
+  sanitizedEffortHours: 25_760,
   targetDurationWeeks: 78,
   constrainedRoleId: 'factory-role-data',
   constrainedRoleName: 'Data Integration',

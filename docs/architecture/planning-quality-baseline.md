@@ -14,7 +14,7 @@ Issue #479 establishes a deterministic baseline before changing planner semantic
 - demand weeks, ramp-up/ramp-down transitions, and sparse-role shape; and
 - a stable output fingerprint for repeatability checks.
 
-Every claimed-feasible scenario asserts effort conservation, dependency correctness, capacity compliance, and repeatability. The scenarios intentionally use small, named fixtures in `server/src/test/planningBenchmarkFixtures.ts` rather than a generic optimisation framework.
+Every claimed-feasible scenario asserts effort conservation, dependency correctness, capacity compliance, and repeatability. The Factory proxy asserts repeatability for both its failure and control paths. The scenarios intentionally use small, named fixtures in `server/src/test/planningBenchmarkFixtures.ts` rather than a generic optimisation framework.
 
 ## Baseline metrics
 
@@ -32,13 +32,13 @@ The following values are produced by the current deterministic scheduler at the 
 
 The parallel fixture is the deliberate capacity-sensitivity control: changing Developer count from one to two reduces achieved duration from four to two weeks without changing the conserved 20 person-days of effort. The serial fixture keeps its four-week duration with one or four Developers because each task has a ten-day elapsed-duration floor.
 
-## Factory / Supply Chain reproduction
+## Factory / Supply Chain structural proxy
 
-No Factory / Supply Chain CSV, workbook, timeline, resource-profile export, customer/dependency register, or related artefact was found in the repository or its git history; GitHub code search for `Coles Factory` returned no matches. The only committed CSV is an unrelated Westpac Fabric enablement PoC import. The committed large-project fixture is therefore explicitly **sanitised and representative**, not a copy of customer data.
+No Factory / Supply Chain CSV, workbook, timeline, resource-profile export, customer/dependency register, or related artefact was found in the repository or its git history; GitHub code search for `Coles Factory` returned no matches. The only committed CSV is an unrelated Westpac Fabric enablement PoC import. This fixture is therefore a **sanitised structural proxy**, not a verified copy or reproduction of the customer case.
 
-The fixture preserves the planning facts available in issue history: 23 epics, 248 features, seven role types, and 25,760 hours (approximately 26k). It preserves role-mix and parallel/sequential topology characteristics but contains no customer names, work-item descriptions, or asserted spreadsheet week placements.
+The proxy preserves the aggregate planning facts available in issue history: 23 epics, 248 features, seven role types, and 25,760 hours (approximately 26k). Its role mix, effort distribution, and parallel/sequential pattern are deliberately sanitised and synthetic; no customer names, work-item descriptions, dependency register, or spreadsheet week placements are asserted.
 
-The reproduction calls `computeCapacityPlan`, which is the pure core called by `POST /api/projects/:projectId/squad-plan` in `server/src/routes/squadPlan.ts`.
+The proxy exercises `computeCapacityPlan`, the pure core called by `POST /api/projects/:projectId/squad-plan` in `server/src/routes/squadPlan.ts`. It reproduces the observed failure **mode** under a finite resolved role profile; the actual Factory/Supply Chain runtime result remains unverified without an authoritative artefact.
 
 | Input | Value |
 |---|---|
@@ -49,20 +49,20 @@ The reproduction calls `computeCapacityPlan`, which is the pure core called by `
 | `maxParallelismPerFeature` | 2 |
 | `maxConcurrentEpics` | 6 |
 | Constrained resolved profile | Data Integration role segment, 100% in weeks 0–5 only |
-| Current result | Failure: `Fractional planner could not finish feature factory-feature-014 within 1252 weeks` |
-| Control result | Removing only that profile window succeeds in 55 weeks with the same topology and planner settings |
+| Proxy result | Failure: `Fractional planner could not finish feature factory-feature-014 within 1252 weeks` |
+| Proxy control result | Removing only that profile window succeeds in 55 weeks with the same topology and planner settings |
 
 ### Evidence-backed constraint diagnosis
 
 1. `squadPlan.ts` loads resolved scheduler capacity with `includeCapacityPlanMaterialization: false`; it preserves non-empty role profile segments.
 2. `computeCapacityPlan` invokes `runSAPlanner` with the configured target, parallelism, concurrency, and optional max cap.
 3. `runSAPlanner.getWeeklyCapacityDays()` divides `getWeeklyCapacity()` by role hours/day. A non-empty `roleSegments` array is authoritative; weeks outside its segments have zero capacity.
-4. The Data Integration role has remaining demand after week 5. The allocator therefore cannot finish the representative feature and throws after its deterministic availability probe/maximum horizon; the route converts that error into the current generic 400 “No feasible squad plan” response with the detail appended.
-5. Removing the role segment, without changing counts, max caps, parallelism, concurrency, effort, or topology, succeeds. This isolates the profile window as the reproduced limiter.
+4. The Data Integration role has remaining demand after week 5. The proxy allocator therefore cannot finish the representative feature and throws after its deterministic availability probe/maximum horizon; the application route converts that error into the current generic 400 “No feasible squad plan” response with the detail appended.
+5. Removing the role segment, without changing counts, max caps, parallelism, concurrency, effort, or topology, succeeds. This isolates the profile window as the reproduced failure mode on the proxy.
 
-The run has no configured hard role maximum (`maxCap` is absent). The profile window is an actual persisted-capacity constraint, not a UI-only inference. Current role counts are also used as the available capacity seed, but they are not the direct cause in this reproduction: removing the window is sufficient to produce a plan. Feature/epic ordering and the configured parallelism/concurrency limits remain real schedule constraints, but they do not explain this failure because the same settings succeed in the control run. No explicit dependency edges are needed to trigger the failure.
+The proxy run has no configured hard role maximum (`maxCap` is absent). The profile window is an actual persisted-capacity constraint, not a UI-only inference. Current role counts are also used as the available capacity seed, but they are not the direct cause in this proxy: removing the window is sufficient to produce a plan. Feature/epic ordering and the configured parallelism/concurrency limits remain real schedule constraints, but they do not explain this proxy failure because the same settings succeed in the control run. No explicit dependency edges are needed to trigger this failure mode.
 
-No comparable manual Factory / Supply Chain profile was available, so this baseline does not claim automatic/manual dominance or encode a spreadsheet as the correct answer.
+No comparable manual Factory / Supply Chain profile or authoritative runtime artefact was available, so this baseline does not claim automatic/manual dominance or the actual customer-case result.
 
 ## Implications for #480 and #481
 
