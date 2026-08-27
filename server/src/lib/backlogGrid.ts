@@ -153,6 +153,22 @@ function existingRenameConflict(tree: ExistingTree, type: GridRowType, id: strin
     ? 'an existing task already has this name under the same Story'
     : null
 }
+function finalPathForExisting(tree: ExistingTree, type: GridRowType, id: string, finalNames: { epic: Map<string, string>; feature: Map<string, string>; story: Map<string, string>; task: Map<string, string> }): string | null {
+  const existing = findExistingRow(tree, type, id)
+  if (!existing) return null
+  const epicName = finalNames.epic.get(existing.epic.id) ?? existing.epic.name
+  if (type === 'epic') return `epic:${key(epicName)}`
+  if (!existing.feature) return null
+  const featureName = finalNames.feature.get(existing.feature.id) ?? existing.feature.name
+  if (type === 'feature') return `feature:${key(epicName)}:${key(featureName)}`
+  if (!existing.story) return null
+  const storyName = finalNames.story.get(existing.story.id) ?? existing.story.name
+  if (type === 'story') return `story:${key(epicName)}:${key(featureName)}:${key(storyName)}`
+  const task = existing.story.tasks.find(candidate => candidate.id === id)
+  if (!task) return null
+  const taskName = finalNames.task.get(task.id) ?? task.name
+  return `task:${key(epicName)}:${key(featureName)}:${key(storyName)}:${key(taskName)}`
+}
 
 
 export async function validateBacklogGrid(projectId: string, rows: BacklogGridRowInput[]) {
@@ -260,6 +276,112 @@ export async function validateBacklogGrid(projectId: string, rows: BacklogGridRo
       else if (existingTask) addError(errors, rowIndex, 'name', 'an existing task already has this name; edit that row instead')
     }
   }
+  const finalNames = {
+    epic: new Map<string, string>(tree.epics.map(epic => [epic.id, epic.name])),
+    feature: new Map<string, string>(tree.epics.flatMap(epic => epic.features).map(feature => [feature.id, feature.name])),
+    story: new Map<string, string>(tree.epics.flatMap(epic => epic.features.flatMap(feature => feature.userStories)).map(story => [story.id, story.name])),
+    task: new Map<string, string>(tree.epics.flatMap(epic => epic.features.flatMap(feature => feature.userStories.flatMap(story => story.tasks))).map(task => [task.id, task.name])),
+  }
+  const submittedIds = new Set<string>()
+  for (const row of rows) {
+    if (!row.id || !findExistingRow(tree, row.type, row.id)) continue
+    submittedIds.add(`${row.type}:${row.id}`)
+    finalNames[row.type].set(row.id, text(row.name))
+  }
+
+  type FinalNode = { id?: string; finalName: string }
+  type FinalResolution = FinalNode | 'ambiguous' | null
+  const resolveFinalEpic = (name: unknown): FinalResolution => {
+    const normalized = key(text(name))
+    const existing = findUniqueByName(tree.epics, text(name))
+    if (existing === 'ambiguous') return 'ambiguous'
+    if (existing) return { id: existing.id, finalName: finalNames.epic.get(existing.id) ?? existing.name }
+    const staged = stagedEpics.filter(row => key(row.name ?? '') === normalized)
+    if (staged.length > 1) return 'ambiguous'
+    if (staged.length === 1) return { finalName: text(staged[0].name) }
+    const renamed = tree.epics.filter(epic => key(finalNames.epic.get(epic.id) ?? epic.name) === normalized)
+    if (renamed.length > 1) return 'ambiguous'
+    return renamed.length === 1 ? { id: renamed[0].id, finalName: finalNames.epic.get(renamed[0].id) ?? renamed[0].name } : null
+  }
+  const resolveFinalFeature = (epicName: unknown, name: unknown): FinalResolution => {
+    const epic = resolveFinalEpic(epicName)
+    if (!epic || epic === 'ambiguous') return epic
+    if (epic.id) {
+      const existingEpic = tree.epics.find(candidate => candidate.id === epic.id)
+      const existing = findUniqueByName(existingEpic?.features ?? [], text(name))
+      if (existing === 'ambiguous') return 'ambiguous'
+      if (existing) return { id: existing.id, finalName: finalNames.feature.get(existing.id) ?? existing.name }
+      const renamed = (existingEpic?.features ?? []).filter(feature => key(finalNames.feature.get(feature.id) ?? feature.name) === key(text(name)))
+      if (renamed.length > 1) return 'ambiguous'
+      if (renamed.length === 1) return { id: renamed[0].id, finalName: finalNames.feature.get(renamed[0].id) ?? renamed[0].name }
+    }
+    const staged = stagedFeatures.filter(row => {
+      const parent = resolveFinalEpic(row.epicName)
+      return key(row.name ?? '') === key(text(name)) && parent !== null && parent !== 'ambiguous' && key(parent.finalName) === key(epic.finalName)
+    })
+    if (staged.length > 1) return 'ambiguous'
+    return staged.length === 1 ? { finalName: text(staged[0].name) } : null
+  }
+  const resolveFinalStory = (epicName: unknown, featureName: unknown, name: unknown): FinalResolution => {
+    const feature = resolveFinalFeature(epicName, featureName)
+    if (!feature || feature === 'ambiguous') return feature
+    if (feature.id) {
+      const existingFeature = tree.epics.flatMap(epic => epic.features).find(candidate => candidate.id === feature.id)
+      const existing = findUniqueByName(existingFeature?.userStories ?? [], text(name))
+      if (existing === 'ambiguous') return 'ambiguous'
+      if (existing) return { id: existing.id, finalName: finalNames.story.get(existing.id) ?? existing.name }
+      const renamed = (existingFeature?.userStories ?? []).filter(story => key(finalNames.story.get(story.id) ?? story.name) === key(text(name)))
+      if (renamed.length > 1) return 'ambiguous'
+      if (renamed.length === 1) return { id: renamed[0].id, finalName: finalNames.story.get(renamed[0].id) ?? renamed[0].name }
+    }
+    const staged = stagedStories.filter(row => {
+      const parent = resolveFinalFeature(row.epicName, row.featureName)
+      return key(row.name ?? '') === key(text(name)) && parent !== null && parent !== 'ambiguous' && key(parent.finalName) === key(feature.finalName)
+    })
+    if (staged.length > 1) return 'ambiguous'
+    return staged.length === 1 ? { finalName: text(staged[0].name) } : null
+  }
+  const proposedPathForNewRow = (row: BacklogGridRowInput): string | null => {
+    if (row.type === 'epic') return `epic:${key(text(row.name))}`
+    const epic = resolveFinalEpic(row.epicName)
+    if (!epic || epic === 'ambiguous') return null
+    if (row.type === 'feature') return `feature:${key(epic.finalName)}:${key(text(row.name))}`
+    const feature = resolveFinalFeature(row.epicName, row.featureName)
+    if (!feature || feature === 'ambiguous') return null
+    if (row.type === 'story') return `story:${key(epic.finalName)}:${key(feature.finalName)}:${key(text(row.name))}`
+    const story = resolveFinalStory(row.epicName, row.featureName, row.storyName)
+    if (!story || story === 'ambiguous') return null
+    return `task:${key(epic.finalName)}:${key(feature.finalName)}:${key(story.finalName)}:${key(text(row.name))}`
+  }
+  const proposedPaths = new Map<string, number[]>()
+  const addProposedPath = (path: string | null, rowIndex: number | null) => {
+    if (!path) return
+    const owners = proposedPaths.get(path) ?? []
+    owners.push(rowIndex ?? -1)
+    proposedPaths.set(path, owners)
+  }
+  for (const epic of tree.epics) {
+    if (!submittedIds.has(`epic:${epic.id}`)) addProposedPath(`epic:${key(finalNames.epic.get(epic.id) ?? epic.name)}`, null)
+    for (const feature of epic.features) {
+      if (!submittedIds.has(`feature:${feature.id}`)) addProposedPath(`feature:${key(finalNames.epic.get(epic.id) ?? epic.name)}:${key(finalNames.feature.get(feature.id) ?? feature.name)}`, null)
+      for (const story of feature.userStories) {
+        if (!submittedIds.has(`story:${story.id}`)) addProposedPath(`story:${key(finalNames.epic.get(epic.id) ?? epic.name)}:${key(finalNames.feature.get(feature.id) ?? feature.name)}:${key(finalNames.story.get(story.id) ?? story.name)}`, null)
+        for (const task of story.tasks) {
+          if (!submittedIds.has(`task:${task.id}`)) addProposedPath(`task:${key(finalNames.epic.get(epic.id) ?? epic.name)}:${key(finalNames.feature.get(feature.id) ?? feature.name)}:${key(finalNames.story.get(story.id) ?? story.name)}:${key(finalNames.task.get(task.id) ?? task.name)}`, null)
+        }
+      }
+    }
+  }
+  for (const [rowIndex, row] of rows.entries()) {
+    addProposedPath(row.id ? finalPathForExisting(tree, row.type, row.id, finalNames) : proposedPathForNewRow(row), rowIndex)
+  }
+  for (const owners of proposedPaths.values()) {
+    if (owners.length < 2) continue
+    for (const rowIndex of owners) {
+      if (rowIndex >= 0) addError(errors, rowIndex, 'name', 'duplicate proposed hierarchy path')
+    }
+  }
+
 
   if (errors.length > 0) throw new BacklogGridValidationError(errors)
   return { tree, resourceTypes }
