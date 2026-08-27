@@ -33,7 +33,7 @@ interface Props {
   projectId: string
   epics: Epic[]
   resourceTypes: ResourceType[]
-  onCommitted: () => void
+  onCommitted: () => void | Promise<void>
   onExit: () => void
 }
 
@@ -44,7 +44,8 @@ function rowEditableFields(row: GridRow): EditableField[] {
   if (row.type !== 'epic') fields.push('epicName')
   if (row.type === 'story' || row.type === 'task') fields.push('featureName')
   if (row.type === 'task') fields.push('storyName')
-  fields.push('name', 'isActive')
+  fields.push('name')
+  if (row.type !== 'task') fields.push('isActive')
   if (row.type === 'task') fields.push('resourceTypeName', 'hoursEffort', 'durationDays')
   return fields
 }
@@ -191,6 +192,7 @@ export default function BacklogGrid({ projectId, epics, resourceTypes, onCommitt
       })
       return next
     })
+
     setStatus('idle')
     setServerError(null)
   }
@@ -213,10 +215,12 @@ export default function BacklogGrid({ projectId, epics, resourceTypes, onCommitt
     if (nextErrors.length > 0) return
     setStatus('saving')
     try {
-      await api.post(`/projects/${projectId}/backlog/grid-commit`, { rows: rows.map(row => ({ id: row.id, type: row.type, epicName: row.epicName, featureName: row.featureName, storyName: row.storyName, name: row.name, isActive: row.isActive, description: row.description, assumptions: row.assumptions, resourceTypeId: row.resourceTypeId || null, resourceTypeName: row.resourceTypeName, hoursEffort: row.type === 'task' ? Number(row.hoursEffort) : undefined, durationDays: row.type === 'task' && row.durationDays ? Number(row.durationDays) : undefined })) })
+      const response = await api.post(`/projects/${projectId}/backlog/grid-commit`, { rows: rows.map(row => ({ id: row.id, type: row.type, epicName: row.epicName, featureName: row.featureName, storyName: row.storyName, name: row.name, isActive: row.isActive, description: row.description, assumptions: row.assumptions, resourceTypeId: row.resourceTypeId || null, resourceTypeName: row.resourceTypeName, hoursEffort: row.type === 'task' ? Number(row.hoursEffort) : undefined, durationDays: row.type === 'task' && row.durationDays ? Number(row.durationDays) : undefined })) })
+      const rowIds = response.data?.rowIds
+      if (Array.isArray(rowIds)) setRows(current => current.map((row, index) => ({ ...row, id: typeof rowIds[index] === 'string' ? rowIds[index] : row.id })))
+      await onCommitted()
       setStatus('success')
       setErrors([])
-      onCommitted()
     } catch (error) {
       const responseErrors = (error as { response?: { data?: { fieldErrors?: FieldError[] } } }).response?.data?.fieldErrors
       setErrors(responseErrors ?? [])

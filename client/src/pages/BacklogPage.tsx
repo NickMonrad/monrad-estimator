@@ -77,6 +77,10 @@ export default function BacklogPage() {
     qc.invalidateQueries({ queryKey: ['epicDeps', projectId] })
     qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
   }
+  const refreshAfterGridCommit = async () => {
+    invalidate()
+    await qc.refetchQueries({ queryKey: ['backlog', projectId] })
+  }
 
   // Metadata-only mutations do not affect planning, but document payloads
   // include hierarchy names and assumptions from these queries.
@@ -304,7 +308,7 @@ export default function BacklogPage() {
         {isLoading ? (
           <div className="text-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
         ) : showGrid ? (
-          <BacklogGrid projectId={projectId!} epics={tree} resourceTypes={resourceTypes} onCommitted={invalidate} onExit={() => setShowGrid(false)} />
+          <BacklogGrid projectId={projectId!} epics={tree} resourceTypes={resourceTypes} onCommitted={refreshAfterGridCommit} onExit={() => setShowGrid(false)} />
         ) : (
           <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
             <SortableContext items={tree.map(e => 'epic-' + e.id)} strategy={verticalListSortingStrategy}>

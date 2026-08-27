@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { buildSnapshot } from './projectSnapshotService.js'
 import { pruneSnapshots } from './snapshotUtils.js'
 import { prisma } from './prisma.js'
@@ -35,7 +36,7 @@ export class BacklogGridValidationError extends Error {
 }
 
 interface ExistingTree {
-  epics: Array<{ id: string; name: string; features: Array<{ id: string; name: string; epicId: string; userStories: Array<{ id: string; name: string; featureId: string; tasks: Array<{ id: string }> }> }> }>
+  epics: Array<{ id: string; name: string; features: Array<{ id: string; name: string; epicId: string; userStories: Array<{ id: string; name: string; featureId: string; tasks: Array<{ id: string; name: string }> }> }> }>
 }
 
 const text = (value: unknown) => typeof value === 'string' ? value.trim() : ''
@@ -44,6 +45,35 @@ const key = (value: string) => value.trim().toLocaleLowerCase()
 function addError(errors: GridFieldError[], row: number, field: string, message: string) {
   errors.push({ row, field, message })
 }
+const gridRowsSchema = z.array(z.object({
+  id: z.string().nullable().optional(),
+  type: z.enum(['epic', 'feature', 'story', 'task']),
+  epicName: z.string().optional(),
+  featureName: z.string().optional(),
+  storyName: z.string().optional(),
+  name: z.string().optional(),
+  isActive: z.boolean().optional(),
+  description: z.string().nullable().optional(),
+  assumptions: z.string().nullable().optional(),
+  resourceTypeId: z.string().nullable().optional(),
+  resourceTypeName: z.string().nullable().optional(),
+  hoursEffort: z.number().nullable().optional(),
+  durationDays: z.number().nullable().optional(),
+})).min(1)
+
+export function parseBacklogGridRows(value: unknown): BacklogGridRowInput[] {
+  const result = gridRowsSchema.safeParse(value)
+  if (!result.success) {
+    throw new BacklogGridValidationError(result.error.issues.map(issue => ({
+      row: typeof issue.path[0] === 'number' ? issue.path[0] : 0,
+      field: typeof issue.path[1] === 'string' ? issue.path[1] : typeof issue.path[0] === 'number' ? 'row' : 'rows',
+      message: issue.message,
+    })))
+  }
+  return result.data
+}
+
+
 
 function requireText(errors: GridFieldError[], row: number, field: string, value: unknown, label: string) {
   if (!text(value)) addError(errors, row, field, `${label} is required`)
@@ -72,7 +102,7 @@ async function loadTree(projectId: string): Promise<ExistingTree> {
           id: true,
           name: true,
           epicId: true,
-          userStories: { select: { id: true, name: true, featureId: true, tasks: { select: { id: true } } } },
+          userStories: { select: { id: true, name: true, featureId: true, tasks: { select: { id: true, name: true } } } },
         },
       },
     },
@@ -182,13 +212,22 @@ export async function validateBacklogGrid(projectId: string, rows: BacklogGridRo
     const stagedFeature = stagedFeatures.find(candidate => key(candidate.epicName ?? '') === key(row.epicName ?? '') && key(candidate.name ?? '') === key(row.featureName ?? ''))
     if (!stagedFeature && existingFeature === 'ambiguous') addError(errors, rowIndex, 'featureName', 'Feature name is ambiguous')
     else if (!stagedFeature && !existingFeature) addError(errors, rowIndex, 'featureName', 'Feature does not exist or is not staged')
-    if (row.type !== 'task') continue
     const existingFeatureRecord = existingFeature && existingFeature !== 'ambiguous' ? existingFeature : null
     const storyCandidates = existingFeatureRecord ? tree.epics.flatMap(e => e.features).find(f => f.id === existingFeatureRecord.id)?.userStories ?? [] : []
-    const existingStory = findUniqueByName(storyCandidates, text(row.storyName))
+    const existingStory = findUniqueByName(storyCandidates, text(row.type === 'story' ? row.name : row.storyName))
+    if (row.type === 'story') {
+      if (existingFeatureRecord && existingStory === 'ambiguous') addError(errors, rowIndex, 'name', 'Story name is ambiguous')
+      else if (existingFeatureRecord && existingStory) addError(errors, rowIndex, 'name', 'an existing story already has this name; edit that row instead')
+      continue
+    }
     const stagedStory = stagedStories.find(candidate => key(candidate.epicName ?? '') === key(row.epicName ?? '') && key(candidate.featureName ?? '') === key(row.featureName ?? '') && key(candidate.name ?? '') === key(row.storyName ?? ''))
     if (!stagedStory && existingStory === 'ambiguous') addError(errors, rowIndex, 'storyName', 'Story name is ambiguous')
     else if (!stagedStory && !existingStory) addError(errors, rowIndex, 'storyName', 'Story does not exist or is not staged')
+    if (existingStory && existingStory !== 'ambiguous') {
+      const existingTask = findUniqueByName(existingStory.tasks, text(row.name))
+      if (existingTask === 'ambiguous') addError(errors, rowIndex, 'name', 'Task name is ambiguous')
+      else if (existingTask) addError(errors, rowIndex, 'name', 'an existing task already has this name; edit that row instead')
+    }
   }
 
   if (errors.length > 0) throw new BacklogGridValidationError(errors)
@@ -200,8 +239,9 @@ export async function commitBacklogGrid(projectId: string, userId: string, rows:
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { hoursPerDay: true } })
   const hoursPerDay = project?.hoursPerDay ?? 7.6
   const rank: Record<GridRowType, number> = { epic: 0, feature: 1, story: 2, task: 3 }
-  const orderedRows = [...rows].sort((left, right) => rank[left.type] - rank[right.type])
+  const orderedRows = rows.map((row, index) => ({ row, index })).sort((left, right) => rank[left.row.type] - rank[right.row.type])
   const result = await prisma.$transaction(async tx => {
+    const rowIds: Array<string | null> = Array(rows.length).fill(null)
     let snapshotId: string | null = null
     if (tree.epics.length > 0) {
       const snapshot = await buildSnapshot(projectId, tx)
@@ -237,13 +277,15 @@ export async function commitBacklogGrid(projectId: string, userId: string, rows:
       }
     }
 
-    for (const row of orderedRows) {
+    for (const { row, index } of orderedRows) {
+      let committedId = row.id ?? null
       const description = row.description ?? null
       const assumptions = row.assumptions ?? null
       if (row.type === 'epic') {
         if (row.id) await tx.epic.update({ where: { id: row.id }, data: { name: text(row.name), description, assumptions, ...(row.isActive !== undefined && { isActive: row.isActive }) } })
         else {
           const created = await tx.epic.create({ data: { name: text(row.name), description, assumptions, projectId, order: epicOrder++, isActive: row.isActive ?? true } })
+          committedId = created.id
           epicIds.set(`name:${key(row.name ?? '')}`, created.id)
         }
       }
@@ -254,6 +296,7 @@ export async function commitBacklogGrid(projectId: string, userId: string, rows:
         else {
           const created = await tx.feature.create({ data: { name: text(row.name), description, assumptions, epicId, order: featureOrder.get(epicId) ?? 0, isActive: row.isActive ?? true } })
           featureOrder.set(epicId, (featureOrder.get(epicId) ?? 0) + 1)
+          committedId = created.id
           featureIds.set(`name:${key(row.epicName ?? '')}:${key(row.name ?? '')}`, created.id)
         }
       }
@@ -266,6 +309,7 @@ export async function commitBacklogGrid(projectId: string, userId: string, rows:
         else {
           const created = await tx.userStory.create({ data: { name: text(row.name), description, assumptions, featureId, order: storyOrder.get(featureId) ?? 0, isActive: row.isActive ?? true } })
           storyOrder.set(featureId, (storyOrder.get(featureId) ?? 0) + 1)
+          committedId = created.id
           storyIds.set(`name:${key(row.epicName ?? '')}:${key(row.featureName ?? '')}:${key(row.name ?? '')}`, created.id)
         }
       }
@@ -278,12 +322,16 @@ export async function commitBacklogGrid(projectId: string, userId: string, rows:
         const hoursEffort = row.hoursEffort ?? 0
         const durationDays = row.durationDays ?? calcDurationDays(hoursEffort, hoursPerDay)
         if (row.id) await tx.task.update({ where: { id: row.id }, data: { name: text(row.name), description, assumptions, resourceTypeId, hoursEffort, durationDays } })
-        else await tx.task.create({ data: { name: text(row.name), description, assumptions, resourceTypeId, hoursEffort, durationDays, userStoryId: storyId, order: taskOrder.get(storyId) ?? 0 } })
+        else {
+          const created = await tx.task.create({ data: { name: text(row.name), description, assumptions, resourceTypeId, hoursEffort, durationDays, userStoryId: storyId, order: taskOrder.get(storyId) ?? 0 } })
+          committedId = created.id
+        }
         taskOrder.set(storyId, (taskOrder.get(storyId) ?? 0) + 1)
       }
+      rowIds[index] = committedId
     }
     await tx.project.update({ where: { id: projectId }, data: { weeklyDemandCache: {} } })
-    return { snapshotId }
+    return { snapshotId, rowIds }
   }, { timeout: 60000 })
   return result
 }
