@@ -3,7 +3,8 @@ import {
   type SchedulerInput,
   type SchedulerOutput,
 } from './scheduler.js'
-import type { CapacityPlanResult } from './capacity-planner.js'
+import type { CapacityPlanConfig, CapacityPlanResult } from './capacity-planner.js'
+import { runSAPlanner, type SAPlannerResult } from './sa-planner.js'
 import { effortDays } from '../utils/round.js'
 
 export type PlanningQualityMetrics = {
@@ -297,6 +298,8 @@ export type CapacityPlanQualityMetrics = {
   achievedDurationWeeks: number | null
   effortByRole: Record<string, number>
   effortHoursByRole: Record<string, number>
+  scheduledEffortByRole: Record<string, number>
+  scheduledEffortHoursByRole: Record<string, number>
   staffedCapacityHoursByRole: Record<string, number>
   staffedFteWeeksByRole: Record<string, number>
   peakStaffingFteByRole: Record<string, number>
@@ -316,17 +319,65 @@ export type CapacityPlanQualityMetrics = {
   deterministicFingerprint: string | null
 }
 
-function capacityDependencyViolations(
+export function runCapacityPlanSchedule(
   input: SchedulerInput,
-  result: CapacityPlanResult,
+  config: CapacityPlanConfig,
+): SAPlannerResult {
+  return runSAPlanner(input, {
+    targetDurationWeeks: config.targetDurationWeeks,
+    maxParallelismPerFeature: config.maxParallelismPerFeature,
+    maxCap: config.maxCap,
+    maxConcurrentEpics: config.maxConcurrentEpics,
+    iterations: 10000,
+    initialTemp: 100,
+    coolingRate: 0.995,
+  })
+}
+
+function scheduledOutputEffortByRole(
+  input: SchedulerInput,
+  schedule: SAPlannerResult | null,
+): Map<string, { days: number; hours: number }> {
+  const totals = new Map<string, { days: number; hours: number }>()
+  if (!schedule) return totals
+
+  const resourceTypes = new Map(input.resourceTypes.map(rt => [rt.id, rt]))
+  for (const [resourceTypeId, weeklyDemand] of schedule.weeklyDemandByResourceType) {
+    const days = weeklyDemand.reduce((total, demand) => total + (demand ?? 0), 0)
+    if (days <= EPSILON) continue
+    const hoursPerDay = resourceTypes.get(resourceTypeId)?.hoursPerDay ?? input.project.hoursPerDay
+    totals.set(resourceTypeId, { days, hours: days * hoursPerDay })
+  }
+  return totals
+}
+
+function featureTiming(schedule: Pick<SAPlannerResult, 'weeklyAllocationsByFeature'>): Map<string, { startWeek: number; completionWeek: number }> {
+  const timings = new Map<string, { startWeek: number; completionWeek: number }>()
+  for (const [featureId, allocations] of schedule.weeklyAllocationsByFeature) {
+    let startWeek: number | null = null
+    let completionWeek: number | null = null
+    for (const [week, resources] of allocations) {
+      const allocatedDays = [...resources.values()].reduce((total, days) => total + days, 0)
+      if (allocatedDays <= EPSILON) continue
+      startWeek = startWeek == null ? week : Math.min(startWeek, week)
+      completionWeek = completionWeek == null ? week : Math.max(completionWeek, week)
+    }
+    if (startWeek != null && completionWeek != null) timings.set(featureId, { startWeek, completionWeek })
+  }
+  return timings
+}
+
+export function capacityDependencyViolations(
+  input: SchedulerInput,
+  schedule: Pick<SAPlannerResult, 'weeklyAllocationsByFeature'>,
 ): Array<{ featureId: string; dependsOnId: string }> {
-  const starts = result.levellingResult.featureStartWeeks
+  const timings = featureTiming(schedule)
   const violations: Array<{ featureId: string; dependsOnId: string }> = []
   const seen = new Set<string>()
   const check = (featureId: string, dependsOnId: string) => {
-    const featureStart = starts.get(featureId)
-    const dependencyStart = starts.get(dependsOnId)
-    if (featureStart == null || dependencyStart == null || featureStart >= dependencyStart) return
+    const feature = timings.get(featureId)
+    const dependency = timings.get(dependsOnId)
+    if (!feature || !dependency || feature.startWeek > dependency.completionWeek) return
     const key = `${featureId}|${dependsOnId}`
     if (seen.has(key)) return
     seen.add(key)
@@ -354,15 +405,20 @@ function capacityDependencyViolations(
   return violations
 }
 
+
 export function measureCapacityPlanQuality(
   input: SchedulerInput,
   targetDurationWeeks: number,
   result: CapacityPlanResult | null,
+  schedule: SAPlannerResult | null,
   failureReason: string | null = null,
 ): CapacityPlanQualityMetrics {
   const effort = taskEffortByRole(input)
+  const scheduledEffort = scheduledOutputEffortByRole(input, schedule)
   const effortByRole = sortedRecord([...effort].map(([id, value]) => [id, value.days]))
   const effortHoursByRole = sortedRecord([...effort].map(([id, value]) => [id, value.hours]))
+  const scheduledEffortByRole = sortedRecord([...scheduledEffort].map(([id, value]) => [id, value.days]))
+  const scheduledEffortHoursByRole = sortedRecord([...scheduledEffort].map(([id, value]) => [id, value.hours]))
   const staffedCapacityHours = new Map<string, number>()
   const staffedFteWeeks = new Map<string, number>()
   const peakStaffing = new Map<string, number>()
@@ -422,13 +478,15 @@ export function measureCapacityPlanQuality(
     achievedDurationWeeks: result?.deliveryWeeks ?? null,
     effortByRole,
     effortHoursByRole,
+    scheduledEffortByRole,
+    scheduledEffortHoursByRole,
     staffedCapacityHoursByRole,
     staffedFteWeeksByRole,
     peakStaffingFteByRole,
     peakStaffingFte: result?.peakHeadcount ?? null,
     utilisationPctByRole,
     capacityViolations,
-    dependencyViolations: result ? capacityDependencyViolations(input, result) : [],
+    dependencyViolations: result && schedule ? capacityDependencyViolations(input, schedule) : [],
     rampShapeByRole,
     failureReason,
     deterministicFingerprint: fingerprint,
