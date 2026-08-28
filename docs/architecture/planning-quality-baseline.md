@@ -16,11 +16,11 @@ The committed fixture retains 18 generic epics, 222 generic features, 256 resolv
 
 ## Measurement and invariants
 
-`server/src/lib/planning-benchmark.ts` measures scheduler outputs for target and achieved duration, effort hours/person-days by role, staffed capacity hours and FTE-weeks, peak staffing by role and total, utilisation, capacity/dependency violations, demand/ramp shape, and deterministic fingerprints. `measureCapacityPlanQuality()` measures the equivalent capacity-plan fields from `computeCapacityPlan` periods and records only available failure evidence when planning throws.
+`server/src/lib/planning-benchmark.ts` measures scheduler outputs for target and achieved duration, expected and actual scheduled effort hours/person-days by role, staffed capacity hours and FTE-weeks, peak staffing by role and total, utilisation, capacity/dependency violations, demand/ramp shape, and deterministic fingerprints. `runCapacityPlanSchedule()` mirrors the deterministic `runSAPlanner` configuration used by `computeCapacityPlan` and feeds its actual output to `measureCapacityPlanQuality()`; capacity-plan dependency checks derive each worked feature's first and final allocation week, while effort totals come from the planner's actual weekly demand output. It records only available failure evidence when planning throws.
 
 Total scheduler peak staffing is the maximum **combined weekly demand across all roles**. `peakStaffingFteByRole` remains the independent per-role peak. The overlap regression uses Developer 1.0 FTE plus QA 0.5 FTE in the same week, yielding total peak 1.5 FTE rather than the maximum individual role peak.
 
-Every claimed-feasible scheduler scenario asserts effort conservation, dependency correctness, capacity compliance and repeatability. Capacity-plan controls assert deterministic output, effort totals, staffed capacity, peak staffing, utilisation, ramp shape and applicable capacity/dependency invariants. Failure cases retain target, effort and the concrete planner error while leaving unavailable schedule metrics empty.
+Every claimed-feasible scheduler scenario asserts effort conservation, dependency correctness, capacity compliance and repeatability. Capacity-plan controls assert deterministic output, expected-versus-scheduled effort conservation by role, predecessor-completion dependency correctness, staffed capacity, peak staffing, utilisation, ramp shape and applicable capacity invariants. Failure cases retain target, expected effort and the concrete planner error while leaving unavailable schedule metrics empty.
 
 ## Scheduler baseline metrics
 
@@ -45,7 +45,7 @@ The serial fixture remains four weeks with one or four Developers because each t
 | Derived Factory control | 78 / 53 | PC 4,062.2h; Data 10,024.4h; Cloud 2,903.2h | PC 6,150h / 153.75 FTE-weeks; Data 12,560h / 314; Cloud 4,160h / 104 | PC 3; Data 6; Cloud 2 / 11 | 66.01%; 79.80%; 69.75% | 0 / 0 |
 | Derived Factory profile-window failure | 78 / unavailable | PC 4,062.2h; Data 10,024.4h; Cloud 2,903.2h | unavailable after planner failure | unavailable | unavailable | unavailable; profile failure recorded |
 
-The explicit-cap result is a deterministic best-effort plan, not a claimed target-feasible result: the plan reaches four weeks under a hard one-FTE cap against a two-week target. No post-failure utilisation or schedule values are fabricated for the Factory failure.
+The explicit-cap result is a deterministic best-effort plan, not a claimed target-feasible result: the plan reaches four weeks under a hard one-FTE cap against a two-week target. Both successful capacity-plan baselines prove expected effort equals the actual weekly planner demand by role. No post-failure utilisation or schedule values are fabricated for the Factory failure.
 
 ## Factory / Supply Chain reproduction
 
@@ -54,7 +54,7 @@ The sanitised fixture uses the source-derived role-capacity shape of 3 Principal
 Both paths run through `computeCapacityPlan`, the pure core used by `POST /api/projects/:projectId/squad-plan`:
 
 - **Observed failure:** `Fractional planner could not finish feature factory-feature-003 within 1107 weeks`.
-- **Control:** removing only the Data role profile segment, while preserving counts, target, topology, effort, dependency edges, parallelism and epic concurrency, succeeds in 53 weeks with peak 11 FTE and no capacity or dependency violations.
+- **Control:** removing only the Data role profile segment, while preserving counts, target, topology, effort, dependency edges, parallelism and epic concurrency, succeeds in 53 weeks with peak 11 FTE, expected-versus-scheduled effort conservation by role, and no capacity or predecessor-completion dependency violations.
 
 The constraint is code/runtime evidenced. `computeCapacityPlan` invokes `runSAPlanner`; `runSAPlanner` obtains weekly capacity through `getWeeklyCapacity`; a non-empty `roleSegments` array replaces the role's phantom-slot capacity and weeks outside the segment have zero capacity. The derived fixture has continuing Data demand after week 5, so the allocator cannot complete the blocked feature and eventually exhausts its deterministic horizon. The control removes that window and succeeds, isolating the profile window as the limiting constraint for this reproduction. The result is not a claim that every current customer runtime failure has the same blocker.
 

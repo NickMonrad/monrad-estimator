@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { computeCapacityPlan } from '../lib/capacity-planner.js'
 import {
+  capacityDependencyViolations,
   measurePlanningQuality,
   measureCapacityPlanQuality,
+  runCapacityPlanSchedule,
   totalConsumedEffortDays,
   totalExpectedEffortDays,
 } from '../lib/planning-benchmark.js'
-import { runSAPlanner } from '../lib/sa-planner.js'
+import { runSAPlanner, type SAPlannerResult } from '../lib/sa-planner.js'
 import { runScheduler } from '../lib/scheduler.js'
 import {
   epicDependencyViolation,
@@ -98,10 +100,12 @@ describe('deterministic planning-quality scenarios', () => {
   it('records an explicit role maximum as the concrete reason a target is not reached', () => {
     const { input, config } = explicitRoleMaximum()
     const result = computeCapacityPlan(input, config)
+    const schedule = runCapacityPlanSchedule(input, config)
     const repeatResult = computeCapacityPlan(input, config)
-    const metrics = measureCapacityPlanQuality(input, config.targetDurationWeeks, result)
+    const metrics = measureCapacityPlanQuality(input, config.targetDurationWeeks, result, schedule)
     expect(repeatResult.periods).toEqual(result.periods)
     expect(repeatResult.deliveryWeeks).toBe(result.deliveryWeeks)
+    expect(schedule.featureStartWeeks).toEqual(result.levellingResult.featureStartWeeks)
     const cappedRole = result.periods.flatMap(period => period.resources)
       .filter(resource => resource.resourceTypeId === 'rt-dev')
 
@@ -109,6 +113,7 @@ describe('deterministic planning-quality scenarios', () => {
     expect(result.deliveryWeeks).toBeGreaterThan(config.targetDurationWeeks)
     expect(metrics.achievedDurationWeeks).toBe(result.deliveryWeeks)
     expect(metrics.effortHoursByRole).toEqual({ 'rt-dev': 160 })
+    expect(metrics.scheduledEffortHoursByRole).toEqual(metrics.effortHoursByRole)
     expect(Object.values(metrics.staffedCapacityHoursByRole).every(hours => hours > 0)).toBe(true)
     expect(metrics.peakStaffingFteByRole['rt-dev']).toBeLessThanOrEqual(1 + TOLERANCE)
     expect(metrics.peakStaffingFte).toBeLessThanOrEqual(1 + TOLERANCE)
@@ -125,6 +130,23 @@ describe('deterministic planning-quality scenarios', () => {
       maxParallelismPerFeature: config.maxParallelismPerFeature,
     })
     expect(uncapped.totalDeliveryWeeks).toBeLessThan(result.deliveryWeeks)
+  })
+
+  it('reports a dependent allocation that starts before its predecessor completes', () => {
+    const schedule: Pick<SAPlannerResult, 'weeklyAllocationsByFeature'> = {
+      weeklyAllocationsByFeature: new Map([
+        ['mixed-foundation', new Map([
+          [0, new Map([['rt-dev', 5]])],
+          [1, new Map([['rt-dev', 5]])],
+        ])],
+        ['mixed-parallel-a', new Map([[1, new Map([['rt-dev', 5]])]])],
+      ]),
+    }
+
+    expect(capacityDependencyViolations(mixedProgramme(), schedule)).toContainEqual({
+      featureId: 'mixed-parallel-a',
+      dependsOnId: 'mixed-foundation',
+    })
   })
 
   it('respects a manual capacity and schedule lock before scheduling dependent work', () => {
@@ -190,7 +212,7 @@ describe('Factory / Supply Chain representative benchmark', () => {
     const { input, config, facts } = benchmark
     const failure = runCapacityPlan(input, config)
     const repeatFailure = runCapacityPlan(input, config)
-    const metrics = measureCapacityPlanQuality(input, facts.targetDurationWeeks, failure.result, failure.error)
+    const metrics = measureCapacityPlanQuality(input, facts.targetDurationWeeks, failure.result, null, failure.error)
 
     expect(repeatFailure).toEqual(failure)
     expect(facts.epicCount).toBe(18)
@@ -231,18 +253,23 @@ describe('Factory / Supply Chain representative benchmark', () => {
     }
     const first = runCapacityPlan(controlInput, benchmark.config)
     const second = runCapacityPlan(controlInput, benchmark.config)
-    const metrics = measureCapacityPlanQuality(controlInput, benchmark.facts.targetDurationWeeks, first.result)
-    const repeatMetrics = measureCapacityPlanQuality(controlInput, benchmark.facts.targetDurationWeeks, second.result)
+    const firstSchedule = runCapacityPlanSchedule(controlInput, benchmark.config)
+    const secondSchedule = runCapacityPlanSchedule(controlInput, benchmark.config)
+    const metrics = measureCapacityPlanQuality(controlInput, benchmark.facts.targetDurationWeeks, first.result, firstSchedule)
+    const repeatMetrics = measureCapacityPlanQuality(controlInput, benchmark.facts.targetDurationWeeks, second.result, secondSchedule)
 
     expect(first.error).toBeNull()
     expect(second).toEqual(first)
     expect(metrics.achievedDurationWeeks).toBe(53)
     expect(metrics).toEqual(repeatMetrics)
+    expect(firstSchedule).toEqual(secondSchedule)
+    expect(firstSchedule.featureStartWeeks).toEqual(first.result?.levellingResult.featureStartWeeks)
     expect(metrics.effortHoursByRole).toEqual({
       'factory-role-cloud': 2_903.2,
       'factory-role-data': 10_024.4,
       'factory-role-pc': 4_062.2,
     })
+    expect(metrics.scheduledEffortHoursByRole).toEqual(metrics.effortHoursByRole)
     expect(Object.values(metrics.staffedCapacityHoursByRole).every(hours => hours > 0)).toBe(true)
     expect(Object.values(metrics.staffedFteWeeksByRole).every(weeks => weeks > 0)).toBe(true)
     expect(metrics.peakStaffingFte).toBe(first.result?.peakHeadcount)
