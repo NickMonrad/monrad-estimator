@@ -3,6 +3,7 @@ import {
   type SchedulerInput,
   type SchedulerOutput,
 } from './scheduler.js'
+import type { CapacityPlanResult } from './capacity-planner.js'
 import { effortDays } from '../utils/round.js'
 
 export type PlanningQualityMetrics = {
@@ -114,6 +115,7 @@ export function measurePlanningQuality(
   const demandWeeksByRole = new Map<string, number[]>()
   const rampShapeByRole: PlanningQualityMetrics['rampShapeByRole'] = {}
 
+  const totalPeakDemandFteByWeek = new Map<number, number>()
   for (const rt of input.resourceTypes) {
     const hpd = rt.hoursPerDay ?? input.project.hoursPerDay
     const byWeek = demand.get(rt.id) ?? new Map<number, number>()
@@ -129,6 +131,7 @@ export function measurePlanningQuality(
       const capacityDays = hpd > 0 ? capacityHoursThisWeek / hpd : 0
       const demandDays = byWeek.get(week) ?? 0
       const demandFte = demandDays / 5
+      totalPeakDemandFteByWeek.set(week, (totalPeakDemandFteByWeek.get(week) ?? 0) + demandFte)
       capacityHours += capacityHoursThisWeek
       peakFte = Math.max(peakFte, demandFte)
       if (demandDays > EPSILON) demandWeeks.push(week)
@@ -257,7 +260,7 @@ export function measurePlanningQuality(
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([id, weeks]) => [id, weeks]),
   )
-  const peakStaffingFte = Math.max(0, ...peakStaffing.values())
+  const peakStaffingFte = Math.max(0, ...totalPeakDemandFteByWeek.values())
 
   return {
     targetDurationWeeks,
@@ -287,4 +290,147 @@ export function totalExpectedEffortDays(input: SchedulerInput): number {
   let total = 0
   for (const value of taskEffortByRole(input).values()) total += value.days
   return total
+}
+
+export type CapacityPlanQualityMetrics = {
+  targetDurationWeeks: number
+  achievedDurationWeeks: number | null
+  effortByRole: Record<string, number>
+  effortHoursByRole: Record<string, number>
+  staffedCapacityHoursByRole: Record<string, number>
+  staffedFteWeeksByRole: Record<string, number>
+  peakStaffingFteByRole: Record<string, number>
+  peakStaffingFte: number | null
+  utilisationPctByRole: Record<string, number | null>
+  capacityViolations: Array<{ resourceTypeId: string; periodIndex: number; peakDemandFte: number; staffedFte: number }>
+  dependencyViolations: Array<{ featureId: string; dependsOnId: string }>
+  rampShapeByRole: Record<string, {
+    firstDemandPeriod: number | null
+    lastDemandPeriod: number | null
+    peakDemandFte: number
+    activePeriods: number
+    startTransitions: number
+    endTransitions: number
+  }>
+  failureReason: string | null
+  deterministicFingerprint: string | null
+}
+
+function capacityDependencyViolations(
+  input: SchedulerInput,
+  result: CapacityPlanResult,
+): Array<{ featureId: string; dependsOnId: string }> {
+  const starts = result.levellingResult.featureStartWeeks
+  const violations: Array<{ featureId: string; dependsOnId: string }> = []
+  const seen = new Set<string>()
+  const check = (featureId: string, dependsOnId: string) => {
+    const featureStart = starts.get(featureId)
+    const dependencyStart = starts.get(dependsOnId)
+    if (featureStart == null || dependencyStart == null || featureStart >= dependencyStart) return
+    const key = `${featureId}|${dependsOnId}`
+    if (seen.has(key)) return
+    seen.add(key)
+    violations.push({ featureId, dependsOnId })
+  }
+  for (const epic of input.epics) {
+    for (const feature of epic.features) {
+      for (const dependency of feature.dependencies ?? []) check(feature.id, dependency.dependsOnId)
+    }
+  }
+  const epicById = new Map(input.epics.map(epic => [epic.id, epic]))
+  for (const dependency of input.epicDeps) {
+    const predecessor = epicById.get(dependency.dependsOnId)
+    const dependent = epicById.get(dependency.epicId)
+    if (!predecessor || !dependent) continue
+    for (const predecessorFeature of predecessor.features) {
+      for (const dependentFeature of dependent.features) check(dependentFeature.id, predecessorFeature.id)
+    }
+  }
+  for (const epic of input.epics) {
+    if ((epic.featureMode ?? 'sequential') !== 'sequential') continue
+    const features = [...epic.features].sort((a, b) => a.order - b.order)
+    for (let index = 1; index < features.length; index++) check(features[index].id, features[index - 1].id)
+  }
+  return violations
+}
+
+export function measureCapacityPlanQuality(
+  input: SchedulerInput,
+  targetDurationWeeks: number,
+  result: CapacityPlanResult | null,
+  failureReason: string | null = null,
+): CapacityPlanQualityMetrics {
+  const effort = taskEffortByRole(input)
+  const effortByRole = sortedRecord([...effort].map(([id, value]) => [id, value.days]))
+  const effortHoursByRole = sortedRecord([...effort].map(([id, value]) => [id, value.hours]))
+  const staffedCapacityHours = new Map<string, number>()
+  const staffedFteWeeks = new Map<string, number>()
+  const peakStaffing = new Map<string, number>()
+  const demandFteWeeks = new Map<string, number>()
+  const demandPeriods = new Map<string, number[]>()
+  const capacityViolations: CapacityPlanQualityMetrics['capacityViolations'] = []
+  const rampShapeByRole: CapacityPlanQualityMetrics['rampShapeByRole'] = {}
+
+  if (result) {
+    for (const period of result.periods) {
+      const periodWeeks = period.endWeek - period.startWeek
+      for (const resource of period.resources) {
+        const hpd = input.resourceTypes.find(rt => rt.id === resource.resourceTypeId)?.hoursPerDay ?? input.project.hoursPerDay
+        const capacityFteWeeks = resource.headcount * periodWeeks
+        staffedFteWeeks.set(resource.resourceTypeId, (staffedFteWeeks.get(resource.resourceTypeId) ?? 0) + capacityFteWeeks)
+        staffedCapacityHours.set(resource.resourceTypeId, (staffedCapacityHours.get(resource.resourceTypeId) ?? 0) + capacityFteWeeks * hpd * 5)
+        peakStaffing.set(resource.resourceTypeId, Math.max(peakStaffing.get(resource.resourceTypeId) ?? 0, resource.headcount))
+        demandFteWeeks.set(resource.resourceTypeId, (demandFteWeeks.get(resource.resourceTypeId) ?? 0) + resource.avgDemandFTE * periodWeeks)
+        if (resource.avgDemandFTE > EPSILON) (demandPeriods.get(resource.resourceTypeId) ?? (demandPeriods.set(resource.resourceTypeId, []), demandPeriods.get(resource.resourceTypeId)!)).push(period.periodIndex)
+        if (resource.peakDemandFTE > resource.headcount + EPSILON) {
+          capacityViolations.push({ resourceTypeId: resource.resourceTypeId, periodIndex: period.periodIndex, peakDemandFte: resource.peakDemandFTE, staffedFte: resource.headcount })
+        }
+      }
+    }
+    for (const rt of input.resourceTypes) {
+      const periods = demandPeriods.get(rt.id) ?? []
+      const active = new Set(periods)
+      let startTransitions = 0
+      let endTransitions = 0
+      let previous = false
+      for (let index = 0; index < result.periods.length; index++) {
+        const current = active.has(index)
+        if (current && !previous) startTransitions++
+        if (!current && previous) endTransitions++
+        previous = current
+      }
+      if (previous) endTransitions++
+      const peakDemandFte = Math.max(0, ...result.periods.flatMap(period => period.resources.filter(resource => resource.resourceTypeId === rt.id).map(resource => resource.peakDemandFTE)))
+      rampShapeByRole[rt.id] = { firstDemandPeriod: periods[0] ?? null, lastDemandPeriod: periods.at(-1) ?? null, peakDemandFte: round(peakDemandFte), activePeriods: periods.length, startTransitions, endTransitions }
+    }
+  }
+
+  const staffedCapacityHoursByRole = sortedRecord(staffedCapacityHours)
+  const staffedFteWeeksByRole = sortedRecord(staffedFteWeeks)
+  const peakStaffingFteByRole = sortedRecord(peakStaffing)
+  const utilisationPctByRole = Object.fromEntries(
+    [...staffedFteWeeks]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([id, capacity]) => [id, capacity > EPSILON ? round((demandFteWeeks.get(id) ?? 0) / capacity * 100) : null]),
+  )
+  const fingerprint = result
+    ? JSON.stringify({ periods: result.periods, epicStartWeeks: [...result.levellingResult.epicStartWeeks], featureStartWeeks: [...result.levellingResult.featureStartWeeks] })
+    : null
+
+  return {
+    targetDurationWeeks,
+    achievedDurationWeeks: result?.deliveryWeeks ?? null,
+    effortByRole,
+    effortHoursByRole,
+    staffedCapacityHoursByRole,
+    staffedFteWeeksByRole,
+    peakStaffingFteByRole,
+    peakStaffingFte: result?.peakHeadcount ?? null,
+    utilisationPctByRole,
+    capacityViolations,
+    dependencyViolations: result ? capacityDependencyViolations(input, result) : [],
+    rampShapeByRole,
+    failureReason,
+    deterministicFingerprint: fingerprint,
+  }
 }
