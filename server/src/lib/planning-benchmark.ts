@@ -206,8 +206,30 @@ export function measurePlanningQuality(
       }
     }
   }
+  const sortedEpics = [...input.epics].sort((a, b) => a.order - b.order)
+  for (let index = 1; index < sortedEpics.length; index++) {
+    const predecessorEpic = sortedEpics[index - 1]
+    const dependentEpic = sortedEpics[index]
+    if (predecessorEpic.features.length === 0 || dependentEpic.features.length === 0) continue
+    if (dependentEpic.timelineStartWeek != null) continue
+    if ((dependentEpic.scheduleMode ?? 'sequential') === 'parallel') continue
+
+    const dependentTargets = (dependentEpic.featureMode ?? 'sequential') === 'sequential'
+      ? [dependentEpic.features[0]]
+      : dependentEpic.features
+    for (const predecessor of predecessorEpic.features) {
+      const hasCrossEpicDependency = (predecessor.dependencies ?? []).some(dependency =>
+        dependentEpic.features.some(feature => feature.id === dependency.dependsOnId),
+      )
+      if (hasCrossEpicDependency) continue
+      for (const dependent of dependentTargets) {
+        checkDependency(dependent.id, predecessor.id)
+      }
+    }
+  }
 
   const manualFeatureIds = new Set(input.manualFeatureEntries.map(entry => entry.featureId))
+
   for (const epic of input.epics) {
     if ((epic.featureMode ?? 'sequential') !== 'sequential') continue
     const sortedFeatures = [...epic.features].sort((a, b) => a.order - b.order)

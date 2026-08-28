@@ -9,6 +9,7 @@ import { runSAPlanner } from '../lib/sa-planner.js'
 import { runScheduler } from '../lib/scheduler.js'
 import {
   epicDependencyViolation,
+  implicitEpicDependencyViolation,
   explicitRoleMaximum,
   factorySupplyChainBenchmark,
   manualCapacityAndScheduleLock,
@@ -143,6 +144,16 @@ describe('deterministic planning-quality scenarios', () => {
     expect(metrics.dependencyViolations).toContainEqual({
       featureId: 'dependency-dependent',
       dependsOnId: 'dependency-predecessor',
+    })
+  })
+  it('reports violations in implicit sequential epic chaining', () => {
+    const input = implicitEpicDependencyViolation()
+    const output = runScheduler(input)
+    const metrics = measurePlanningQuality(input, output, 2)
+
+    expect(metrics.dependencyViolations).toContainEqual({
+      featureId: 'implicit-dependency-dependent',
+      dependsOnId: 'implicit-dependency-predecessor',
     })
   })
 })

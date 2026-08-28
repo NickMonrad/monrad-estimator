@@ -207,6 +207,21 @@ export function epicDependencyViolation(): SchedulerInput {
     manualFeatureEntries: [{ featureId: 'dependency-dependent', startWeek: 0, durationWeeks: 1 }],
   })
 }
+export function implicitEpicDependencyViolation(): SchedulerInput {
+  const predecessor = makeFeature('implicit-dependency-predecessor', [
+    makeStory('implicit-dependency-predecessor-story', [makeTask(40, 'rt-dev', 'Developer')]),
+  ])
+  const dependent = makeFeature('implicit-dependency-dependent', [
+    makeStory('implicit-dependency-dependent-story', [makeTask(40, 'rt-dev', 'Developer')]),
+  ])
+  return makeInput([
+    makeEpic('implicit-dependency-source-epic', [predecessor]),
+    makeEpic('implicit-dependency-dependent-epic', [dependent], 1),
+  ], [dev()], {
+    manualFeatureEntries: [{ featureId: 'implicit-dependency-dependent', startWeek: 0, durationWeeks: 1 }],
+  })
+}
+
 
 export function mixedProgramme(): SchedulerInput {
   const foundation = makeFeature('mixed-foundation', [
