@@ -249,35 +249,270 @@ export function mixedProgramme(): SchedulerInput {
 }
 
 /**
- * Sanitised Factory / Supply Chain structural proxy.
+ * Sanitised Factory / Supply Chain benchmark derived from the authoritative
+ * generated programme-led import and its planning outputs.
  *
- * No Factory/Supply Chain CSV or workbook exists in this repository or its git
- * history. The published planning facts are retained here: 23 epics, 248
- * features, roughly 26k hours, and seven role types. The topology and effort
- * distribution are synthetic; names, work-item text, customer data, and exact
- * weekly profiles are intentionally absent.
+ * The committed representation keeps only generic topology, dependency edges,
+ * role-level effort and the staffing/profile shape needed by the planners.
+ * Customer names, descriptions, story text and identifiers are not retained.
  */
 export const FACTORY_SUPPLY_CHAIN_FACTS = {
-  epicCount: 23,
-  featureCount: 248,
-  roleCount: 7,
-  approximateEffortHours: 26_000,
-  sanitizedEffortHours: 25_760,
+  source: 'authoritative generated programme-led import and planning outputs',
+  epicCount: 18,
+  featureCount: 222,
+  roleCount: 3,
+  totalEffortHours: 16_989.8,
+  effortHoursByRole: { pc: 4_062.2, data: 10_024.4, cloud: 2_903.2 },
+  taskCountByRole: { pc: 237, data: 281, cloud: 162 },
   targetDurationWeeks: 78,
+  sourceProfilePeakCapacity: { pc: 2.25, data: 5.5, cloud: 1.5 },
   constrainedRoleId: 'factory-role-data',
-  constrainedRoleName: 'Data Integration',
   constrainedProfileEndWeek: 5,
+  controlDeliveryWeeks: 53,
 } as const
 
 const FACTORY_ROLES = [
-  ['factory-role-data', 'Data Integration'],
-  ['factory-role-engineering', 'Platform Engineering'],
-  ['factory-role-analytics', 'Analytics'],
-  ['factory-role-testing', 'Quality Engineering'],
-  ['factory-role-security', 'Security'],
-  ['factory-role-change', 'Change and Training'],
-  ['factory-role-delivery', 'Delivery Management'],
+  ['factory-role-pc', 'Principal Consultant', 3],
+  ['factory-role-data', 'Senior Data Engineer', 6],
+  ['factory-role-cloud', 'Senior Cloud Engineer', 2],
 ] as const
+
+type FactoryFeatureShape = {
+  mode: 'parallel' | 'sequential'
+  efforts: [number, number, number]
+  deps: number[]
+}
+
+// One tuple per source feature, in source programme order. Effort is summed
+// by role within the feature; dependency indices are source dependency edges.
+const FACTORY_FEATURE_SHAPES: readonly FactoryFeatureShape[] = [
+  { mode: 'parallel', efforts: [26.6, 0.0, 15.2], deps: [] },
+  { mode: 'sequential', efforts: [49.4, 0.0, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [22.8, 15.2, 110.2], deps: [] },
+  { mode: 'parallel', efforts: [11.4, 7.6, 30.4], deps: [2] },
+  { mode: 'parallel', efforts: [106.4, 319.2, 83.6], deps: [8] },
+  { mode: 'parallel', efforts: [30.4, 53.2, 30.4], deps: [8] },
+  { mode: 'parallel', efforts: [26.6, 72.2, 15.2], deps: [8] },
+  { mode: 'parallel', efforts: [19.0, 0.0, 26.6], deps: [8] },
+  { mode: 'sequential', efforts: [102.6, 15.2, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 15.2], deps: [8] },
+  { mode: 'sequential', efforts: [7.6, 258.4, 0.0], deps: [9] },
+  { mode: 'sequential', efforts: [0.0, 7.6, 15.2], deps: [10] },
+  { mode: 'sequential', efforts: [41.8, 72.2, 19.0], deps: [11, 4, 5, 6] },
+  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [12] },
+  { mode: 'sequential', efforts: [15.2, 30.4, 26.6], deps: [13, 7] },
+  { mode: 'sequential', efforts: [11.4, 26.6, 0.0], deps: [14] },
+  { mode: 'parallel', efforts: [57.0, 205.2, 22.8], deps: [19] },
+  { mode: 'parallel', efforts: [68.4, 205.2, 53.2], deps: [19] },
+  { mode: 'parallel', efforts: [11.4, 30.4, 0.0], deps: [19] },
+  { mode: 'sequential', efforts: [64.6, 0.0, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 7.6], deps: [19] },
+  { mode: 'sequential', efforts: [3.8, 178.6, 0.0], deps: [20] },
+  { mode: 'sequential', efforts: [0.0, 3.8, 7.6], deps: [21] },
+  { mode: 'sequential', efforts: [19.0, 45.6, 3.8], deps: [22, 16, 17, 18] },
+  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [23] },
+  { mode: 'sequential', efforts: [7.6, 19.0, 15.2], deps: [24] },
+  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [25] },
+  { mode: 'sequential', efforts: [178.6, 57.0, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 26.6], deps: [27] },
+  { mode: 'sequential', efforts: [30.4, 334.4, 0.0], deps: [28] },
+  { mode: 'sequential', efforts: [0.0, 7.6, 11.4], deps: [29] },
+  { mode: 'sequential', efforts: [38.0, 155.8, 30.4], deps: [30] },
+  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [31] },
+  { mode: 'sequential', efforts: [15.2, 30.4, 34.2], deps: [32] },
+  { mode: 'sequential', efforts: [11.4, 26.6, 0.0], deps: [33] },
+  { mode: 'sequential', efforts: [41.8, 87.4, 64.6], deps: [29] },
+  { mode: 'sequential', efforts: [45.6, 174.8, 64.6], deps: [29] },
+  { mode: 'sequential', efforts: [15.2, 0.0, 7.6], deps: [] },
+  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [37] },
+  { mode: 'sequential', efforts: [7.6, 0.0, 7.6], deps: [37, 38] },
+  { mode: 'sequential', efforts: [0.0, 7.6, 0.0], deps: [39] },
+  { mode: 'sequential', efforts: [3.8, 7.6, 0.0], deps: [40] },
+  { mode: 'sequential', efforts: [3.8, 0.0, 0.0], deps: [41] },
+  { mode: 'sequential', efforts: [15.2, 7.6, 0.0], deps: [42] },
+  { mode: 'sequential', efforts: [64.6, 15.2, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 7.6], deps: [44] },
+  { mode: 'sequential', efforts: [38.0, 171.0, 0.0], deps: [45] },
+  { mode: 'sequential', efforts: [11.4, 76.0, 0.0], deps: [45, 46] },
+  { mode: 'sequential', efforts: [0.0, 3.8, 7.6], deps: [47] },
+  { mode: 'sequential', efforts: [26.6, 38.0, 3.8], deps: [48] },
+  { mode: 'sequential', efforts: [22.8, 0.0, 19.0], deps: [49] },
+  { mode: 'sequential', efforts: [7.6, 19.0, 15.2], deps: [50] },
+  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [51] },
+  { mode: 'sequential', efforts: [57.0, 0.0, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 60.8], deps: [53] },
+  { mode: 'sequential', efforts: [41.8, 159.6, 0.0], deps: [54] },
+  { mode: 'sequential', efforts: [38.0, 159.6, 0.0], deps: [55] },
+  { mode: 'sequential', efforts: [7.6, 273.6, 72.2], deps: [54, 55, 56] },
+  { mode: 'sequential', efforts: [0.0, 7.6, 11.4], deps: [57] },
+  { mode: 'sequential', efforts: [38.0, 53.2, 68.4], deps: [58] },
+  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [59] },
+  { mode: 'sequential', efforts: [15.2, 30.4, 45.6], deps: [60] },
+  { mode: 'sequential', efforts: [11.4, 26.6, 0.0], deps: [61] },
+  { mode: 'sequential', efforts: [45.6, 174.8, 64.6], deps: [57] },
+  { mode: 'sequential', efforts: [57.0, 0.0, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 19.0], deps: [64] },
+  { mode: 'sequential', efforts: [0.0, 414.2, 30.4], deps: [65] },
+  { mode: 'sequential', efforts: [0.0, 7.6, 11.4], deps: [66] },
+  { mode: 'sequential', efforts: [34.2, 49.4, 30.4], deps: [67] },
+  { mode: 'sequential', efforts: [22.8, 0.0, 19.0], deps: [68] },
+  { mode: 'sequential', efforts: [15.2, 30.4, 45.6], deps: [69] },
+  { mode: 'sequential', efforts: [11.4, 26.6, 0.0], deps: [70] },
+  { mode: 'sequential', efforts: [106.4, 266.0, 114.0], deps: [66] },
+  { mode: 'sequential', efforts: [34.2, 64.6, 60.8], deps: [66] },
+  { mode: 'sequential', efforts: [95.0, 76.0, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 15.2], deps: [74] },
+  { mode: 'sequential', efforts: [15.2, 83.6, 0.0], deps: [75] },
+  { mode: 'sequential', efforts: [0.0, 3.8, 7.6], deps: [76] },
+  { mode: 'sequential', efforts: [26.6, 41.8, 15.2], deps: [77] },
+  { mode: 'sequential', efforts: [22.8, 0.0, 19.0], deps: [78] },
+  { mode: 'sequential', efforts: [7.6, 19.0, 19.0], deps: [79] },
+  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [80] },
+  { mode: 'sequential', efforts: [79.8, 15.2, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 7.6], deps: [82] },
+  { mode: 'sequential', efforts: [7.6, 53.2, 0.0], deps: [83] },
+  { mode: 'sequential', efforts: [0.0, 3.8, 7.6], deps: [84] },
+  { mode: 'sequential', efforts: [26.6, 22.8, 3.8], deps: [85] },
+  { mode: 'sequential', efforts: [11.4, 0.0, 11.4], deps: [86] },
+  { mode: 'sequential', efforts: [7.6, 19.0, 15.2], deps: [87] },
+  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [88] },
+  { mode: 'sequential', efforts: [15.2, 0.0, 7.6], deps: [] },
+  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [90] },
+  { mode: 'sequential', efforts: [7.6, 0.0, 7.6], deps: [90, 91] },
+  { mode: 'sequential', efforts: [0.0, 7.6, 0.0], deps: [92] },
+  { mode: 'sequential', efforts: [3.8, 7.6, 0.0], deps: [93] },
+  { mode: 'sequential', efforts: [3.8, 0.0, 0.0], deps: [94] },
+  { mode: 'sequential', efforts: [15.2, 7.6, 0.0], deps: [95] },
+  { mode: 'sequential', efforts: [110.2, 0.0, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 15.2], deps: [97] },
+  { mode: 'sequential', efforts: [30.4, 144.4, 11.4], deps: [98] },
+  { mode: 'sequential', efforts: [11.4, 395.2, 45.6], deps: [98, 99] },
+  { mode: 'sequential', efforts: [0.0, 11.4, 15.2], deps: [100] },
+  { mode: 'sequential', efforts: [41.8, 148.2, 11.4], deps: [101] },
+  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [102] },
+  { mode: 'sequential', efforts: [15.2, 53.2, 49.4], deps: [103] },
+  { mode: 'sequential', efforts: [19.0, 38.0, 0.0], deps: [104] },
+  { mode: 'sequential', efforts: [49.4, 186.2, 72.2], deps: [100] },
+  { mode: 'sequential', efforts: [76.0, 159.6, 60.8], deps: [100] },
+  { mode: 'sequential', efforts: [34.2, 209.0, 0.0], deps: [100] },
+  { mode: 'sequential', efforts: [41.8, 0.0, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 30.4], deps: [109] },
+  { mode: 'sequential', efforts: [0.0, 543.4, 30.4], deps: [110] },
+  { mode: 'sequential', efforts: [0.0, 11.4, 15.2], deps: [111] },
+  { mode: 'sequential', efforts: [45.6, 326.8, 49.4], deps: [112] },
+  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [113] },
+  { mode: 'sequential', efforts: [15.2, 41.8, 53.2], deps: [114] },
+  { mode: 'sequential', efforts: [19.0, 38.0, 0.0], deps: [115] },
+  { mode: 'sequential', efforts: [60.8, 224.2, 53.2], deps: [111] },
+  { mode: 'sequential', efforts: [64.6, 296.4, 121.6], deps: [111] },
+  { mode: 'sequential', efforts: [262.2, 136.8, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 22.8], deps: [119] },
+  { mode: 'sequential', efforts: [34.2, 330.6, 0.0], deps: [120] },
+  { mode: 'sequential', efforts: [0.0, 7.6, 26.6], deps: [121] },
+  { mode: 'sequential', efforts: [155.8, 288.8, 15.2], deps: [122] },
+  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [123] },
+  { mode: 'sequential', efforts: [30.4, 38.0, 15.2], deps: [124] },
+  { mode: 'sequential', efforts: [19.0, 30.4, 0.0], deps: [125] },
+  { mode: 'sequential', efforts: [60.8, 125.4, 0.0], deps: [119] },
+  { mode: 'sequential', efforts: [106.4, 0.0, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 15.2], deps: [128] },
+  { mode: 'sequential', efforts: [0.0, 440.8, 49.4], deps: [129] },
+  { mode: 'sequential', efforts: [0.0, 11.4, 15.2], deps: [130] },
+  { mode: 'sequential', efforts: [45.6, 95.0, 34.2], deps: [131] },
+  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [132] },
+  { mode: 'sequential', efforts: [15.2, 53.2, 49.4], deps: [133] },
+  { mode: 'sequential', efforts: [19.0, 38.0, 0.0], deps: [134] },
+  { mode: 'sequential', efforts: [45.6, 209.0, 0.0], deps: [130] },
+  { mode: 'sequential', efforts: [34.2, 45.6, 0.0], deps: [130] },
+  { mode: 'sequential', efforts: [0.0, 57.0, 57.0], deps: [137] },
+  { mode: 'sequential', efforts: [64.6, 269.8, 121.6], deps: [130] },
+  { mode: 'sequential', efforts: [15.2, 0.0, 7.6], deps: [] },
+  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [140] },
+  { mode: 'sequential', efforts: [7.6, 0.0, 7.6], deps: [140, 141] },
+  { mode: 'sequential', efforts: [0.0, 7.6, 0.0], deps: [142] },
+  { mode: 'sequential', efforts: [3.8, 7.6, 0.0], deps: [143] },
+  { mode: 'sequential', efforts: [3.8, 0.0, 0.0], deps: [144] },
+  { mode: 'sequential', efforts: [15.2, 7.6, 0.0], deps: [145] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [147] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [147] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [148] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [155] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149, 151] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [155] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149, 154] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [148] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [154, 159] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [155] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [158, 159, 201] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [159, 154] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [165] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [165] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151, 154] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [168] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [170, 154] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [171] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [172, 180] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [174] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [175] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [177] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [148] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [180] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [182] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151, 180] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [184] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [184] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [180, 181] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [181, 187] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [187, 182, 183] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [190] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [190, 191] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151, 180] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [193, 182, 183] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [162] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [195, 196, 197] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [150, 198] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [199] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [155] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [172] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [175] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [184] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [187] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [193] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [176] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [176, 207] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [202, 182, 183] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [203, 180, 182, 183] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [205, 182, 183] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [193] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [206] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [212, 180] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [185, 182, 183] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [186] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [167] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [217, 180] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [167] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [219, 182, 183] },
+  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [212, 214, 180, 182, 183] },
+]
+
+const FACTORY_FEATURES_PER_EPIC = [2, 2, 12, 11, 10, 7, 9, 11, 10, 8, 8, 7, 12, 10, 9, 12, 7, 75]
+const FACTORY_EPIC_MODES = ['parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel'] as const
+const FACTORY_EPIC_DEPENDENCIES = [{ epicIndex: 1, dependsOnIndex: 0 }]
 
 export type FactorySupplyChainBenchmark = {
   input: SchedulerInput
@@ -286,53 +521,58 @@ export type FactorySupplyChainBenchmark = {
 }
 
 export function factorySupplyChainBenchmark(): FactorySupplyChainBenchmark {
-  const roleTypes = FACTORY_ROLES.map(([id, name], roleIndex) => makeResourceType(
+  const roleTypes = FACTORY_ROLES.map(([id, name, count], roleIndex) => makeResourceType(
     id,
     name,
-    roleIndex === 0 ? 3 : 2,
+    count,
     8,
-    roleIndex === 0
+    roleIndex === 1
       ? { roleSegments: [{ startWeek: 0, endWeek: FACTORY_SUPPLY_CHAIN_FACTS.constrainedProfileEndWeek, allocationPercent: 100 }] }
       : {},
   ))
+  const roleIds = roleTypes.map(role => role.id)
+  const roleNames = roleTypes.map(role => role.name)
+  const features: SchedulerFeature[] = FACTORY_FEATURE_SHAPES.map((shape, featureIndex) => makeFeature(
+    `factory-feature-${String(featureIndex + 1).padStart(3, '0')}`,
+    [makeStory(
+      `factory-story-${String(featureIndex + 1).padStart(3, '0')}`,
+      shape.efforts.flatMap((hours, roleIndex) => hours > 0
+        ? [makeTask(hours, roleIds[roleIndex], roleNames[roleIndex])]
+        : []),
+    )],
+    featureIndex,
+    shape.deps.map(dependsOnIndex => ({
+      featureId: `factory-feature-${String(featureIndex + 1).padStart(3, '0')}`,
+      dependsOnId: `factory-feature-${String(dependsOnIndex + 1).padStart(3, '0')}`,
+    })),
+  ))
 
-  const featuresPerEpic = Array.from({ length: FACTORY_SUPPLY_CHAIN_FACTS.epicCount }, (_, index) =>
-    index === FACTORY_SUPPLY_CHAIN_FACTS.epicCount - 1 ? 6 : 11,
-  )
   const epics: SchedulerEpic[] = []
-  let featureIndex = 0
-
-  for (let epicIndex = 0; epicIndex < featuresPerEpic.length; epicIndex++) {
-    const features: SchedulerFeature[] = []
-    for (let localIndex = 0; localIndex < featuresPerEpic[epicIndex]; localIndex++) {
-      const primaryRole = (featureIndex + epicIndex) % FACTORY_ROLES.length
-      const secondaryRole = (primaryRole + 2) % FACTORY_ROLES.length
-      const tasks = [
-        makeTask(64 + (featureIndex % 3) * 8, FACTORY_ROLES[primaryRole][0], FACTORY_ROLES[primaryRole][1]),
-        makeTask(24 + (epicIndex % 2) * 8, FACTORY_ROLES[secondaryRole][0], FACTORY_ROLES[secondaryRole][1]),
-      ]
-      if (featureIndex % 4 === 0) {
-        const tertiaryRole = (primaryRole + 4) % FACTORY_ROLES.length
-        tasks.push(makeTask(16, FACTORY_ROLES[tertiaryRole][0], FACTORY_ROLES[tertiaryRole][1]))
-      }
-      features.push(makeFeature(
-        `factory-feature-${String(featureIndex + 1).padStart(3, '0')}`,
-        [makeStory(`factory-story-${String(featureIndex + 1).padStart(3, '0')}`, tasks)],
-        localIndex,
-      ))
-      featureIndex++
-    }
+  let featureOffset = 0
+  for (let epicIndex = 0; epicIndex < FACTORY_FEATURES_PER_EPIC.length; epicIndex++) {
+    const featureCount = FACTORY_FEATURES_PER_EPIC[epicIndex]
     epics.push(makeEpic(
       `factory-epic-${String(epicIndex + 1).padStart(2, '0')}`,
-      features,
+      features.slice(featureOffset, featureOffset + featureCount).map((feature, index) => ({
+        ...feature,
+        order: index,
+      })),
       epicIndex,
-      { featureMode: epicIndex % 3 === 0 ? 'parallel' : 'sequential' },
+      { featureMode: FACTORY_EPIC_MODES[epicIndex] },
     ))
+    featureOffset += featureCount
   }
 
   return {
     facts: FACTORY_SUPPLY_CHAIN_FACTS,
-    input: makeInput(epics, roleTypes, { resourceLevel: false, maxParallelismPerFeature: 2 }),
+    input: makeInput(epics, roleTypes, {
+      resourceLevel: false,
+      maxParallelismPerFeature: 2,
+      epicDeps: FACTORY_EPIC_DEPENDENCIES.map(({ epicIndex, dependsOnIndex }) => ({
+        epicId: `factory-epic-${String(epicIndex + 1).padStart(2, '0')}`,
+        dependsOnId: `factory-epic-${String(dependsOnIndex + 1).padStart(2, '0')}`,
+      })),
+    }),
     config: {
       targetDurationWeeks: FACTORY_SUPPLY_CHAIN_FACTS.targetDurationWeeks,
       periodWeeks: 13,

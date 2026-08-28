@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { computeCapacityPlan } from '../lib/capacity-planner.js'
 import {
   measurePlanningQuality,
+  measureCapacityPlanQuality,
   totalConsumedEffortDays,
   totalExpectedEffortDays,
 } from '../lib/planning-benchmark.js'
@@ -75,6 +76,14 @@ describe('deterministic planning-quality scenarios', () => {
     expect(devShape.startTransitions).toBe(1)
     expect(devShape.endTransitions).toBe(1)
   })
+  it('reports total peak staffing as simultaneous demand across overlapping roles', () => {
+    const { metrics } = evaluate(mixedProgramme(), 6)
+
+    expect(metrics.peakStaffingFteByRole).toEqual({ 'rt-dev': 1, 'rt-qa': 1 })
+    expect(metrics.peakStaffingFte).toBe(1.5)
+    expect(metrics.peakStaffingFte).toBeGreaterThan(metrics.peakStaffingFteByRole['rt-dev'])
+    expect(metrics.peakStaffingFte).toBeGreaterThan(metrics.peakStaffingFteByRole['rt-qa'])
+  })
 
   it('preserves sparse specialist effort as fractional demand', () => {
     const { metrics } = evaluate(sparseSpecialist(), 4)
@@ -90,6 +99,7 @@ describe('deterministic planning-quality scenarios', () => {
     const { input, config } = explicitRoleMaximum()
     const result = computeCapacityPlan(input, config)
     const repeatResult = computeCapacityPlan(input, config)
+    const metrics = measureCapacityPlanQuality(input, config.targetDurationWeeks, result)
     expect(repeatResult.periods).toEqual(result.periods)
     expect(repeatResult.deliveryWeeks).toBe(result.deliveryWeeks)
     const cappedRole = result.periods.flatMap(period => period.resources)
@@ -97,6 +107,14 @@ describe('deterministic planning-quality scenarios', () => {
 
     expect(config.maxCap?.get('rt-dev')).toBe(1)
     expect(result.deliveryWeeks).toBeGreaterThan(config.targetDurationWeeks)
+    expect(metrics.achievedDurationWeeks).toBe(result.deliveryWeeks)
+    expect(metrics.effortHoursByRole).toEqual({ 'rt-dev': 160 })
+    expect(Object.values(metrics.staffedCapacityHoursByRole).every(hours => hours > 0)).toBe(true)
+    expect(metrics.peakStaffingFteByRole['rt-dev']).toBeLessThanOrEqual(1 + TOLERANCE)
+    expect(metrics.peakStaffingFte).toBeLessThanOrEqual(1 + TOLERANCE)
+    expect(metrics.capacityViolations).toEqual([])
+    expect(metrics.dependencyViolations).toEqual([])
+    expect(metrics.failureReason).toBeNull()
     expect(cappedRole.every(resource => resource.headcount <= 1 + TOLERANCE)).toBe(true)
 
     const uncapped = runSAPlanner({
@@ -159,37 +177,42 @@ describe('deterministic planning-quality scenarios', () => {
 })
 
 describe('Factory / Supply Chain representative benchmark', () => {
-  it('reproduces the current failure mode on the sanitised Factory/Supply Chain proxy', () => {
+  function runCapacityPlan(input: ReturnType<typeof factorySupplyChainBenchmark>['input'], config: ReturnType<typeof factorySupplyChainBenchmark>['config']) {
+    try {
+      return { result: computeCapacityPlan(input, config), error: null }
+    } catch (error) {
+      return { result: null, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  it('reproduces the current failure mode on the sanitised Factory/Supply Chain fixture', () => {
     const benchmark = factorySupplyChainBenchmark()
     const { input, config, facts } = benchmark
-    const runFailure = () => {
-      try {
-        computeCapacityPlan(input, config)
-        return null
-      } catch (error) {
-        return error instanceof Error ? error.message : String(error)
-      }
-    }
-    const failure = runFailure()
-    expect(runFailure()).toBe(failure)
-    expect(facts.epicCount).toBe(23)
-    expect(facts.featureCount).toBe(248)
-    const totalEffortHours = input.epics
-      .flatMap(epic => epic.features)
-      .flatMap(feature => feature.userStories)
-      .flatMap(story => story.tasks)
-      .reduce((sum, task) => sum + task.hoursEffort, 0)
-    expect(totalEffortHours).toBe(facts.sanitizedEffortHours)
+    const failure = runCapacityPlan(input, config)
+    const repeatFailure = runCapacityPlan(input, config)
+    const metrics = measureCapacityPlanQuality(input, facts.targetDurationWeeks, failure.result, failure.error)
+
+    expect(repeatFailure).toEqual(failure)
+    expect(facts.epicCount).toBe(18)
+    expect(facts.featureCount).toBe(222)
+    expect(facts.totalEffortHours).toBe(16_989.8)
+    expect(facts.effortHoursByRole).toEqual({ pc: 4_062.2, data: 10_024.4, cloud: 2_903.2 })
     expect(input.epics.reduce((sum, epic) => sum + epic.features.length, 0)).toBe(facts.featureCount)
     expect(input.resourceTypes).toHaveLength(facts.roleCount)
     expect(config.maxCap).toBeUndefined()
     expect(config.maxParallelismPerFeature).toBe(2)
     expect(config.maxConcurrentEpics).toBe(6)
-    expect(failure).toContain('Fractional planner could not finish feature')
-    expect(failure).toMatch(/within \d+ weeks$/)
+    expect(failure.result).toBeNull()
+    expect(failure.error).toContain('Fractional planner could not finish feature')
+    expect(failure.error).toMatch(/within \d+ weeks$/)
+    expect(metrics.achievedDurationWeeks).toBeNull()
+    expect(metrics.failureReason).toBe(failure.error)
+    expect(metrics.staffedCapacityHoursByRole).toEqual({})
+    expect(metrics.peakStaffingFte).toBeNull()
+    expect(metrics.utilisationPctByRole).toEqual({})
 
     const constrainedRole = input.resourceTypes.find(rt => rt.id === facts.constrainedRoleId)!
-    expect(constrainedRole.count).toBe(3)
+    expect(constrainedRole.count).toBe(6)
     expect(constrainedRole.roleSegments).toEqual([{
       startWeek: 0,
       endWeek: facts.constrainedProfileEndWeek,
@@ -197,22 +220,38 @@ describe('Factory / Supply Chain representative benchmark', () => {
     }])
   })
 
-  it('succeeds on the same topology when the profile window is removed', () => {
+  it('captures a complete deterministic baseline for the profile-window control', () => {
     const benchmark = factorySupplyChainBenchmark()
-    const unconstrainedInput = {
+    const controlInput = {
       ...benchmark.input,
       resourceTypes: benchmark.input.resourceTypes.map(resourceType => ({
         ...resourceType,
         roleSegments: undefined,
       })),
     }
-    const result = computeCapacityPlan(unconstrainedInput, benchmark.config)
-    const repeatResult = computeCapacityPlan(unconstrainedInput, benchmark.config)
-    expect(repeatResult.periods).toEqual(result.periods)
-    expect(repeatResult.deliveryWeeks).toBe(result.deliveryWeeks)
+    const first = runCapacityPlan(controlInput, benchmark.config)
+    const second = runCapacityPlan(controlInput, benchmark.config)
+    const metrics = measureCapacityPlanQuality(controlInput, benchmark.facts.targetDurationWeeks, first.result)
+    const repeatMetrics = measureCapacityPlanQuality(controlInput, benchmark.facts.targetDurationWeeks, second.result)
 
-    expect(result.deliveryWeeks).toBeGreaterThan(0)
-    expect(result.levellingResult.totalDeliveryWeeks).toBe(result.deliveryWeeks)
-    expect(result.plannedResourceTypeIds).toHaveLength(benchmark.facts.roleCount)
+    expect(first.error).toBeNull()
+    expect(second).toEqual(first)
+    expect(metrics.achievedDurationWeeks).toBe(53)
+    expect(metrics).toEqual(repeatMetrics)
+    expect(metrics.effortHoursByRole).toEqual({
+      'factory-role-cloud': 2_903.2,
+      'factory-role-data': 10_024.4,
+      'factory-role-pc': 4_062.2,
+    })
+    expect(Object.values(metrics.staffedCapacityHoursByRole).every(hours => hours > 0)).toBe(true)
+    expect(Object.values(metrics.staffedFteWeeksByRole).every(weeks => weeks > 0)).toBe(true)
+    expect(metrics.peakStaffingFte).toBe(first.result?.peakHeadcount)
+    expect(Object.values(metrics.peakStaffingFteByRole).every(peak => peak > 0)).toBe(true)
+    expect(Object.values(metrics.utilisationPctByRole).every(value => value != null && value > 0 && value <= 100)).toBe(true)
+    expect(metrics.capacityViolations).toEqual([])
+    expect(metrics.dependencyViolations).toEqual([])
+    expect(Object.values(metrics.rampShapeByRole).every(shape => shape.activePeriods > 0 && shape.peakDemandFte > 0)).toBe(true)
+    expect(metrics.failureReason).toBeNull()
+    expect(metrics.deterministicFingerprint).toBeTruthy()
   })
 })
