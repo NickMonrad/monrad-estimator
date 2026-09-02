@@ -580,8 +580,9 @@ describe('#480 post-completion diagnostics (analyzeTargetMiss)', () => {
       },
     ]
 
-    // With maxConcurrentEpics=1: epics must run serially
-    const config = makeConfig({ targetDurationWeeks: 5, maxConcurrentEpics: 1 })
+    // With maxConcurrentEpics=1: epics must run serially.
+    // maxParallelismPerFeature=200 ensures per-feature cap does not interfere.
+    const config = makeConfig({ targetDurationWeeks: 5, maxConcurrentEpics: 1, maxParallelismPerFeature: 200 })
     const result = runSAPlanner(input, config)
 
     expect(result.totalDeliveryWeeks).toBeGreaterThan(config.targetDurationWeeks)
@@ -589,9 +590,54 @@ describe('#480 post-completion diagnostics (analyzeTargetMiss)', () => {
     const diagnostics = analyzeTargetMiss(result, input, config)
     expect(diagnostics.length).toBeGreaterThan(0)
 
+    // STRICT: only CONCURRENT_EPICS — no dependency or parallelism false positives
+    const blockerTypes = new Set(diagnostics.map(d => d.blocker))
+    expect(blockerTypes.has('CONCURRENT_EPICS')).toBe(true)
+    expect(blockerTypes.has('DEPENDENCY_PATH')).toBe(false)
+    expect(blockerTypes.has('FEATURE_PARALLELISM')).toBe(false)
+    expect(blockerTypes.has('ROLE_MAX_CAP')).toBe(false)
+
     const epicDiag = diagnostics.find(d => d.blocker === 'CONCURRENT_EPICS')
     expect(epicDiag).toBeDefined()
     expect(epicDiag?.configuredLimit).toBe('1')
+  })
+
+  it('FEATURE_PARALLELISM diagnostic when per-feature cap limits throughput', () => {
+    // Single feature, sufficient staffing (count=10), no dependencies,
+    // no concurrent-epic limit — only maxParallelismPerFeature=1 restricts.
+    // At maxParallelism=1: feature uses 1×8=8h/week = 1 day/week
+    // 100 days / 1 day/week = 100 weeks. Target=10 weeks → target missed.
+    const input = makeInput()
+    input.resourceTypes = [{
+      id: 'rt-1', name: 'Dev', count: 10, hoursPerDay: 8,
+      namedResources: [],
+    }]
+    const feature = makeFeature('feat-1', 1, 100)
+    input.epics = [{
+      id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
+      featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
+      features: [feature],
+    }]
+
+    const config = makeConfig({ targetDurationWeeks: 10, maxParallelismPerFeature: 1 })
+    const result = runSAPlanner(input, config)
+
+    expect(result.totalDeliveryWeeks).toBeGreaterThan(config.targetDurationWeeks)
+
+    const diagnostics = analyzeTargetMiss(result, input, config)
+    expect(diagnostics.length).toBeGreaterThan(0)
+
+    // STRICT: only FEATURE_PARALLELISM — staffing is sufficient, no deps, no epic limit
+    const blockerTypes = new Set(diagnostics.map(d => d.blocker))
+    expect(blockerTypes.has('FEATURE_PARALLELISM')).toBe(true)
+    expect(blockerTypes.has('DEPENDENCY_PATH')).toBe(false)
+    expect(blockerTypes.has('CONCURRENT_EPICS')).toBe(false)
+    expect(blockerTypes.has('ROLE_MAX_CAP')).toBe(false)
+
+    const parallelDiag = diagnostics.find(d => d.blocker === 'FEATURE_PARALLELISM')
+    expect(parallelDiag).toBeDefined()
+    expect(parallelDiag?.configuredLimit).toBe('1')
+    expect(parallelDiag?.featureId).toBe('feat-1')
   })
 
   it('returns empty diagnostics when target is met', () => {
@@ -641,24 +687,32 @@ describe('#480 Starting Team Finder hand-off (route-level count boost)', () => {
     expect(result.featureStartWeeks.get('feat-1')).toBeDefined()
   })
 
-  it('unrestricted ceiling in route allows capacity above current count', () => {
-    // When route applies UNRESTRICTED_PLANNING_CEILING=12, count=1 becomes 12
-    // maxParallelismPerFeature=4 allows using the expanded capacity
+  it('dynamic bound allows capacity above 12 when demand justifies it', () => {
+    // count=1, no maxCap, 1000 days demand, target=10 weeks
+    // Minimum FTEs needed: 1000/(10×5) = 20 FTEs — well above old ceiling of 12
+    // The route derives planning bound from demand, not a fixed sentinel.
+    // maxParallelismPerFeature=20 allows using the expanded capacity.
     const input = makeInput()
     input.resourceTypes = [{
-      id: 'rt-1', name: 'Dev', count: 12, hoursPerDay: 8,
+      id: 'rt-1', name: 'Dev', count: 1, hoursPerDay: 8,
       namedResources: [],
     }]
-    const feature = makeFeature('feat-1', 1, 120)
+    const feature = makeFeature('feat-1', 1, 1000)
     input.epics = [{
       id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
       featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
       features: [feature],
     }]
 
-    const result = runSAPlanner(input, { targetDurationWeeks: 12, maxParallelismPerFeature: 4 })
+    // Simulate route dynamic bound: totalDemand=1000, target=10, daysPerWeek=5
+    // minFtes = ceil(1000/(10*5)) = 20, planningBound = max(1, ceil(20*2)) = 40
+    input.resourceTypes[0].count = 40
+    const result = runSAPlanner(input, { targetDurationWeeks: 10, maxParallelismPerFeature: 20 })
 
-    // At count=12 with parallelism=4: 4×5=20 days/week → 120/20=6 weeks
-    expect(result.totalDeliveryWeeks).toBeLessThanOrEqual(6)
+    // At count=40 with parallelism=20: 20×8=160h/week = 20 days/week → 1000/20=50 weeks
+    // But with parallelism=20, only 20 people per feature → 1000/(20×5)=10 weeks
+    expect(result.totalDeliveryWeeks).toBeLessThanOrEqual(10)
+    // Proves capacity above 12 is actually used
+    expect(result.totalDeliveryWeeks).toBeLessThan(20)
   })
 })

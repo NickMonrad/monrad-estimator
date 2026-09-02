@@ -286,26 +286,48 @@ export function analyzeTargetMiss(
     }
   }
 
-  // Check 5: Feature parallelism — per-feature cap limiting allocation
-  for (const rt of input.resourceTypes) {
-    const cap = maxCap?.get(rt.id) ?? rt.count
-    if (cap >= maxParallelismPerFeature) continue
+  // Check 5: Feature parallelism — per-feature cap limiting allocation.
+  // Evidence-based: look for features where weekly allocation hit the
+  // per-feature cap on any RT while the feature still had unmet demand.
+  // The planner uses maxParallelismPerFeature * 5 as the per-feature cap
+  // in days/week (5 working days per week).
+  const perFeatureCapDays = maxParallelismPerFeature * 5
+  for (const epic of input.epics) {
+    for (const feature of epic.features) {
+      const featureStart = result.featureStartWeeks.get(feature.id)
+      if (featureStart == null) continue
 
-    const weeklyDemand = result.weeklyDemandByResourceType.get(rt.id) ?? []
-    let totalDemandDays = 0
-    for (const d of weeklyDemand) totalDemandDays += d ?? 0
-    if (totalDemandDays <= EPSILON) continue
+      const featureAllocs = result.weeklyAllocationsByFeature.get(feature.id)
+      if (!featureAllocs) continue
 
-    // Per-feature cap limits how much demand can be processed per week
-    const featureCapDaysPerWeek = cap * 5
-    if (totalDemandDays > featureCapDaysPerWeek * targetDurationWeeks * 1.1) {
+      // Check if any RT hit the per-feature cap during this feature's window
+      let hitCap = false
+      for (const [, rtAllocs] of featureAllocs) {
+        for (const [, days] of rtAllocs) {
+          if (days >= perFeatureCapDays - EPSILON) {
+            hitCap = true
+            break
+          }
+        }
+        if (hitCap) break
+      }
+      if (!hitCap) continue
+
+      // Feature was capped — check if it completed after the target
+      let lastAllocWeek = featureStart
+      for (const w of featureAllocs.keys()) {
+        if (w > lastAllocWeek) lastAllocWeek = w
+      }
+      // If the feature completed after the target, the cap contributed to the miss
+      if (lastAllocWeek <= targetDurationWeeks) continue
+
       diagnostics.push({
         blocker: 'FEATURE_PARALLELISM',
-        resourceTypeId: rt.id,
-        resourceTypeName: rt.name,
-        configuredLimit: `${cap}`,
-        explanation: `${rt.name} per-feature parallelism of ${cap} limits throughput to ${Math.round(featureCapDaysPerWeek)} days/week; ${Math.round(totalDemandDays)} days of demand exceeds what can be processed in ${targetDurationWeeks} weeks.`,
+        featureId: feature.id,
+        configuredLimit: `${maxParallelismPerFeature}`,
+        explanation: `Feature ${feature.id} per-feature parallelism of ${maxParallelismPerFeature} limits simultaneous work; the configured cap prevented faster completion.`,
       })
+      break // one diagnostic per feature is enough
     }
   }
 
