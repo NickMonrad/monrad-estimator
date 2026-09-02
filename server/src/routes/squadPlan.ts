@@ -14,7 +14,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { scheduleDurationDays } from '../utils/round.js'
+import { effortDays, scheduleDurationDays } from '../utils/round.js'
 import { ownedProject } from '../lib/ownership.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
@@ -1050,20 +1050,42 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   // Planning-run capacity model:
   // - Canonical ResourceType.count is a starting seed, not a hidden hard max.
   // - When maxCap is explicit, it IS the hard cap for this planning run.
-  // - When maxCap is absent (unrestricted), boost phantom-slot count so the
-  //   planner can evaluate capacity above the current count.
+  // - When maxCap is absent (unrestricted), derive a finite planning-bound from
+  //   the actual problem so the planner can evaluate capacity above the current
+  //   count without using an arbitrary fixed ceiling.
   // - Non-empty roleSegments remain hard constraints (profile windows).
-  const UNRESTRICTED_PLANNING_CEILING = 12
+  const targetWeeks = body.targetDurationWeeks ?? 78
+  const hoursPerDay = schedulerInput.project.hoursPerDay || 8
+  const daysPerWeek = hoursPerDay > 0 ? Math.min(7, 40 / hoursPerDay) : 5
   for (const rt of schedulerInput.resourceTypes) {
     const explicitCap = body.maxCap?.[rt.id]
     if (isNonNegativeFiniteNumber(explicitCap) && explicitCap > rt.count) {
       // Explicit cap from Starting Team Finder or user — use it
       rt.count = explicitCap
     } else if (explicitCap == null) {
-      // No explicit cap — boost to planning ceiling so phantom slots allow
-      // the planner to evaluate capacity above the current count.
-      // RoleSegments override phantom slots, so this is harmless when profiles exist.
-      rt.count = Math.max(rt.count, UNRESTRICTED_PLANNING_CEILING)
+      // No explicit cap — derive planning bound from total demand for this RT.
+      // Sum days demanded across all features for this RT.
+      let totalDemandDays = 0
+      for (const epic of schedulerInput.epics) {
+        for (const feature of epic.features) {
+          for (const story of feature.userStories) {
+            for (const task of story.tasks) {
+              if (task.resourceTypeId === rt.id) {
+                totalDemandDays += effortDays(task.hoursEffort, hoursPerDay)
+              }
+            }
+          }
+        }
+      }
+      // Minimum FTEs needed to complete all demand within target duration
+      const minFtesForTarget = daysPerWeek > 0
+        ? Math.ceil(totalDemandDays / (targetWeeks * daysPerWeek))
+        : 1
+      // Bound is the minimum FTEs needed, with a 2× safety margin so the
+      // planner can evaluate whether the target is achievable. Never below
+      // the current count — phantom slots must at least cover current state.
+      const planningBound = Math.max(rt.count, Math.ceil(minFtesForTarget * 2))
+      rt.count = planningBound
     }
     // else: explicit cap <= count — keep current count (cap is below, no boost needed)
   }
