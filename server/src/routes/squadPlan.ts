@@ -1058,6 +1058,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const hoursPerDay = schedulerInput.project.hoursPerDay || 8
   const daysPerWeek = hoursPerDay > 0 ? Math.min(7, 40 / hoursPerDay) : 5
   for (const rt of schedulerInput.resourceTypes) {
+    const originalCount = rt.count
     const explicitCap = body.maxCap?.[rt.id]
     if (isNonNegativeFiniteNumber(explicitCap) && explicitCap > rt.count) {
       // Explicit cap from Starting Team Finder or user — use it
@@ -1088,6 +1089,13 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       rt.count = planningBound
     }
     // else: explicit cap <= count — keep current count (cap is below, no boost needed)
+
+    // When the planning run boosted count above canonical state, profile-derived
+    // roleSegments must not cap phantom-slot capacity at the profile's level.
+    // The boosted count IS the effective planning capacity for this run.
+    if (rt.count > originalCount) {
+      rt.roleSegments = undefined
+    }
   }
 
   // ── Build minFloor map ──────────────────────────────────────────────────
