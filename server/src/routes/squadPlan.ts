@@ -25,6 +25,7 @@ import {
   computeCapacityPlan,
   type CapacityPlanConfig,
 } from '../lib/capacity-planner.js'
+import { SAPlannerInfeasibleError } from '../lib/sa-planner.js'
 import {
   materializeCapacityPlanResources,
   materializeResourceTrajectories,
@@ -1046,6 +1047,19 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   }
 
+  // Starting Team Finder hand-off: when maxCap proposes a higher count than
+  // the canonical ResourceType.count, boost the count so phantom slots and
+  // the SA planner use the candidate's capacity model for this run.
+  // Non-empty roleSegments remain hard constraints (profile windows).
+  if (body.maxCap) {
+    for (const rt of schedulerInput.resourceTypes) {
+      const cap = body.maxCap[rt.id]
+      if (isNonNegativeFiniteNumber(cap) && cap > rt.count) {
+        rt.count = cap
+      }
+    }
+  }
+
   // ── Build minFloor map ──────────────────────────────────────────────────
   const minFloor = new Map<string, number>()
   if (body.minFloor) {
@@ -1120,10 +1134,18 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       error instanceof Error && detail.includes('Fractional planner could not finish feature')
 
     if (isGenerationFailure) {
+      const diagnostics = error instanceof SAPlannerInfeasibleError
+        ? error.diagnostics
+        : undefined
+
       res.status(400).json({
         error:
-          'No feasible squad plan found under the current constraints. Try resetting RT max caps, increasing max parallelism, or clearing saved planner settings. ' +
+          'No feasible squad plan found under the current constraints. ' +
+          (diagnostics && diagnostics.length > 0
+            ? ''
+            : 'Try resetting RT max caps, increasing max parallelism, or clearing saved planner settings. ') +
           `Details: ${detail}`,
+        diagnostics,
       })
       return
     }

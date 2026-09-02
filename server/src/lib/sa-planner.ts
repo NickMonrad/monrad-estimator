@@ -54,6 +54,48 @@ export interface SAPlannerResult {
   weeklyDemandByResourceType: Map<string, number[]>
   /** Actual per-feature weekly RT allocations (days/week) */
   weeklyAllocationsByFeature: Map<string, Map<number, Map<string, number>>>
+  /** Structured infeasibility diagnostics when the planner cannot complete all features */
+  diagnostics?: PlannerDiagnostic[]
+}
+
+// ─── Diagnostics ─────────────────────────────────────────────────────────────
+
+export type PlannerDiagnosticBlocker =
+  | 'ROLE_MAX_CAP'
+  | 'PROFILE_WINDOW'
+  | 'DEPENDENCY_PATH'
+  | 'FEATURE_PARALLELISM'
+  | 'CONCURRENT_EPICS'
+  | 'SCHEDULE_LOCK'
+  | 'CONSTRAINT'
+
+export interface PlannerDiagnostic {
+  /** The confirmed blocker category */
+  blocker: PlannerDiagnosticBlocker
+  /** Affected resource type ID where applicable */
+  resourceTypeId?: string
+  /** Affected resource type name where applicable */
+  resourceTypeName?: string
+  /** Affected feature ID where applicable */
+  featureId?: string
+  /** The configured limit that was hit (e.g. max cap value, window range) */
+  configuredLimit?: string
+  /** What was requested vs what was achieved */
+  requested?: string
+  achieved?: string
+  /** Concise actionable explanation */
+  explanation: string
+}
+
+/** Error carrying structured diagnostics when the SA planner cannot complete */
+export class SAPlannerInfeasibleError extends Error {
+  constructor(
+    message: string,
+    public readonly diagnostics: PlannerDiagnostic[],
+  ) {
+    super(message)
+    this.name = 'SAPlannerInfeasibleError'
+  }
 }
 
 // ─── Internal types ──────────────────────────────────────────────────────────
@@ -95,10 +137,17 @@ export function runSAPlanner(
   const epicById = new Map(epics.map(epic => [epic.id, epic]))
   const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
 
+  // effectiveRtCount is used only for per-feature parallelism caps.
+  // Blank/unrestricted maxCap must NOT cap overall planning capacity.
   const effectiveRtCount = new Map<string, number>()
   for (const rt of resourceTypes) {
     const capCount = maxCap?.get(rt.id)
-    effectiveRtCount.set(rt.id, Math.max(0, Math.min(rt.count, capCount ?? rt.count)))
+    // When no explicit cap, effective count = rt.count (no hidden limit).
+    // When explicit cap < count, clamp to cap. When cap > count (Starting
+    // Team Finder), allow the higher count for per-feature parallelism.
+    effectiveRtCount.set(rt.id, capCount != null
+      ? Math.max(0, Math.min(rt.count, capCount))
+      : Math.max(0, rt.count))
   }
 
   for (const epic of epics) {
@@ -179,10 +228,13 @@ export function runSAPlanner(
   for (const feature of features) {
     const capByRt = new Map<string, number>()
     for (const rtId of feature.totalDaysByRt.keys()) {
-      const allowedPeople = Math.min(
-        maxParallelismPerFeature,
-        effectiveRtCount.get(rtId) ?? (rtById.get(rtId)?.count ?? maxParallelismPerFeature),
-      )
+      const capCount = maxCap?.get(rtId)
+      // Per-feature parallelism cap: use maxCap when explicit (Starting Team
+      // Finder or user-configured), else maxParallelismPerFeature.
+      // Blank maxCap must not artificially limit per-feature allocation.
+      const allowedPeople = capCount != null
+        ? Math.min(maxParallelismPerFeature, capCount)
+        : maxParallelismPerFeature
       capByRt.set(rtId, Math.max(0, allowedPeople * 5))
     }
     featureWeeklyCapByRt.set(feature.id, capByRt)
@@ -202,8 +254,13 @@ export function runSAPlanner(
     let capacityDays = getWeeklyCapacity(rt, week, hpd) / hoursPerDay
     if (!Number.isFinite(capacityDays) || capacityDays <= 0) return 0
 
+    // Only scale down when an explicit cap is LOWER than the count.
+    // Blank/unrestricted maxCap must NOT reduce capacity below what
+    // getWeeklyCapacity provides. When cap > count (Starting Team Finder),
+    // the higher capacity is already reflected in getWeeklyCapacity's
+    // phantom slots (count-based) or roleSegments (profile-based).
     const capCount = maxCap?.get(rt.id)
-    if (capCount != null && rt.count > 0 && capCount < rt.count) {
+    if (capCount != null && capCount < rt.count && rt.count > 0) {
       capacityDays *= capCount / rt.count
     }
 
@@ -359,7 +416,7 @@ export function runSAPlanner(
     if (!Number.isFinite(capacityDays) || capacityDays <= 0) return 0
 
     const capCount = maxCap?.get(rt.id)
-    if (capCount != null && rt.count > 0 && capCount < rt.count) {
+    if (capCount != null && capCount < rt.count && rt.count > 0) {
       capacityDays *= capCount / rt.count
     }
 
@@ -504,16 +561,125 @@ export function runSAPlanner(
     }
   }
 
+  const diagnostics: PlannerDiagnostic[] = []
+
   for (const feature of features) {
     if (feature.completedWeek !== undefined) continue
     if (!isFeatureComplete(feature)) {
-      throw new Error(`Fractional planner could not finish feature ${feature.id} within ${MAX_WEEKS} weeks`)
+      collectInfeasibilityDiagnostics(feature, diagnostics)
+      throw new SAPlannerInfeasibleError(
+        `Fractional planner could not finish feature ${feature.id} within ${MAX_WEEKS} weeks`,
+        diagnostics,
+      )
     }
 
     const fallbackWeek = feature.startedWeek ?? 0
     feature.startedWeek = fallbackWeek
     feature.completedWeek = fallbackWeek
     completedFeatureCount++
+  }
+
+  function collectInfeasibilityDiagnostics(failedFeature: FeatureInfo, diags: PlannerDiagnostic[]) {
+    // Check 1: Zero capacity for a role with demand in any week
+    for (const [rtId, totalDays] of failedFeature.totalDaysByRt) {
+      if (totalDays <= EPSILON) continue
+      const rt = rtById.get(rtId)
+      if (!rt) continue
+
+      let hasZeroCapacityWeek = false
+      let hasSomeCapacity = false
+      for (let w = 0; w < MAX_WEEKS; w++) {
+        const cap = getWeeklyCapacityDays(rt, w)
+        if (cap > EPSILON) {
+          hasSomeCapacity = true
+        } else if (w === 0 || hasSomeCapacity) {
+          if (!hasZeroCapacityWeek) hasZeroCapacityWeek = true
+        }
+      }
+
+      if (hasZeroCapacityWeek && hasSomeCapacity) {
+        diags.push({
+          blocker: 'PROFILE_WINDOW',
+          resourceTypeId: rtId,
+          resourceTypeName: rt.name,
+          featureId: failedFeature.id,
+          explanation: `${rt.name} capacity is only available during certain weeks; later ${rt.name} work cannot be scheduled.`,
+        })
+      } else if (!hasSomeCapacity) {
+        const capCount = maxCap?.get(rtId)
+        if (capCount != null && capCount < rt.count) {
+          diags.push({
+            blocker: 'ROLE_MAX_CAP',
+            resourceTypeId: rtId,
+            resourceTypeName: rt.name,
+            featureId: failedFeature.id,
+            configuredLimit: `${capCount}`,
+            requested: `>${capCount}`,
+            achieved: `${capCount}`,
+            explanation: `${rt.name} is capped at ${capCount}; the target requires more capacity.`,
+          })
+        } else {
+          diags.push({
+            blocker: 'PROFILE_WINDOW',
+            resourceTypeId: rtId,
+            resourceTypeName: rt.name,
+            featureId: failedFeature.id,
+            explanation: `${rt.name} has no available capacity in any week.`,
+          })
+        }
+      }
+    }
+
+    // Check 2: Dependency / critical path
+    const unmetPredecessors = [...failedFeature.predecessors].filter(predId => {
+      const pred = featureMap.get(predId)
+      return pred && pred.completedWeek === undefined
+    })
+    if (unmetPredecessors.length > 0 && failedFeature.startedWeek === undefined) {
+      diags.push({
+        blocker: 'DEPENDENCY_PATH',
+        featureId: failedFeature.id,
+        explanation: `Feature ${failedFeature.id} cannot start until its dependency chain completes; additional staffing cannot shorten this path.`,
+      })
+    }
+
+    // Check 3: Max concurrent epics
+    if (maxConcurrentEpics && !canStartFeature(failedFeature)) {
+      diags.push({
+        blocker: 'CONCURRENT_EPICS',
+        featureId: failedFeature.id,
+        configuredLimit: `${maxConcurrentEpics}`,
+        explanation: `Maximum ${maxConcurrentEpics} concurrent epic(s) reached; feature cannot start until another epic completes.`,
+      })
+    }
+
+    // Check 4: Feature parallelism
+    if (failedFeature.startedWeek !== undefined) {
+      let allRtsCapped = true
+      for (const [rtId] of failedFeature.remainingDaysByRt) {
+        const capCount = maxCap?.get(rtId)
+        const rt = rtById.get(rtId)
+        if (capCount == null || !rt || capCount >= rt.count) {
+          allRtsCapped = false
+          break
+        }
+      }
+      if (allRtsCapped && failedFeature.totalDaysByRt.size > 0) {
+        diags.push({
+          blocker: 'FEATURE_PARALLELISM',
+          featureId: failedFeature.id,
+          explanation: `Feature parallelism or resource cap limits prevent finishing ${failedFeature.id} within the target.`,
+        })
+      }
+    }
+
+    if (diags.length === 0) {
+      diags.push({
+        blocker: 'CONSTRAINT',
+        featureId: failedFeature.id,
+        explanation: `Scheduling constraints prevent completing feature ${failedFeature.id} within ${MAX_WEEKS} weeks.`,
+      })
+    }
   }
 
   const featureStartWeeks = new Map<string, number>()
@@ -555,5 +721,6 @@ export function runSAPlanner(
     improvements: 0,
     weeklyDemandByResourceType,
     weeklyAllocationsByFeature,
+    diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
   }
 }

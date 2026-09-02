@@ -8,7 +8,11 @@
 
 import { type SchedulerInput } from './scheduler.js'
 import { type LevellingResult } from './leveller.js'
-import { runSAPlanner, type SAPlannerConfig } from './sa-planner.js'
+import {
+  runSAPlanner,
+  type SAPlannerConfig,
+  type PlannerDiagnostic,
+} from './sa-planner.js'
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -76,6 +80,8 @@ export interface CapacityPlanResult {
   levellingResult: LevellingResult
   /** Demand RTs that were included in planning (only those with task demand) */
   plannedResourceTypeIds: string[]
+  /** Structured infeasibility diagnostics (present when planner fails) */
+  diagnostics?: PlannerDiagnostic[]
 }
 
 // ─── Main entry ──────────────────────────────────────────────────────────────
