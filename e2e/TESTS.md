@@ -91,6 +91,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 | History button toggles history panel | "🕐 History" button reveals the Snapshot History panel |
 | drag handle is visible on epics for reordering | Hovering an epic row reveals the ⠿ drag handle for DnD reorder |
 | duplicates every backlog level, preserves metadata, and edits independently | Imports a hierarchy, duplicates Task/Story/Feature/Epic roots, edits the Task copy, reloads, and verifies failure feedback |
+| creates, validates, persists and edits a keyboard-first backlog grid | Seeds a resource type, creates Epic/Feature/Story/Tasks in Grid Entry, pastes TSV rows, blocks invalid effort, commits, reloads, edits by stable row identity, and verifies the unsaved-change warning |
 
 #### `CSV redesign — Type column and status fields` describe block (3 tests)
 
