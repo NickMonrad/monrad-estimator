@@ -16,6 +16,7 @@ import { useReorderEpics, useReorderFeatures, useReorderStories, useReorderTasks
 import type { Epic, Feature, UserStory, Task, ResourceType, Project } from '../types/backlog'
 import FeatureList from '../components/backlog/FeatureList'
 import CsvImportModal from '../components/backlog/CsvImportModal'
+import BacklogGrid from '../components/backlog/BacklogGrid'
 import { getEpicColour, type EpicColour } from '../lib/epicColours'
 import RichTextEditor from '../components/shared/RichTextEditor'
 
@@ -30,6 +31,7 @@ export default function BacklogPage() {
   const [epicForm, setEpicForm] = useState({ name: '', description: '', assumptions: '' })
   const [showHistory, setShowHistory] = useState(false)
   const [showCsvImport, setShowCsvImport] = useState(false)
+  const [showGrid, setShowGrid] = useState(false)
   const [duplicateError, setDuplicateError] = useState<string | null>(null)
 
   const [tree, setTree] = useState<Epic[]>([])
@@ -74,6 +76,10 @@ export default function BacklogPage() {
     qc.invalidateQueries({ queryKey: ['backlog', projectId] })
     qc.invalidateQueries({ queryKey: ['epicDeps', projectId] })
     qc.invalidateQueries({ queryKey: ['feature-deps', projectId] })
+  }
+  const refreshAfterGridCommit = async () => {
+    invalidate()
+    await qc.refetchQueries({ queryKey: ['backlog', projectId] })
   }
 
   // Metadata-only mutations do not affect planning, but document payloads
@@ -268,6 +274,10 @@ export default function BacklogPage() {
             className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors">
             + Add epic
           </button>
+          <button onClick={() => setShowGrid(true)} aria-label="Open Grid Entry"
+            className="bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue transition-colors">
+            Grid Entry
+          </button>
           <button onClick={() => setShowCsvImport(true)}
             className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
             ⬆ Import CSV
@@ -295,17 +305,12 @@ export default function BacklogPage() {
             {duplicateError}
           </div>
         )}
-
         {isLoading ? (
           <div className="text-center py-12 text-gray-400 dark:text-gray-500">Loading…</div>
+        ) : showGrid ? (
+          <BacklogGrid projectId={projectId!} epics={tree} resourceTypes={resourceTypes} onCommitted={refreshAfterGridCommit} onExit={() => setShowGrid(false)} />
         ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCorners}
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragEnd={handleDragEnd}
-          >
+          <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
             <SortableContext items={tree.map(e => 'epic-' + e.id)} strategy={verticalListSortingStrategy}>
               <div className="space-y-2">
                 {tree.map((epic, index) => (
@@ -341,33 +346,11 @@ export default function BacklogPage() {
                     featureDepError={featureDepError}
                   />
                 ))}
-
-                {addingEpic && (
-                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 p-4">
-                    <EpicForm
-                      initial={epicForm}
-                      onSave={(data) => createEpic.mutate(data)}
-                      onCancel={() => setAddingEpic(false)}
-                      saving={createEpic.isPending}
-                    />
-                  </div>
-                )}
-
-                {tree.length === 0 && !addingEpic && (
-                  <div className="text-center py-16 text-gray-400 dark:text-gray-500">
-                    <p className="text-lg mb-1">Backlog is empty</p>
-                    <p className="text-sm">Add an epic to get started, or use AI to generate a starter backlog</p>
-                  </div>
-                )}
+                {addingEpic && <div className="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 p-4"><EpicForm initial={epicForm} onSave={(data) => createEpic.mutate(data)} onCancel={() => setAddingEpic(false)} saving={createEpic.isPending} /></div>}
+                {tree.length === 0 && !addingEpic && <div className="text-center py-16 text-gray-400 dark:text-gray-500"><p className="text-lg mb-1">Backlog is empty</p><p className="text-sm">Add an epic to get started, or use AI to generate a starter backlog</p></div>}
               </div>
             </SortableContext>
-            <DragOverlay>
-              {activeItem && (
-                <div className="bg-white dark:bg-gray-800 border-2 border-blue-400 rounded-lg px-3 py-2 shadow-lg text-sm font-medium opacity-90">
-                  {activeItem.name}
-                </div>
-              )}
-            </DragOverlay>
+            <DragOverlay>{activeItem && <div className="bg-white dark:bg-gray-800 border-2 border-blue-400 rounded-lg px-3 py-2 shadow-lg text-sm font-medium opacity-90">{activeItem.name}</div>}</DragOverlay>
           </DndContext>
         )}
 
