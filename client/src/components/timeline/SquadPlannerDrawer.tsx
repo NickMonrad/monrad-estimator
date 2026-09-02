@@ -37,6 +37,13 @@ interface CapacityPlanResult {
     peakUtilisationPct: number
   }
   plannedResourceTypeIds?: string[]
+  diagnostics?: Array<{
+    blocker: string
+    resourceTypeName?: string
+    featureId?: string
+    configuredLimit?: string
+    explanation: string
+  }>
 }
 
 type SmoothingMode = 'smooth' | 'tight' | 'exact'
@@ -224,6 +231,13 @@ export default function SquadPlannerDrawer({
   const [maxConcurrentEpics, setMaxConcurrentEpics] = useState<number>(6)
   const [showAllResourceTypes, setShowAllResourceTypes] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [diagnostics, setDiagnostics] = useState<Array<{
+    blocker: string
+    resourceTypeName?: string
+    featureId?: string
+    configuredLimit?: string
+    explanation: string
+  }> | null>(null)
   const [seedBanner, setSeedBanner] = useState<string | null>(null)
   const [applyDone, setApplyDone] = useState(false)
 
@@ -317,12 +331,24 @@ export default function SquadPlannerDrawer({
         })
         .then(r => r.data as CapacityPlanResult),
     onError: (err: unknown) => {
-      const msg =
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
-        'Failed to generate plan'
+      const resp = err && typeof err === 'object' && 'response' in err
+        ? (err as { response: { data?: Record<string, unknown> } }).response?.data
+        : undefined
+      const msg = (typeof resp?.error === 'string' ? resp.error : null) ?? 'Failed to generate plan'
       setError(msg)
+      const diags = Array.isArray(resp?.diagnostics) ? resp.diagnostics : null
+      setDiagnostics(diags as Array<{
+        blocker: string; resourceTypeName?: string; featureId?: string;
+        configuredLimit?: string; explanation: string
+      }> | null)
     },
-    onSuccess: () => setError(null),
+    onSuccess: (data: CapacityPlanResult) => {
+      setError(null)
+      // Post-completion diagnostics: plan succeeded but missed the target
+      setDiagnostics(data.diagnostics && data.diagnostics.length > 0
+        ? data.diagnostics
+        : null)
+    },
   })
 
   const restoreSettings = useCallback(() => {
@@ -400,7 +426,7 @@ export default function SquadPlannerDrawer({
           setActive: true,
         })
         .then(r => r.data),
-    onSuccess: () => setError(null),
+    onSuccess: () => { setError(null); setDiagnostics(null) },
     onError: (err: unknown) => {
       const msg =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
@@ -422,6 +448,7 @@ export default function SquadPlannerDrawer({
     setMaxConcurrentEpics(6)
     setShowAllResourceTypes(false)
     setError(null)
+    setDiagnostics(null)
     setSeedBanner(null)
     generate.reset()
     try {
@@ -752,7 +779,7 @@ export default function SquadPlannerDrawer({
 
           {/* Generate button */}
           <button
-            onClick={() => { setError(null); generate.mutate() }}
+            onClick={() => { setError(null); setDiagnostics(null); generate.mutate() }}
             disabled={generate.isPending || effectiveMonths < 1}
             className="w-full bg-lab3-navy text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50 transition-colors"
           >
@@ -763,15 +790,65 @@ export default function SquadPlannerDrawer({
           {error && (
             <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-sm text-red-700 dark:text-red-300">
               {error}
-              <div className="mt-1 text-xs">
-                If this looks like an impossible plan,{' '}
+              {diagnostics && diagnostics.length > 0 && (
+                <ul className="mt-2 space-y-1 text-xs list-disc list-inside">
+                  {diagnostics.map((d, i) => (
+                    <li key={i}>
+                      <span className="font-medium">{d.explanation}</span>
+                      {d.resourceTypeName && (
+                        <span className="text-red-600 dark:text-red-400"> ({d.resourceTypeName})</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!diagnostics || diagnostics.length === 0 ? (
+                <div className="mt-1 text-xs">
+                  If this looks like an impossible plan,{' '}
+                  <button
+                    onClick={resetToDefaults}
+                    className="underline font-medium hover:no-underline"
+                  >
+                    reset planner settings
+                  </button>{' '}
+                  to try the defaults.
+                </div>
+              ) : (
+                <div className="mt-1 text-xs">
+                  <button
+                    onClick={resetToDefaults}
+                    className="underline font-medium hover:no-underline"
+                  >
+                    Reset planner settings
+                  </button>{' '}
+                  or adjust the constraints above.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Post-completion diagnostics (target missed) ── */}
+          {!error && diagnostics && diagnostics.length > 0 && (
+            <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 text-sm text-amber-700 dark:text-amber-300">
+              <div className="font-medium text-xs mb-1">⚠ Target not achievable under current constraints</div>
+              <ul className="space-y-1 text-xs list-disc list-inside">
+                {diagnostics.map((d, i) => (
+                  <li key={i}>
+                    <span className="font-medium">{d.explanation}</span>
+                    {d.resourceTypeName && (
+                      <span className="text-amber-600 dark:text-amber-400"> ({d.resourceTypeName})</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-2 text-xs">
                 <button
                   onClick={resetToDefaults}
                   className="underline font-medium hover:no-underline"
                 >
-                  reset planner settings
+                  Reset planner settings
                 </button>{' '}
-                to try the defaults.
+                or adjust the constraints above.
               </div>
             </div>
           )}
