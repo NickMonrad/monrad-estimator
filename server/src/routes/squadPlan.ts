@@ -1090,10 +1090,18 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
     // else: explicit cap <= count — keep current count (cap is below, no boost needed)
 
-    // When the planning run boosted count above canonical state, profile-derived
-    // roleSegments must not cap phantom-slot capacity at the profile's level.
-    // The boosted count IS the effective planning capacity for this run.
-    if (rt.count > originalCount) {
+    // When the planning run boosted count above canonical state, the effective
+    // planning capacity inside profile windows must scale to the boosted count.
+    // Non-empty finite windows remain authoritative — capacity stays zero outside
+    // them. Empty [] stays undefined (phantom-slot path). Undefined stays undefined.
+    if (rt.count > originalCount && Array.isArray(rt.roleSegments) && rt.roleSegments.length > 0) {
+      const scaleFactor = rt.count / originalCount
+      rt.roleSegments = rt.roleSegments.map(seg => ({
+        ...seg,
+        allocationPercent: seg.allocationPercent * scaleFactor,
+      }))
+    } else if (rt.count > originalCount && Array.isArray(rt.roleSegments) && rt.roleSegments.length === 0) {
+      // Empty overlap marker -> allow phantom slots for boosted count
       rt.roleSegments = undefined
     }
   }

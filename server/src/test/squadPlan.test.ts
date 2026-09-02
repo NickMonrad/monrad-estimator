@@ -421,6 +421,147 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
     // Must be dramatically faster than count=1 alone (200 weeks)
     expect(res.body.deliveryWeeks).toBeLessThan(50)
   })
+
+  it('Test C: finite profile window preserved when count is boosted — capacity usable inside window, zero outside, PROFILE_WINDOW diagnostic', async () => {
+    // #479-style scenario: canonical count=1, role profile window W0-W5 only.
+    // 200 days demand at 8h/day. Inside W0-W5: scaled capacity (e.g. 3 FTE x 5 days x 6 weeks = 90 days).
+    // Outside W5: capacity must remain zero. Target of 5 weeks cannot be met
+    // because demand exceeds what the window can deliver.
+    // The route must scale allocationPercent inside the window, NOT clear roleSegments.
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([
+      {
+        id: 'epic-1', name: 'Epic 1', order: 0, isActive: true,
+        featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
+        features: [{
+          id: 'feature-1', order: 0, isActive: true, timelineStartWeek: null,
+          userStories: [{
+            id: 'story-1', order: 0, isActive: true,
+            tasks: [{
+              id: 'task-1', resourceTypeId: 'rt-dev',
+              hoursEffort: 200 * 8, // 200 days
+              durationDays: null,
+              resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+            }],
+            dependencies: [],
+          }],
+          dependencies: [],
+        }],
+      },
+    ] as never)
+    vi.mocked(prisma.resourceType.findMany)
+      .mockResolvedValueOnce([{
+        id: 'rt-dev', name: 'Developer', count: 1, hoursPerDay: 8,
+        namedResources: [],
+      }] as never)
+      .mockResolvedValueOnce([] as never)
+    // Role profile with finite window W0-W5 only
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
+      {
+        id: 'cp-role', projectId: 'proj-1', resourceTypeId: 'rt-dev', namedResourceId: null,
+        ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE', source: 'FIXED',
+        defaultPercent: 100, startWeek: 0, endWeek: 5, legacy: null, createdAt: new Date(),
+        segments: [{ id: 'seg-1', capacityProfileId: 'cp-role', startWeek: 0, endWeek: 5, capacityPercent: 100, source: 'FIXED' }],
+      },
+    ] as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan')
+      .set('Authorization', authHeader)
+      .send({
+        targetDurationWeeks: 5, // Tight target to force infeasibility
+        periodWeeks: 4,
+        maxDeltaPerPeriod: 1,
+        maxCap: { 'rt-dev': 3 }, // Finder candidate: boost count to 3
+        maxParallelismPerFeature: 10,
+        setActive: false,
+      })
+
+    // Should return 400 (infeasible) because demand (200 days) exceeds what
+    // W0-W5 can deliver even at 3 FTE (3 x 5 days x 6 weeks = 90 days).
+    expect(res.status).toBe(400)
+    expect(res.body.error).toContain('No feasible squad plan')
+
+    // PROFILE_WINDOW diagnostic must be present
+    const diagnostics = res.body.diagnostics as Array<{ blocker: string; resourceTypeId?: string }>
+    expect(diagnostics).toBeDefined()
+    const profileWindowDiag = diagnostics.find(d => d.blocker === 'PROFILE_WINDOW')
+    expect(profileWindowDiag).toBeDefined()
+    expect(profileWindowDiag!.resourceTypeId).toBe('rt-dev')
+
+    // Canonical count was NOT mutated (no apply)
+    expect(vi.mocked(writerModule.revalidatePlannerPlan)).not.toHaveBeenCalled()
+  })
+
+  it('Test C2: finite profile window — scaled capacity IS usable inside the allowed window', async () => {
+    // Same window W0-W5 but with small enough demand to fit inside the scaled window.
+    // 30 days demand. At scaled 3 FTE: 3 x 5 = 15 days/week. 30/15 = 2 weeks.
+    // Target of 5 weeks is achievable. This proves capacity was scaled inside the window.
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([
+      {
+        id: 'epic-1', name: 'Epic 1', order: 0, isActive: true,
+        featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
+        features: [{
+          id: 'feature-1', order: 0, isActive: true, timelineStartWeek: null,
+          userStories: [{
+            id: 'story-1', order: 0, isActive: true,
+            tasks: [{
+              id: 'task-1', resourceTypeId: 'rt-dev',
+              hoursEffort: 30 * 8, // 30 days
+              durationDays: null,
+              resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+            }],
+            dependencies: [],
+          }],
+          dependencies: [],
+        }],
+      },
+    ] as never)
+    vi.mocked(prisma.resourceType.findMany)
+      .mockResolvedValueOnce([{
+        id: 'rt-dev', name: 'Developer', count: 1, hoursPerDay: 8,
+        namedResources: [],
+      }] as never)
+      .mockResolvedValueOnce([] as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([
+      {
+        id: 'cp-role', projectId: 'proj-1', resourceTypeId: 'rt-dev', namedResourceId: null,
+        ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE', source: 'FIXED',
+        defaultPercent: 100, startWeek: 0, endWeek: 5, legacy: null, createdAt: new Date(),
+        segments: [{ id: 'seg-1', capacityProfileId: 'cp-role', startWeek: 0, endWeek: 5, capacityPercent: 100, source: 'FIXED' }],
+      },
+    ] as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan')
+      .set('Authorization', authHeader)
+      .send({
+        targetDurationWeeks: 5,
+        periodWeeks: 4,
+        maxDeltaPerPeriod: 1,
+        maxCap: { 'rt-dev': 3 }, // Boost to 3 FTE
+        maxParallelismPerFeature: 10,
+        setActive: false,
+      })
+
+    // At 3 FTE inside W0-W5: 15 days/week. 30 days / 15 = 2 weeks. Should succeed.
+    expect(res.status).toBe(200)
+    expect(res.body.error).toBeUndefined()
+    expect(res.body.deliveryWeeks).toBeLessThanOrEqual(5)
+    expect(res.body.deliveryWeeks).toBeGreaterThan(0)
+
+    // Canonical count was NOT mutated
+    expect(vi.mocked(writerModule.revalidatePlannerPlan)).not.toHaveBeenCalled()
+  })
 })
 
 describe('POST /api/projects/:projectId/squad-plan/apply', () => {
