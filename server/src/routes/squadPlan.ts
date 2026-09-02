@@ -1047,17 +1047,25 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   }
 
-  // Starting Team Finder hand-off: when maxCap proposes a higher count than
-  // the canonical ResourceType.count, boost the count so phantom slots and
-  // the SA planner use the candidate's capacity model for this run.
-  // Non-empty roleSegments remain hard constraints (profile windows).
-  if (body.maxCap) {
-    for (const rt of schedulerInput.resourceTypes) {
-      const cap = body.maxCap[rt.id]
-      if (isNonNegativeFiniteNumber(cap) && cap > rt.count) {
-        rt.count = cap
-      }
+  // Planning-run capacity model:
+  // - Canonical ResourceType.count is a starting seed, not a hidden hard max.
+  // - When maxCap is explicit, it IS the hard cap for this planning run.
+  // - When maxCap is absent (unrestricted), boost phantom-slot count so the
+  //   planner can evaluate capacity above the current count.
+  // - Non-empty roleSegments remain hard constraints (profile windows).
+  const UNRESTRICTED_PLANNING_CEILING = 12
+  for (const rt of schedulerInput.resourceTypes) {
+    const explicitCap = body.maxCap?.[rt.id]
+    if (isNonNegativeFiniteNumber(explicitCap) && explicitCap > rt.count) {
+      // Explicit cap from Starting Team Finder or user — use it
+      rt.count = explicitCap
+    } else if (explicitCap == null) {
+      // No explicit cap — boost to planning ceiling so phantom slots allow
+      // the planner to evaluate capacity above the current count.
+      // RoleSegments override phantom slots, so this is harmless when profiles exist.
+      rt.count = Math.max(rt.count, UNRESTRICTED_PLANNING_CEILING)
     }
+    // else: explicit cap <= count — keep current count (cap is below, no boost needed)
   }
 
   // ── Build minFloor map ──────────────────────────────────────────────────
@@ -1161,6 +1169,9 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       epicStartWeeks: Object.fromEntries(result.levellingResult.epicStartWeeks),
       featureStartWeeks: Object.fromEntries(result.levellingResult.featureStartWeeks),
     },
+    // Diagnostics are present when target was missed (post-completion)
+    // or when the planner threw (already in the 400 response above)
+    diagnostics: result.diagnostics,
   })
 }))
 

@@ -98,6 +98,227 @@ export class SAPlannerInfeasibleError extends Error {
   }
 }
 
+// ─── Post-completion diagnostics ─────────────────────────────────────────────
+
+/**
+ * Analyze why a completed plan missed the requested target duration.
+ * Called when totalDeliveryWeeks > targetDurationWeeks but the planner
+ * did not throw (plan completed, just slowly).
+ *
+ * Uses actual schedule evidence: weekly capacity, demand curves, explicit
+ * caps, profile windows, and dependency chains.
+ */
+export function analyzeTargetMiss(
+  result: SAPlannerResult,
+  input: SchedulerInput,
+  config: SAPlannerConfig,
+): PlannerDiagnostic[] {
+  const {
+    targetDurationWeeks,
+    maxCap,
+    maxParallelismPerFeature = 2,
+    maxConcurrentEpics,
+  } = config
+
+  if (result.totalDeliveryWeeks <= targetDurationWeeks) return []
+
+  const diagnostics: PlannerDiagnostic[] = []
+  const EPSILON = 1e-6
+
+  // Check 1: Profile window — demand exists in weeks beyond the profile window
+  for (const rt of input.resourceTypes) {
+    if (!rt.roleSegments || rt.roleSegments.length === 0) continue
+
+    const weeklyDemand = result.weeklyDemandByResourceType.get(rt.id) ?? []
+    const capAvailable = new Set<number>()
+    for (const seg of rt.roleSegments) {
+      for (let w = seg.startWeek; w <= seg.endWeek; w++) capAvailable.add(w)
+    }
+
+    // Find demand weeks beyond the profile window
+    let demandBeyondWindow = 0
+    let firstDemandBeyondWeek = -1
+    for (let w = 0; w < weeklyDemand.length; w++) {
+      if ((weeklyDemand[w] ?? 0) > EPSILON && !capAvailable.has(w)) {
+        demandBeyondWindow += weeklyDemand[w]
+        if (firstDemandBeyondWeek < 0) firstDemandBeyondWeek = w
+      }
+    }
+
+    if (demandBeyondWindow > EPSILON) {
+      const windowRange = rt.roleSegments
+        .map(s => `W${s.startWeek}–W${s.endWeek}`)
+        .join(', ')
+      diagnostics.push({
+        blocker: 'PROFILE_WINDOW',
+        resourceTypeId: rt.id,
+        resourceTypeName: rt.name,
+        configuredLimit: windowRange,
+        explanation: `${rt.name} capacity is only available during ${windowRange}; ${Math.round(demandBeyondWindow)} days of later ${rt.name} demand cannot be scheduled.`,
+      })
+    }
+  }
+
+  // Check 2: Explicit role cap — cap materially limits capacity vs demand
+  if (maxCap) {
+    for (const rt of input.resourceTypes) {
+      const cap = maxCap.get(rt.id)
+      if (cap == null) continue
+
+      const weeklyDemand = result.weeklyDemandByResourceType.get(rt.id) ?? []
+      let totalDemandDays = 0
+      let demandWeeks = 0
+      for (let w = 0; w < weeklyDemand.length; w++) {
+        const d = weeklyDemand[w] ?? 0
+        if (d > EPSILON) {
+          totalDemandDays += d
+          demandWeeks++
+        }
+      }
+
+      if (totalDemandDays <= EPSILON) continue
+
+      // Capacity per week at cap: cap * 5 days
+      const capacityDaysPerWeek = cap * 5
+      const weeksNeeded = totalDemandDays / capacityDaysPerWeek
+
+      // If the plan took longer than the target and the cap materially
+      // limits capacity (demand exceeds what cap can deliver in target weeks)
+      const weeksAtCap = targetDurationWeeks * capacityDaysPerWeek
+      if (totalDemandDays > weeksAtCap * 1.1) {
+        diagnostics.push({
+          blocker: 'ROLE_MAX_CAP',
+          resourceTypeId: rt.id,
+          resourceTypeName: rt.name,
+          configuredLimit: `${cap}`,
+          requested: `>${cap} FTE needed for ${Math.round(totalDemandDays)} days in ${targetDurationWeeks} weeks`,
+          achieved: `${cap} FTE (${Math.round(capacityDaysPerWeek)} days/week)`,
+          explanation: `${rt.name} is capped at ${cap}; the target requires more capacity (${Math.round(weeksNeeded)} weeks at cap vs ${targetDurationWeeks} week target).`,
+        })
+      }
+    }
+  }
+
+  // Check 3: Feature dependency path — features whose start is delayed
+  // by predecessors that were still active at the target time
+  for (const epic of input.epics) {
+    for (const feature of epic.features) {
+      const featureStart = result.featureStartWeeks.get(feature.id)
+      if (featureStart == null || featureStart <= targetDurationWeeks) continue
+
+      // Feature started AFTER target — check if dependency is the cause
+      const deps = feature.dependencies ?? []
+      for (const dep of deps) {
+        const predStart = result.featureStartWeeks.get(dep.dependsOnId)
+        // Compute predecessor completion: last allocation week
+        let predCompletion = predStart ?? 0
+        const predAllocs = result.weeklyAllocationsByFeature.get(dep.dependsOnId)
+        if (predAllocs) {
+          for (const w of predAllocs.keys()) {
+            if (w > predCompletion) predCompletion = w
+          }
+        }
+
+        // Predecessor was still active at the target time (started before
+        // target but hadn't completed yet) — this is a dependency constraint
+        if (predStart != null && predStart < targetDurationWeeks && predCompletion >= targetDurationWeeks) {
+          diagnostics.push({
+            blocker: 'DEPENDENCY_PATH',
+            featureId: feature.id,
+            explanation: `Feature ${feature.id} cannot start until predecessor ${dep.dependsOnId} completes; this dependency chain extends beyond the ${targetDurationWeeks}-week target.`,
+          })
+          break // one dependency diagnostic per feature is enough
+        }
+      }
+    }
+  }
+
+  // Check 4: Concurrent epics — if configured limit was actively constraining
+  if (maxConcurrentEpics) {
+    // Check if any feature was ready but couldn't start due to epic limit
+    const epicActiveWeeks = new Map<string, { start: number; end: number }>()
+    for (const epic of input.epics) {
+      const featureStarts = epic.features
+        .map(f => result.featureStartWeeks.get(f.id))
+        .filter((w): w is number => w != null)
+      const featureEnds = epic.features
+        .map(f => {
+          const start = result.featureStartWeeks.get(f.id)
+          if (start == null) return null
+          // Find last allocation week for this epic
+          let lastWeek = start
+          for (const feature of epic.features) {
+            const allocs = result.weeklyAllocationsByFeature.get(feature.id)
+            if (allocs) {
+              for (const w of allocs.keys()) {
+                if (w > lastWeek) lastWeek = w
+              }
+            }
+          }
+          return lastWeek
+        })
+        .filter((w): w is number => w != null)
+
+      if (featureStarts.length > 0 && featureEnds.length > 0) {
+        epicActiveWeeks.set(epic.id, {
+          start: Math.min(...featureStarts),
+          end: Math.max(...featureEnds),
+        })
+      }
+    }
+
+    // Count concurrent active epics during the target window
+    let maxConcurrent = 0
+    for (let w = 0; w <= targetDurationWeeks; w++) {
+      let active = 0
+      for (const [, span] of epicActiveWeeks) {
+        if (w >= span.start && w <= span.end) active++
+      }
+      if (active > maxConcurrent) maxConcurrent = active
+    }
+
+    if (maxConcurrent >= maxConcurrentEpics) {
+      diagnostics.push({
+        blocker: 'CONCURRENT_EPICS',
+        configuredLimit: `${maxConcurrentEpics}`,
+        explanation: `Maximum ${maxConcurrentEpics} concurrent epic(s) was reached during the target window, constraining parallel execution.`,
+      })
+    }
+  }
+
+  // Check 5: Feature parallelism — per-feature cap limiting allocation
+  for (const rt of input.resourceTypes) {
+    const cap = maxCap?.get(rt.id) ?? rt.count
+    if (cap >= maxParallelismPerFeature) continue
+
+    const weeklyDemand = result.weeklyDemandByResourceType.get(rt.id) ?? []
+    let totalDemandDays = 0
+    for (const d of weeklyDemand) totalDemandDays += d ?? 0
+    if (totalDemandDays <= EPSILON) continue
+
+    // Per-feature cap limits how much demand can be processed per week
+    const featureCapDaysPerWeek = cap * 5
+    if (totalDemandDays > featureCapDaysPerWeek * targetDurationWeeks * 1.1) {
+      diagnostics.push({
+        blocker: 'FEATURE_PARALLELISM',
+        resourceTypeId: rt.id,
+        resourceTypeName: rt.name,
+        configuredLimit: `${cap}`,
+        explanation: `${rt.name} per-feature parallelism of ${cap} limits throughput to ${Math.round(featureCapDaysPerWeek)} days/week; ${Math.round(totalDemandDays)} days of demand exceeds what can be processed in ${targetDurationWeeks} weeks.`,
+      })
+    }
+  }
+
+  // Deduplicate diagnostics by (blocker, resourceTypeId, featureId)
+  const seen = new Set<string>()
+  return diagnostics.filter(d => {
+    const key = `${d.blocker}|${d.resourceTypeId ?? ''}|${d.featureId ?? ''}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 // ─── Internal types ──────────────────────────────────────────────────────────
 
 interface FeatureInfo {
