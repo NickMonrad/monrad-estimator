@@ -1095,10 +1095,13 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     // Non-empty finite windows remain authoritative — capacity stays zero outside
     // them. Empty [] stays undefined (phantom-slot path). Undefined stays undefined.
     if (rt.count > originalCount && Array.isArray(rt.roleSegments) && rt.roleSegments.length > 0) {
-      const scaleFactor = rt.count / originalCount
+      // allocationPercent is aggregate role capacity (100% = 1 FTE), NOT relative
+      // to ResourceType.count. Set it directly to the candidate count so the
+      // planner sees the intended FTE capacity. This also avoids division by zero
+      // when canonical count is 0. Profile window boundaries are preserved.
       rt.roleSegments = rt.roleSegments.map(seg => ({
         ...seg,
-        allocationPercent: seg.allocationPercent * scaleFactor,
+        allocationPercent: rt.count * 100,
       }))
     } else if (rt.count > originalCount && Array.isArray(rt.roleSegments) && rt.roleSegments.length === 0) {
       // Empty overlap marker -> allow phantom slots for boosted count
