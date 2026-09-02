@@ -562,6 +562,140 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
     // Canonical count was NOT mutated
     expect(vi.mocked(writerModule.revalidatePlannerPlan)).not.toHaveBeenCalled()
   })
+
+  it('Test D: zero canonical count + finite window — candidate capacity works without division by zero', async () => {
+    // Canonical count=0, finite ROLE profile window W0-W5, candidate=4.
+    // The route must set allocationPercent=400 (4 FTE) without dividing by canonical 0.
+    // 40 days demand at 8h/day. At 4 FTE: 20 days/week. 40/20 = 2 weeks.
+    // Target of 5 weeks is achievable.
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([
+      {
+        id: 'epic-1', name: 'Epic 1', order: 0, isActive: true,
+        featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
+        features: [{
+          id: 'feature-1', order: 0, isActive: true, timelineStartWeek: null,
+          userStories: [{
+            id: 'story-1', order: 0, isActive: true,
+            tasks: [{
+              id: 'task-1', resourceTypeId: 'rt-dev',
+              hoursEffort: 40 * 8, // 40 days
+              durationDays: null,
+              resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+            }],
+            dependencies: [],
+          }],
+          dependencies: [],
+        }],
+      },
+    ] as never)
+    vi.mocked(prisma.resourceType.findMany)
+      .mockResolvedValueOnce([{
+        id: 'rt-dev', name: 'Developer', count: 0, hoursPerDay: 8,
+        namedResources: [],
+      }] as never)
+      .mockResolvedValueOnce([] as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([{
+        id: 'cp-role', projectId: 'proj-1', resourceTypeId: 'rt-dev', namedResourceId: null,
+        ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE', source: 'FIXED',
+        defaultPercent: 100, startWeek: 0, endWeek: 5, legacy: null, createdAt: new Date(),
+        segments: [{ id: 'seg-1', capacityProfileId: 'cp-role', startWeek: 0, endWeek: 5, capacityPercent: 100, source: 'FIXED', }],
+    }] as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan')
+      .set('Authorization', authHeader)
+      .send({
+        targetDurationWeeks: 5,
+        periodWeeks: 4,
+        maxDeltaPerPeriod: 1,
+        maxCap: { 'rt-dev': 4 }, // Candidate: boost from 0 to 4
+        maxParallelismPerFeature: 10,
+        setActive: false,
+      })
+
+    // At 4 FTE inside W0-W5: 20 days/week. 40 days / 20 = 2 weeks. Should succeed.
+    expect(res.status).toBe(200)
+    expect(res.body.error).toBeUndefined()
+    expect(res.body.deliveryWeeks).toBeLessThanOrEqual(5)
+    expect(res.body.deliveryWeeks).toBeGreaterThan(0)
+
+    // No Infinity/NaN in delivery calculation
+    expect(Number.isFinite(res.body.deliveryWeeks)).toBe(true)
+
+    // Canonical count was NOT mutated
+    expect(vi.mocked(writerModule.revalidatePlannerPlan)).not.toHaveBeenCalled()
+  })
+
+  it('Test E: aggregate ROLE percentage is not count-relative — candidate=4 gives 4 FTE, not scaled from 150%', async () => {
+    // Canonical count=2, ROLE segment allocationPercent=150 (1.5 FTE).
+    // With the old buggy code: scale = 4/2 = 2, new % = 150*2 = 300% = 3 FTE (wrong).
+    // With the fix: allocationPercent = 4*100 = 400% = 4 FTE (correct).
+    // 80 days demand at 8h/day. At 4 FTE: 20 days/week. 80/20 = 4 weeks.
+    // Target of 5 weeks is achievable. At 3 FTE: 15 days/week. 80/15 = 5.33 weeks (fails).
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([
+      {
+        id: 'epic-1', name: 'Epic 1', order: 0, isActive: true,
+        featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
+        features: [{
+          id: 'feature-1', order: 0, isActive: true, timelineStartWeek: null,
+          userStories: [{
+            id: 'story-1', order: 0, isActive: true,
+            tasks: [{
+              id: 'task-1', resourceTypeId: 'rt-dev',
+              hoursEffort: 80 * 8, // 80 days
+              durationDays: null,
+              resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+            }],
+            dependencies: [],
+          }],
+          dependencies: [],
+        }],
+      },
+    ] as never)
+    vi.mocked(prisma.resourceType.findMany)
+      .mockResolvedValueOnce([{
+        id: 'rt-dev', name: 'Developer', count: 2, hoursPerDay: 8,
+        namedResources: [],
+      }] as never)
+      .mockResolvedValueOnce([] as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue([{
+        id: 'cp-role', projectId: 'proj-1', resourceTypeId: 'rt-dev', namedResourceId: null,
+        ownerKind: 'ROLE', planningBasis: 'CAPACITY_PROFILE', source: 'FIXED',
+        defaultPercent: 100, startWeek: 0, endWeek: 10, legacy: null, createdAt: new Date(),
+        segments: [{ id: 'seg-1', capacityProfileId: 'cp-role', startWeek: 0, endWeek: 10, capacityPercent: 150, source: 'FIXED', }],
+    }] as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan')
+      .set('Authorization', authHeader)
+      .send({
+        targetDurationWeeks: 5,
+        periodWeeks: 4,
+        maxDeltaPerPeriod: 1,
+        maxCap: { 'rt-dev': 4 }, // Candidate: boost from 2 to 4
+        maxParallelismPerFeature: 10,
+        setActive: false,
+      })
+
+    // At 4 FTE (not 3): 20 days/week. 80 days / 20 = 4 weeks <= 5. Should succeed.
+    expect(res.status).toBe(200)
+    expect(res.body.error).toBeUndefined()
+    expect(res.body.deliveryWeeks).toBeLessThanOrEqual(5)
+    expect(res.body.deliveryWeeks).toBeGreaterThan(0)
+
+    // Canonical count was NOT mutated
+    expect(vi.mocked(writerModule.revalidatePlannerPlan)).not.toHaveBeenCalled()
+  })
 })
 
 describe('POST /api/projects/:projectId/squad-plan/apply', () => {
