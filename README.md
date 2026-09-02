@@ -264,7 +264,7 @@ Day rates per resource type (global defaults + project overrides) and cost colum
 | Deactivate epics/features/stories to mark as out of scope | #100 |
 | SVG Gantt overhaul: story bars, drag-and-drop, dependency arrows, proportional pool scheduler, resource histogram, clear-all-overrides, tooltip enhancements | #106 |
 | Backlog CSV export removes complexity-tier columns (HoursXS–XL); import retains backwards compat | #107 |
-| Backlog CSV redesign: Type column, per-level status (EpicStatus/FeatureStatus/StoryStatus), Template link on stories, upsert-by-hierarchy import, unique template names, export filename includes client/project/date, DurationDays precision fix | #110 |
+| Backlog CSV redesign: Type column, per-level status (EpicStatus/FeatureStatus/StoryStatus), Template link on stories, upsert-by-hierarchy re-import, unique template names, export filename includes client/project/date, DurationDays precision fix | #110 |
 | Resource Profile: fix inherited global day rates not applied to cost calculation | #111 |
 | Effort Review: active-scope filter toggle, cost columns (day rate + total), expandable epic sub-rows in summary, Excel-like column filters in detail view, cost + totals in detail | #112 |
 | Effort Review enhancements — cost columns, active filter, epic breakdown, detail column filters | #113 |
@@ -357,3 +357,9 @@ Playwright tests are documented in [`e2e/TESTS.md`](e2e/TESTS.md). See [`CONTRIB
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branching strategy, PR process, commit message format, and testing standards.
+
+---
+
+## License
+
+Monrad Estimator is open source software licensed under the [MIT License](LICENSE).
