@@ -37,6 +37,13 @@ interface CapacityPlanResult {
     peakUtilisationPct: number
   }
   plannedResourceTypeIds?: string[]
+  diagnostics?: Array<{
+    blocker: string
+    resourceTypeName?: string
+    featureId?: string
+    configuredLimit?: string
+    explanation: string
+  }>
 }
 
 type SmoothingMode = 'smooth' | 'tight' | 'exact'
@@ -335,7 +342,13 @@ export default function SquadPlannerDrawer({
         configuredLimit?: string; explanation: string
       }> | null)
     },
-    onSuccess: () => { setError(null); setDiagnostics(null) },
+    onSuccess: (data: CapacityPlanResult) => {
+      setError(null)
+      // Post-completion diagnostics: plan succeeded but missed the target
+      setDiagnostics(data.diagnostics && data.diagnostics.length > 0
+        ? data.diagnostics
+        : null)
+    },
   })
 
   const restoreSettings = useCallback(() => {
@@ -811,6 +824,32 @@ export default function SquadPlannerDrawer({
                   or adjust the constraints above.
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ── Post-completion diagnostics (target missed) ── */}
+          {!error && diagnostics && diagnostics.length > 0 && (
+            <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 text-sm text-amber-700 dark:text-amber-300">
+              <div className="font-medium text-xs mb-1">⚠ Target not achievable under current constraints</div>
+              <ul className="space-y-1 text-xs list-disc list-inside">
+                {diagnostics.map((d, i) => (
+                  <li key={i}>
+                    <span className="font-medium">{d.explanation}</span>
+                    {d.resourceTypeName && (
+                      <span className="text-amber-600 dark:text-amber-400"> ({d.resourceTypeName})</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-2 text-xs">
+                <button
+                  onClick={resetToDefaults}
+                  className="underline font-medium hover:no-underline"
+                >
+                  Reset planner settings
+                </button>{' '}
+                or adjust the constraints above.
+              </div>
             </div>
           )}
 

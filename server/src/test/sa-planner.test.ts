@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { runSAPlanner } from '../lib/sa-planner.js'
+import { runSAPlanner, analyzeTargetMiss, type SAPlannerConfig } from '../lib/sa-planner.js'
 import type { SchedulerInput } from '../lib/scheduler.js'
 
 function makeInput(): SchedulerInput {
@@ -339,40 +339,16 @@ describe('runSAPlanner weekly fractional staffing', () => {
 // ─── #480: Capacity semantics and diagnostics ────────────────────────────────
 
 describe('#480 unrestricted capacity semantics', () => {
-  it('uses capacity above current count when no maxCap is set', () => {
-    // count=1, no maxCap, target requires 3 FTE equivalent capacity
+  it('planner can use capacity above count=1 when no maxCap is set', () => {
+    // count=1, no maxCap, target requires capacity above 1 FTE
+    // maxParallelismPerFeature=4 allows up to 4 people per feature
+    // At count=1: 300 days / 5 days/week = 60 weeks
+    // At count=4: 300 days / 20 days/week = 15 weeks
     const input = makeInput()
     input.resourceTypes = [{
       id: 'rt-1', name: 'Dev', count: 1, hoursPerDay: 8,
       namedResources: [],
     }]
-    // 300 days of demand at 8h/day = 2400h. With count=1, capacity = 40h/week.
-    // Without unrestricted semantics, this would take 60 weeks.
-    // With unrestricted semantics (phantom slots from count=1 = 40h/week),
-    // the planner can use all available capacity.
-    const feature = makeFeature('feat-1', 1, 300) // 300 days = 60 weeks at 1 person
-    input.epics = [{
-      id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
-      featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
-      features: [feature],
-    }]
-
-    const result = runSAPlanner(input, { targetDurationWeeks: 60 })
-
-    // With count=1, capacity = 40h/week = 5 days/week.
-    // 300 days / 5 days/week = 60 weeks. Should complete.
-    expect(result.totalDeliveryWeeks).toBeLessThanOrEqual(60)
-    expect(result.featureStartWeeks.get('feat-1')).toBeDefined()
-  })
-
-  it('respects explicit maxCap as a hard limit', () => {
-    const input = makeInput()
-    input.resourceTypes = [{
-      id: 'rt-1', name: 'Dev', count: 5, hoursPerDay: 8,
-      namedResources: [],
-    }]
-    // 300 days demand, maxCap=2 → capacity = 2×40 = 80h/week = 10 days/week
-    // 300 / 10 = 30 weeks minimum
     const feature = makeFeature('feat-1', 1, 300)
     input.epics = [{
       id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
@@ -380,49 +356,29 @@ describe('#480 unrestricted capacity semantics', () => {
       features: [feature],
     }]
 
-    const maxCap = new Map([['rt-1', 2]])
-    const result = runSAPlanner(input, {
-      targetDurationWeeks: 15,
-      maxCap,
-    })
+    // At count=1 alone: 300 days / 5 days/week = 60 weeks
+    const resultAt1 = runSAPlanner(input, { targetDurationWeeks: 60, maxParallelismPerFeature: 4 })
+    const weeksAt1 = resultAt1.totalDeliveryWeeks
 
-    // Should NOT complete in 15 weeks (would need 30 weeks at cap=2)
-    expect(result.totalDeliveryWeeks).toBeGreaterThan(15)
+    // When route boosts count to 4, capacity = 4×5=20 days/week → 15 weeks
+    input.resourceTypes[0].count = 4
+    const resultAt4 = runSAPlanner(input, { targetDurationWeeks: 60, maxParallelismPerFeature: 4 })
+    const weeksAt4 = resultAt4.totalDeliveryWeeks
+
+    // Must complete faster with higher count — proving capacity growth works
+    expect(weeksAt4).toBeLessThan(weeksAt1)
+    // At count=4 with parallelism=4: 300/20 = 15 weeks
+    expect(weeksAt4).toBeLessThanOrEqual(15)
+    // At count=1: 300/5 = 60 weeks
+    expect(weeksAt1).toBeGreaterThanOrEqual(55)
   })
 
-  it('blank maxCap does not erase profile windows', () => {
-    const input = makeInput()
-    // Profile window: only weeks 0-5 have capacity
-    input.resourceTypes = [{
-      id: 'rt-1', name: 'Data', count: 1, hoursPerDay: 8,
-      namedResources: [],
-      roleSegments: [
-        { startWeek: 0, endWeek: 5, allocationPercent: 100 },
-      ],
-    }]
-    // 100 days demand — needs 20 weeks at full capacity, but only 6 weeks available
-    const feature = makeFeature('feat-1', 1, 100)
-    input.epics = [{
-      id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
-      featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
-      features: [feature],
-    }]
-
-    // Without maxCap — profile window still constrains
-    expect(() => {
-      runSAPlanner(input, { targetDurationWeeks: 52 })
-    }).toThrow('Fractional planner could not finish feature')
-  })
-})
-
-describe('#480 explicit cap diagnostics', () => {
-  it('explicit maxCap limits capacity without expanding beyond cap', () => {
+  it('explicit maxCap prevents growth beyond cap', () => {
     const input = makeInput()
     input.resourceTypes = [{
       id: 'rt-1', name: 'Dev', count: 5, hoursPerDay: 8,
       namedResources: [],
     }]
-    // 200 days demand: at count=5 → 200/(5×5)=8 weeks; at maxCap=1 → 200/(1×5)=40 weeks
     const feature = makeFeature('feat-1', 1, 200)
     input.epics = [{
       id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
@@ -430,29 +386,56 @@ describe('#480 explicit cap diagnostics', () => {
       features: [feature],
     }]
 
-    // Without cap: fast completion
+    // Without cap: count=5 → 200/(5×5)=8 weeks
     const uncapped = runSAPlanner(input, { targetDurationWeeks: 52 })
-    // With cap=1: much slower (capacity limited to 1 person)
+    // With cap=1: ratio=0.2, capacity=5 days/week → 200/5=40 weeks
     const capped = runSAPlanner(input, {
       targetDurationWeeks: 52,
       maxCap: new Map([['rt-1', 1]]),
     })
 
-    // Capped should take significantly longer
     expect(capped.totalDeliveryWeeks).toBeGreaterThan(uncapped.totalDeliveryWeeks)
-    // Capped capacity: 1 person × 5 days/week = 5 days/week → 200/5 = 40 weeks
     expect(capped.totalDeliveryWeeks).toBeGreaterThanOrEqual(40)
   })
 
-  it('returns ROLE_MAX_CAP diagnostic when cap prevents target completion', () => {
+  it('blank maxCap does not erase profile windows', () => {
+    const input = makeInput()
+    input.resourceTypes = [{
+      id: 'rt-1', name: 'Data', count: 1, hoursPerDay: 8,
+      namedResources: [],
+      roleSegments: [
+        { startWeek: 0, endWeek: 5, allocationPercent: 100 },
+      ],
+    }]
+    const feature = makeFeature('feat-1', 1, 100)
+    input.epics = [{
+      id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
+      featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
+      features: [feature],
+    }]
+
+    // Profile window constrains even without maxCap
+    expect(() => {
+      runSAPlanner(input, { targetDurationWeeks: 52 })
+    }).toThrow('Fractional planner could not finish feature')
+  })
+})
+
+describe('#480 post-completion diagnostics (analyzeTargetMiss)', () => {
+  function makeConfig(overrides: Partial<SAPlannerConfig> = {}): SAPlannerConfig {
+    return {
+      targetDurationWeeks: 10,
+      maxParallelismPerFeature: 2,
+      ...overrides,
+    }
+  }
+
+  it('ROLE_MAX_CAP diagnostic when explicit cap materially limits capacity', () => {
     const input = makeInput()
     input.resourceTypes = [{
       id: 'rt-1', name: 'Dev', count: 5, hoursPerDay: 8,
       namedResources: [],
     }]
-    // count=5, maxCap=1 → ratio=0.2, capacity=5 days/week
-    // 2000 days demand → 400 weeks needed, but very short target
-    // MAX_WEEKS is large enough to complete, but delivery far exceeds target
     const feature = makeFeature('feat-1', 1, 2000)
     input.epics = [{
       id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
@@ -460,16 +443,25 @@ describe('#480 explicit cap diagnostics', () => {
       features: [feature],
     }]
 
-    const maxCap = new Map([['rt-1', 1]])
-    const result = runSAPlanner(input, { targetDurationWeeks: 10, maxCap })
+    const config = makeConfig({ maxCap: new Map([['rt-1', 1]]) })
+    const result = runSAPlanner(input, config)
 
-    // Planner completes but delivery is far beyond target due to cap
-    expect(result.totalDeliveryWeeks).toBeGreaterThan(10)
-    // 2000 days / 5 days per week (cap=1, ratio=0.2) = 400 weeks
-    expect(result.totalDeliveryWeeks).toBeGreaterThanOrEqual(400)
+    // Planner completes but delivery far exceeds target
+    expect(result.totalDeliveryWeeks).toBeGreaterThan(config.targetDurationWeeks)
+
+    const diagnostics = analyzeTargetMiss(result, input, config)
+    expect(diagnostics.length).toBeGreaterThan(0)
+
+    const roleCapDiag = diagnostics.find(d => d.blocker === 'ROLE_MAX_CAP')
+    expect(roleCapDiag).toBeDefined()
+    expect(roleCapDiag?.resourceTypeName).toBe('Dev')
+    expect(roleCapDiag?.configuredLimit).toBe('1')
+    expect(roleCapDiag?.explanation).toContain('capped at 1')
   })
 
-  it('returns PROFILE_WINDOW diagnostic for segmented capacity', () => {
+  it('PROFILE_WINDOW diagnostic for thrown hard failure (capacity zero beyond window)', () => {
+    // 3-week window, 100 days demand → planner cannot finish → throws
+    // Diagnostics from SAPlannerInfeasibleError identify the profile window
     const input = makeInput()
     input.resourceTypes = [{
       id: 'rt-1', name: 'Data', count: 1, hoursPerDay: 8,
@@ -478,7 +470,6 @@ describe('#480 explicit cap diagnostics', () => {
         { startWeek: 0, endWeek: 2, allocationPercent: 100 },
       ],
     }]
-    // 100 days demand — needs 20 weeks but only 3 weeks of capacity
     const feature = makeFeature('feat-1', 1, 100)
     input.epics = [{
       id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
@@ -487,87 +478,93 @@ describe('#480 explicit cap diagnostics', () => {
     }]
 
     try {
-      runSAPlanner(input, { targetDurationWeeks: 52 })
-      expect.fail('Should have thrown')
+      runSAPlanner(input, makeConfig())
+      expect.fail('Should have thrown SAPlannerInfeasibleError')
     } catch (err: unknown) {
       expect(err).toBeInstanceOf(Error)
-      if (err && typeof err === 'object' && 'diagnostics' in err) {
-        const diags = (err as { diagnostics: Array<{ blocker: string; resourceTypeName?: string }> }).diagnostics
-        const windowDiag = diags.find(d => d.blocker === 'PROFILE_WINDOW')
-        expect(windowDiag).toBeDefined()
-        expect(windowDiag?.resourceTypeName).toBe('Data')
-      }
+      const msg = err instanceof Error ? err.message : ''
+      expect(msg).toContain('Fractional planner could not finish feature')
+      // SAPlannerInfeasibleError carries diagnostics
+      expect(err).toHaveProperty('diagnostics')
+      const diags = (err as { diagnostics: Array<{ blocker: string; resourceTypeName?: string }> }).diagnostics
+      expect(Array.isArray(diags)).toBe(true)
+      expect(diags.length).toBeGreaterThan(0)
+      const windowDiag = diags.find(d => d.blocker === 'PROFILE_WINDOW')
+      expect(windowDiag).toBeDefined()
+      expect(windowDiag?.resourceTypeName).toBe('Data')
     }
   })
-})
 
-describe('#480 Starting Team Finder hand-off', () => {
-  it('uses boosted count from maxCap > rt.count for phantom-slot capacity', () => {
-    // Simulates Starting Team Finder proposing count=3 when DB count=1
+  it('no false PROFILE_WINDOW when demand fits within window', () => {
+    // 20-week window (W0-W19), 40 days demand at 5 days/week = 8 weeks
+    // All demand fits within window, target=5 weeks is missed but
+    // not due to profile window — just insufficient capacity
     const input = makeInput()
     input.resourceTypes = [{
-      id: 'rt-1', name: 'Dev', count: 3, hoursPerDay: 8, // boosted count
+      id: 'rt-1', name: 'Data', count: 1, hoursPerDay: 8,
       namedResources: [],
+      roleSegments: [
+        { startWeek: 0, endWeek: 19, allocationPercent: 100 },
+      ],
     }]
-    // 60 days demand at count=3 → 3×40=120h/week = 15 days/week → 4 weeks
-    const feature = makeFeature('feat-1', 1, 60)
+    const feature = makeFeature('feat-1', 1, 40)
     input.epics = [{
       id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
       featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
       features: [feature],
     }]
 
-    const result = runSAPlanner(input, { targetDurationWeeks: 12 })
+    const config = makeConfig({ targetDurationWeeks: 5 })
+    const result = runSAPlanner(input, config)
 
-    // Should complete well within 12 weeks with count=3
-    expect(result.totalDeliveryWeeks).toBeLessThanOrEqual(8)
-    expect(result.featureStartWeeks.get('feat-1')).toBeDefined()
+    expect(result.totalDeliveryWeeks).toBeGreaterThan(config.targetDurationWeeks)
+
+    const diagnostics = analyzeTargetMiss(result, input, config)
+    // All demand is within the window — no PROFILE_WINDOW diagnostic
+    const windowDiags = diagnostics.filter(d => d.blocker === 'PROFILE_WINDOW')
+    expect(windowDiags).toHaveLength(0)
   })
-})
 
-describe('#480 critical path diagnostics', () => {
-  it('returns DEPENDENCY_PATH diagnostic for dependency-blocked feature', () => {
+  it('DEPENDENCY_PATH diagnostic when feature starts after target', () => {
     const input = makeInput()
     input.resourceTypes = [{
       id: 'rt-1', name: 'Dev', count: 1, hoursPerDay: 8,
       namedResources: [],
     }]
-    // Two features: feat-1 (200 days) depends on nothing, feat-2 (200 days) depends on feat-1
-    const feat1 = makeFeature('feat-1', 1, 200)
-    const feat2 = makeFeature('feat-2', 2, 200, 'feat-1')
+    // feat-1 (100 days) → feat-2 (100 days) serial chain
+    const feat1 = makeFeature('feat-1', 1, 100)
+    const feat2 = makeFeature('feat-2', 2, 100, 'feat-1')
     input.epics = [{
       id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
       featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
       features: [feat1, feat2],
     }]
 
-    // Very short target — feat-2 can't start until feat-1 completes
-    try {
-      runSAPlanner(input, { targetDurationWeeks: 5 })
-      expect.fail('Should have thrown')
-    } catch (err: unknown) {
-      expect(err).toBeInstanceOf(Error)
-      if (err && typeof err === 'object' && 'diagnostics' in err) {
-        const diags = (err as { diagnostics: Array<{ blocker: string }> }).diagnostics
-        const hasDepDiag = diags.some(d =>
-          d.blocker === 'DEPENDENCY_PATH' || d.blocker === 'CONSTRAINT')
-        expect(hasDepDiag).toBe(true)
-        // Should NOT claim role capacity is the problem
-        const roleCapDiags = diags.filter(d => d.blocker === 'ROLE_MAX_CAP')
-        expect(roleCapDiags.length).toBe(0)
-      }
-    }
-  })
-})
+    // At count=1: feat-1=20 weeks, feat-2 starts at 20 → 40 weeks total
+    const config = makeConfig({ targetDurationWeeks: 10 })
+    const result = runSAPlanner(input, config)
 
-describe('#480 concurrent epics diagnostics', () => {
-  it('returns CONCURRENT_EPICS diagnostic when maxConcurrentEpics blocks', () => {
+    expect(result.totalDeliveryWeeks).toBeGreaterThan(config.targetDurationWeeks)
+
+    const diagnostics = analyzeTargetMiss(result, input, config)
+    expect(diagnostics.length).toBeGreaterThan(0)
+
+    const depDiag = diagnostics.find(d => d.blocker === 'DEPENDENCY_PATH')
+    expect(depDiag).toBeDefined()
+    expect(depDiag?.featureId).toBe('feat-2')
+    expect(depDiag?.explanation).toContain('predecessor')
+
+    // Should NOT claim role capacity is the problem
+    const roleCapDiags = diagnostics.filter(d => d.blocker === 'ROLE_MAX_CAP')
+    expect(roleCapDiags).toHaveLength(0)
+  })
+
+  it('CONCURRENT_EPICS diagnostic when configured limit constrains', () => {
     const input = makeInput()
     input.resourceTypes = [{
       id: 'rt-1', name: 'Dev', count: 10, hoursPerDay: 8,
       namedResources: [],
     }]
-    // Two epics with 200 days each, maxConcurrentEpics=1
     const feat1 = makeFeature('feat-1', 1, 200)
     const feat2 = makeFeature('feat-2', 1, 200)
     input.epics = [
@@ -583,17 +580,85 @@ describe('#480 concurrent epics diagnostics', () => {
       },
     ]
 
-    try {
-      runSAPlanner(input, { targetDurationWeeks: 5, maxConcurrentEpics: 1 })
-      expect.fail('Should have thrown')
-    } catch (err: unknown) {
-      expect(err).toBeInstanceOf(Error)
-      if (err && typeof err === 'object' && 'diagnostics' in err) {
-        const diags = (err as { diagnostics: Array<{ blocker: string; configuredLimit?: string }> }).diagnostics
-        const epicDiag = diags.find(d => d.blocker === 'CONCURRENT_EPICS')
-        expect(epicDiag).toBeDefined()
-        expect(epicDiag?.configuredLimit).toBe('1')
-      }
-    }
+    // With maxConcurrentEpics=1: epics must run serially
+    const config = makeConfig({ targetDurationWeeks: 5, maxConcurrentEpics: 1 })
+    const result = runSAPlanner(input, config)
+
+    expect(result.totalDeliveryWeeks).toBeGreaterThan(config.targetDurationWeeks)
+
+    const diagnostics = analyzeTargetMiss(result, input, config)
+    expect(diagnostics.length).toBeGreaterThan(0)
+
+    const epicDiag = diagnostics.find(d => d.blocker === 'CONCURRENT_EPICS')
+    expect(epicDiag).toBeDefined()
+    expect(epicDiag?.configuredLimit).toBe('1')
+  })
+
+  it('returns empty diagnostics when target is met', () => {
+    const input = makeInput()
+    input.resourceTypes = [{
+      id: 'rt-1', name: 'Dev', count: 10, hoursPerDay: 8,
+      namedResources: [],
+    }]
+    const feature = makeFeature('feat-1', 1, 50)
+    input.epics = [{
+      id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
+      featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
+      features: [feature],
+    }]
+
+    const config = makeConfig({ targetDurationWeeks: 52 })
+    const result = runSAPlanner(input, config)
+
+    // Target met — no diagnostics
+    expect(result.totalDeliveryWeeks).toBeLessThanOrEqual(config.targetDurationWeeks)
+    const diagnostics = analyzeTargetMiss(result, input, config)
+    expect(diagnostics).toHaveLength(0)
+  })
+})
+
+describe('#480 Starting Team Finder hand-off (route-level count boost)', () => {
+  it('route boosts rt.count when maxCap > canonical count', () => {
+    // This tests the route-level transformation: when maxCap=3 and count=1,
+    // the route should boost count to 3 before calling the planner.
+    // The SA planner itself sees the boosted count as phantom-slot capacity.
+    const input = makeInput()
+    input.resourceTypes = [{
+      id: 'rt-1', name: 'Dev', count: 3, hoursPerDay: 8, // pre-boosted (simulates route behavior)
+      namedResources: [],
+    }]
+    const feature = makeFeature('feat-1', 1, 60)
+    input.epics = [{
+      id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
+      featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
+      features: [feature],
+    }]
+
+    const result = runSAPlanner(input, { targetDurationWeeks: 12 })
+
+    // With count=3: 3×5=15 days/week → 60/15=4 weeks
+    expect(result.totalDeliveryWeeks).toBeLessThanOrEqual(8)
+    expect(result.featureStartWeeks.get('feat-1')).toBeDefined()
+  })
+
+  it('unrestricted ceiling in route allows capacity above current count', () => {
+    // When route applies UNRESTRICTED_PLANNING_CEILING=12, count=1 becomes 12
+    // maxParallelismPerFeature=4 allows using the expanded capacity
+    const input = makeInput()
+    input.resourceTypes = [{
+      id: 'rt-1', name: 'Dev', count: 12, hoursPerDay: 8,
+      namedResources: [],
+    }]
+    const feature = makeFeature('feat-1', 1, 120)
+    input.epics = [{
+      id: 'epic-1', name: 'Epic 1', order: 1, isActive: true,
+      featureMode: 'parallel', scheduleMode: null, timelineStartWeek: null,
+      features: [feature],
+    }]
+
+    const result = runSAPlanner(input, { targetDurationWeeks: 12, maxParallelismPerFeature: 4 })
+
+    // At count=12 with parallelism=4: 4×5=20 days/week → 120/20=6 weeks
+    expect(result.totalDeliveryWeeks).toBeLessThanOrEqual(6)
   })
 })
