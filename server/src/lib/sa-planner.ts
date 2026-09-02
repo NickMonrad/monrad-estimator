@@ -167,12 +167,10 @@ export function analyzeTargetMiss(
 
       const weeklyDemand = result.weeklyDemandByResourceType.get(rt.id) ?? []
       let totalDemandDays = 0
-      let demandWeeks = 0
       for (let w = 0; w < weeklyDemand.length; w++) {
         const d = weeklyDemand[w] ?? 0
         if (d > EPSILON) {
           totalDemandDays += d
-          demandWeeks++
         }
       }
 
