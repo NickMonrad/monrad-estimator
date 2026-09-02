@@ -8,7 +8,12 @@
 
 import { type SchedulerInput } from './scheduler.js'
 import { type LevellingResult } from './leveller.js'
-import { runSAPlanner, type SAPlannerConfig } from './sa-planner.js'
+import {
+  runSAPlanner,
+  analyzeTargetMiss,
+  type SAPlannerConfig,
+  type PlannerDiagnostic,
+} from './sa-planner.js'
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -76,6 +81,8 @@ export interface CapacityPlanResult {
   levellingResult: LevellingResult
   /** Demand RTs that were included in planning (only those with task demand) */
   plannedResourceTypeIds: string[]
+  /** Structured infeasibility diagnostics (present when planner fails) */
+  diagnostics?: PlannerDiagnostic[]
 }
 
 // ─── Main entry ──────────────────────────────────────────────────────────────
@@ -363,6 +370,11 @@ export function computeCapacityPlan(
     ? Math.round((totalUtilWeighted / totalUtilWeight) * 10) / 10
     : 0
 
+  // ── Step 7: Post-completion diagnostics when target is missed ────────────
+  const diagnostics = saResult.totalDeliveryWeeks > targetDurationWeeks
+    ? analyzeTargetMiss(saResult, input, saConfig)
+    : undefined
+
   return {
     periods,
     totalCost: Math.round(totalCost),
@@ -372,5 +384,6 @@ export function computeCapacityPlan(
     budgetExceeded: maxBudget != null ? totalCost > maxBudget : false,
     levellingResult: levelResult,
     plannedResourceTypeIds: plannedRtIds,
+    diagnostics,
   }
 }

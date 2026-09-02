@@ -14,7 +14,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { asyncHandler } from '../lib/asyncHandler.js'
 import { authenticate, AuthRequest } from '../middleware/auth.js'
-import { scheduleDurationDays } from '../utils/round.js'
+import { effortDays, scheduleDurationDays } from '../utils/round.js'
 import { ownedProject } from '../lib/ownership.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
@@ -25,6 +25,7 @@ import {
   computeCapacityPlan,
   type CapacityPlanConfig,
 } from '../lib/capacity-planner.js'
+import { SAPlannerInfeasibleError } from '../lib/sa-planner.js'
 import {
   materializeCapacityPlanResources,
   materializeResourceTrajectories,
@@ -1046,6 +1047,68 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     }
   }
 
+  // Planning-run capacity model:
+  // - Canonical ResourceType.count is a starting seed, not a hidden hard max.
+  // - When maxCap is explicit, it IS the hard cap for this planning run.
+  // - When maxCap is absent (unrestricted), derive a finite planning-bound from
+  //   the actual problem so the planner can evaluate capacity above the current
+  //   count without using an arbitrary fixed ceiling.
+  // - Non-empty roleSegments remain hard constraints (profile windows).
+  const targetWeeks = body.targetDurationWeeks ?? 78
+  const hoursPerDay = schedulerInput.project.hoursPerDay || 8
+  const daysPerWeek = hoursPerDay > 0 ? Math.min(7, 40 / hoursPerDay) : 5
+  for (const rt of schedulerInput.resourceTypes) {
+    const originalCount = rt.count
+    const explicitCap = body.maxCap?.[rt.id]
+    if (isNonNegativeFiniteNumber(explicitCap) && explicitCap > rt.count) {
+      // Explicit cap from Starting Team Finder or user — use it
+      rt.count = explicitCap
+    } else if (explicitCap == null) {
+      // No explicit cap — derive planning bound from total demand for this RT.
+      // Sum days demanded across all features for this RT.
+      let totalDemandDays = 0
+      for (const epic of schedulerInput.epics) {
+        for (const feature of epic.features) {
+          for (const story of feature.userStories) {
+            for (const task of story.tasks) {
+              if (task.resourceTypeId === rt.id) {
+                totalDemandDays += effortDays(task.hoursEffort, hoursPerDay)
+              }
+            }
+          }
+        }
+      }
+      // Minimum FTEs needed to complete all demand within target duration
+      const minFtesForTarget = daysPerWeek > 0
+        ? Math.ceil(totalDemandDays / (targetWeeks * daysPerWeek))
+        : 1
+      // Bound is the minimum FTEs needed, with a 2× safety margin so the
+      // planner can evaluate whether the target is achievable. Never below
+      // the current count — phantom slots must at least cover current state.
+      const planningBound = Math.max(rt.count, Math.ceil(minFtesForTarget * 2))
+      rt.count = planningBound
+    }
+    // else: explicit cap <= count — keep current count (cap is below, no boost needed)
+
+    // When the planning run boosted count above canonical state, the effective
+    // planning capacity inside profile windows must scale to the boosted count.
+    // Non-empty finite windows remain authoritative — capacity stays zero outside
+    // them. Empty [] stays undefined (phantom-slot path). Undefined stays undefined.
+    if (rt.count > originalCount && Array.isArray(rt.roleSegments) && rt.roleSegments.length > 0) {
+      // allocationPercent is aggregate role capacity (100% = 1 FTE), NOT relative
+      // to ResourceType.count. Set it directly to the candidate count so the
+      // planner sees the intended FTE capacity. This also avoids division by zero
+      // when canonical count is 0. Profile window boundaries are preserved.
+      rt.roleSegments = rt.roleSegments.map(seg => ({
+        ...seg,
+        allocationPercent: rt.count * 100,
+      }))
+    } else if (rt.count > originalCount && Array.isArray(rt.roleSegments) && rt.roleSegments.length === 0) {
+      // Empty overlap marker -> allow phantom slots for boosted count
+      rt.roleSegments = undefined
+    }
+  }
+
   // ── Build minFloor map ──────────────────────────────────────────────────
   const minFloor = new Map<string, number>()
   if (body.minFloor) {
@@ -1120,10 +1183,18 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       error instanceof Error && detail.includes('Fractional planner could not finish feature')
 
     if (isGenerationFailure) {
+      const diagnostics = error instanceof SAPlannerInfeasibleError
+        ? error.diagnostics
+        : undefined
+
       res.status(400).json({
         error:
-          'No feasible squad plan found under the current constraints. Try resetting RT max caps, increasing max parallelism, or clearing saved planner settings. ' +
+          'No feasible squad plan found under the current constraints. ' +
+          (diagnostics && diagnostics.length > 0
+            ? ''
+            : 'Try resetting RT max caps, increasing max parallelism, or clearing saved planner settings. ') +
           `Details: ${detail}`,
+        diagnostics,
       })
       return
     }
@@ -1139,6 +1210,9 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
       epicStartWeeks: Object.fromEntries(result.levellingResult.epicStartWeeks),
       featureStartWeeks: Object.fromEntries(result.levellingResult.featureStartWeeks),
     },
+    // Diagnostics are present when target was missed (post-completion)
+    // or when the planner threw (already in the 400 response above)
+    diagnostics: result.diagnostics,
   })
 }))
 
