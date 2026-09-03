@@ -378,30 +378,42 @@ function reduceResourceType(
   resourceTypes: SchedulerResourceType[],
   rtId: string,
 ): { rts: SchedulerResourceType[]; reduced: boolean } {
-  return {
-    rts: resourceTypes.map(rt => {
-      if (rt.id !== rtId) return rt
-      if (!rt.roleSegments || rt.roleSegments.length === 0) {
-        const newCount = round2(rt.count - CAPACITY_QUANTUM)
-        return { ...rt, count: Math.max(0, newCount) }
-      }
-      // Segment-based: remove the last joint-boost named resource
-      const namedResources = rt.namedResources ?? []
-      let boostIndex = -1
-      for (let i = namedResources.length - 1; i >= 0; i--) {
-        const nr = namedResources[i]
-        if (nr.id.startsWith('joint-boost-')) { boostIndex = i; break }
-      }
-      if (boostIndex >= 0) {
-        return { ...rt, namedResources: namedResources.filter((_, i) => i !== boostIndex) }
-      }
-      return rt
-    }),
-    // Detect whether a boost was actually removed
-    reduced: resourceTypes.find(rt => rt.id === rtId)?.namedResources?.some(
-      nr => nr.id.startsWith('joint-boost-'),
-    ) ?? false,
+  const originalRt = resourceTypes.find(rt => rt.id === rtId)
+  if (!originalRt) return { rts: resourceTypes, reduced: false }
+
+  const isSegmentBased = originalRt.roleSegments && originalRt.roleSegments.length > 0
+
+  const newRts = resourceTypes.map(rt => {
+    if (rt.id !== rtId) return rt
+    if (!isSegmentBased) {
+      const newCount = round2(rt.count - CAPACITY_QUANTUM)
+      return { ...rt, count: Math.max(0, newCount) }
+    }
+    // Segment-based: remove the last joint-boost named resource
+    const namedResources = rt.namedResources ?? []
+    let boostIndex = -1
+    for (let i = namedResources.length - 1; i >= 0; i--) {
+      const nr = namedResources[i]
+      if (nr.id.startsWith('joint-boost-')) { boostIndex = i; break }
+    }
+    if (boostIndex >= 0) {
+      return { ...rt, namedResources: namedResources.filter((_, i) => i !== boostIndex) }
+    }
+    return rt
+  })
+
+  // Report whether effective capacity actually decreased
+  const newRt = newRts.find(rt => rt.id === rtId)
+  if (!newRt) return { rts: newRts, reduced: false }
+
+  if (!isSegmentBased) {
+    // Count-based: reduced if count genuinely decreased
+    return { rts: newRts, reduced: newRt.count < originalRt.count - FLOAT_EPSILON }
   }
+  // Segment-based: reduced if a boost was removed
+  const originalBoosts = originalRt.namedResources?.filter(nr => nr.id.startsWith('joint-boost-')).length ?? 0
+  const newBoosts = newRt.namedResources?.filter(nr => nr.id.startsWith('joint-boost-')).length ?? 0
+  return { rts: newRts, reduced: newBoosts < originalBoosts }
 }
 
 
@@ -414,38 +426,59 @@ function reduceResourceType(
  *
  * Pure function: no I/O, no side effects.
  */
-function materializeEnvelopeToResourceTypes(
+export function materializeEnvelopeToResourceTypes(
   baseResourceTypes: SchedulerResourceType[],
   periods: CapacityPlanPeriodResult[],
-  periodWeeks: number,
+  _periodWeeks: number,
 ): SchedulerResourceType[] {
-  // Build per-RT max headcount across all periods
-  const maxHeadcountByRt = new Map<string, number>()
-  for (const period of periods) {
-    for (const resource of period.resources) {
-      const current = maxHeadcountByRt.get(resource.resourceTypeId) ?? 0
-      if (resource.headcount > current) maxHeadcountByRt.set(resource.resourceTypeId, resource.headcount)
+  /** Intersect an envelope period range [periodStart, periodEnd) with the
+   *  authoritative profile windows for a role.  Returns the list of sub-ranges
+   *  that fall inside a profile window.  When no roleSegments exist the entire
+   *  period range is returned unchanged (unconstrained role). */
+  function intersectWithWindows(
+    periodStart: number,
+    periodEnd: number,
+    roleSegments: Array<{ startWeek: number; endWeek: number }> | undefined,
+  ): Array<{ startWeek: number; endWeek: number }> {
+    if (!roleSegments || roleSegments.length === 0) {
+      return [{ startWeek: periodStart, endWeek: periodEnd }]
     }
+    const result: Array<{ startWeek: number; endWeek: number }> = []
+    for (const seg of roleSegments) {
+      const overlapStart = Math.max(periodStart, seg.startWeek)
+      const overlapEnd = Math.min(periodEnd, seg.endWeek)
+      if (overlapStart < overlapEnd) {
+        result.push({ startWeek: overlapStart, endWeek: overlapEnd })
+      }
+    }
+    return result
   }
 
   return baseResourceTypes.map(rt => {
-    const maxHc = maxHeadcountByRt.get(rt.id)
-    if (maxHc == null || maxHc <= 0) return rt
-
-    // Build slot windows from envelope periods
-    const slotWindows: Array<{ startWeek: number; endWeek: number; allocationPercent: number }> = []
+    // Collect envelope headcount for this RT across periods
+    const envelopeByPeriod: Array<{ startWeek: number; endWeek: number; headcount: number }> = []
     for (const period of periods) {
       const resource = period.resources.find(r => r.resourceTypeId === rt.id)
-      if (!resource || resource.headcount <= 0) continue
-      // Each headcount unit becomes a slot at 100% allocation
-      const slotCount = Math.ceil(resource.headcount)
-      for (let slot = 0; slot < slotCount; slot++) {
-        const pct = slot < Math.floor(resource.headcount) ? 100 : (resource.headcount % 1) * 100 || 100
-        slotWindows.push({
-          startWeek: period.startWeek,
-          endWeek: period.endWeek,
-          allocationPercent: Math.max(25, Math.round(pct)),
-        })
+      if (resource && resource.headcount > 0) {
+        envelopeByPeriod.push({ startWeek: period.startWeek, endWeek: period.endWeek, headcount: resource.headcount })
+      }
+    }
+    if (envelopeByPeriod.length === 0) return rt
+
+    // Intersect each envelope period with authoritative profile windows
+    const slotWindows: Array<{ startWeek: number; endWeek: number; allocationPercent: number }> = []
+    for (const ep of envelopeByPeriod) {
+      const subRanges = intersectWithWindows(ep.startWeek, ep.endWeek, rt.roleSegments)
+      for (const range of subRanges) {
+        const slotCount = Math.ceil(ep.headcount)
+        for (let slot = 0; slot < slotCount; slot++) {
+          const pct = slot < Math.floor(ep.headcount) ? 100 : (ep.headcount % 1) * 100 || 100
+          slotWindows.push({
+            startWeek: range.startWeek,
+            endWeek: range.endWeek,
+            allocationPercent: Math.max(25, Math.round(pct)),
+          })
+        }
       }
     }
 
@@ -462,8 +495,7 @@ function materializeEnvelopeToResourceTypes(
 
     return {
       ...rt,
-      // Clear stale roleSegments: the materialised capacity IS authoritative
-      roleSegments: undefined,
+      // Preserve authoritative roleSegments — they define availability windows
       namedResources: segments.map((seg, idx) => ({
         id: `reconcile-${rt.id}-${idx}`,
         name: `${rt.name} reconcile-${idx}`,
@@ -619,7 +651,6 @@ export function computeJointPlan(
   const maxIterations = computeMaxIterations(input.resourceTypes, maxCap)
   let currentRts = [...input.resourceTypes]
   const allDiagnostics: PlannerDiagnostic[] = []
-  let growthIterations = 0
   let totalIterations = 0
   let iteration = 0
 
@@ -777,7 +808,7 @@ export function computeJointPlan(
       }
     }
   }
-  growthIterations = iteration
+  totalIterations += iteration
 
   // ── Phase 3: Capacity reduction (minimise staffed FTE-weeks) ──────────────
   if (bestResult && bestSchedule && bestResult.deliveryWeeks <= targetDurationWeeks) {
@@ -830,24 +861,28 @@ export function computeJointPlan(
   // Rerun the planner against the exact returned capacity envelope so that
   // deliveryWeeks, weekly demand, and generated capacity profile all come
   // from the same reconciled capacity-aware scheduling result.
-  let reconciledSchedule: SAPlannerResult | null = null
+  let reconciliationSucceeded = false
 
   if (bestSchedule && bestResult && bestResult.periods.length > 0) {
     const reconciledRts = materializeEnvelopeToResourceTypes(
       input.resourceTypes, bestResult.periods, config.periodWeeks,
     )
     try {
-      reconciledSchedule = runSAPlanner({ ...input, resourceTypes: reconciledRts }, saConfig)
+      const reconciledSchedule = runSAPlanner({ ...input, resourceTypes: reconciledRts }, saConfig)
       // Validate: the reconciled schedule must complete all features
       const allComplete = reconciledSchedule.totalDeliveryWeeks < Infinity &&
-        !reconciledSchedule.weeklyDemandByResourceType.size === false
+        reconciledSchedule.weeklyDemandByResourceType.size > 0
       if (allComplete && reconciledSchedule.totalDeliveryWeeks <= bestResult.deliveryWeeks + FLOAT_EPSILON) {
         // Reconciled schedule is feasible — rebuild result from it
         bestResult = buildResult(reconciledSchedule, reconciledRts)
         bestSchedule = reconciledSchedule
+        reconciliationSucceeded = true
       }
     } catch {
-      // Reconciliation rerun failed — keep the pre-reconciliation best
+      // Reconciliation failed — the pre-reconciliation result cannot be
+      // claimed as reconciled. Mark as not achieved so callers know the
+      // returned profile has not been validated against the scheduler.
+      bestResult = { ...bestResult, deliveryWeeks: Infinity }
     }
     totalIterations++ // count reconciliation as one iteration
   }
@@ -878,6 +913,6 @@ export function computeJointPlan(
     ...finalResult,
     iterations: totalIterations,
     loopDiagnostics: allDiagnostics,
-    targetAchieved: finalResult.deliveryWeeks <= targetDurationWeeks + FLOAT_EPSILON,
+    targetAchieved: reconciliationSucceeded && finalResult.deliveryWeeks <= targetDurationWeeks + FLOAT_EPSILON,
   }
 }
