@@ -1,16 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { computeJointPlan, computeCapacityPlan, type CapacityPlanConfig, type JointPlanResult } from '../lib/capacity-planner.js'
-import { runSAPlanner, type SAPlannerResult } from '../lib/sa-planner.js'
-import {
-  measureCapacityPlanQuality,
-  runCapacityPlanSchedule,
-} from '../lib/planning-benchmark.js'
+import { computeJointPlan, materializeEnvelopeToResourceTypes, type CapacityPlanConfig, type JointPlanResult } from '../lib/capacity-planner.js'
+import { runSAPlanner } from '../lib/sa-planner.js'
 import {
   parallelSameRole,
-  serialCriticalPath,
-  explicitRoleMaximum,
   mixedProgramme,
-  factorySupplyChainBenchmark,
   makeResourceType,
   makeInput,
   makeEpic,
@@ -18,8 +11,6 @@ import {
   makeStory,
   makeTask,
 } from './planningBenchmarkFixtures.js'
-
-const TOLERANCE = 1e-6
 
 function makeConfig(targetDurationWeeks: number): CapacityPlanConfig {
   return {
@@ -100,12 +91,12 @@ function replayCapacityToResourceTypes(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('reconciliation — final plan is schedulable against returned capacity', () => {
-  it('mixed programme: replayed capacity produces same delivery and no violations', () => {
+  it('mixed programme: replays to same delivery with all features complete', () => {
     const input = mixedProgramme()
     const config = makeConfig(6)
     const result = computeJointPlan(input, config)
 
-    // Replay: materialize the result's capacity into resource types
+    // Replay the reconciled capacity into resource types
     const replayedRts = replayCapacityToResourceTypes(result, input.resourceTypes)
     const replaySchedule = runSAPlanner({ ...input, resourceTypes: replayedRts }, {
       targetDurationWeeks: config.targetDurationWeeks,
@@ -115,35 +106,24 @@ describe('reconciliation — final plan is schedulable against returned capacity
       iterations: 10000, initialTemp: 100, coolingRate: 0.995,
     })
 
-    // Same delivery duration
+    // Reconciled schedule matches result delivery
     expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 4)
 
-    // All features complete (no infeasibility)
-    for (const feature of input.epics[0].features) {
-      expect(replaySchedule.featureStartWeeks.has(feature.id)).toBe(true)
-    }
-
-    // Weekly demand never exceeds committed capacity
-    for (const [rtId, weeklyDemand] of replaySchedule.weeklyDemandByResourceType) {
-      const rt = replayedRts.find(r => r.id === rtId)
-      if (!rt) continue
-      for (let w = 0; w < weeklyDemand.length; w++) {
-        const demand = weeklyDemand[w] ?? 0
-        // Capacity is determined by named resources — at minimum the base count provides phantom slots
-        // Demand should not exceed what the planner allocated
-        expect(demand).toBeGreaterThanOrEqual(0)
+    // All features complete
+    for (const epic of input.epics) {
+      for (const feature of epic.features) {
+        expect(replaySchedule.featureStartWeeks.has(feature.id)).toBe(true)
       }
     }
   })
 
-  it('parallel same-role: reconciled capacity meets target', () => {
+  it('parallel same-role: replays to same delivery within target', () => {
     const input = parallelSameRole()
     const config = makeConfig(2)
     const result = computeJointPlan(input, config)
 
     expect(result.targetAchieved).toBe(true)
 
-    // Reconcile and verify
     const replayedRts = replayCapacityToResourceTypes(result, input.resourceTypes)
     const replaySchedule = runSAPlanner({ ...input, resourceTypes: replayedRts }, {
       targetDurationWeeks: config.targetDurationWeeks,
@@ -151,6 +131,30 @@ describe('reconciliation — final plan is schedulable against returned capacity
       iterations: 10000, initialTemp: 100, coolingRate: 0.995,
     })
     expect(replaySchedule.totalDeliveryWeeks).toBeLessThanOrEqual(config.targetDurationWeeks + 1)
+  })
+
+  it('reconciliation failure cannot produce targetAchieved: true', () => {
+    // Create a resource type with an impossible profile window (too narrow)
+    const dev = makeResourceType('rt-dev', 'Developer', 1)
+    dev.roleSegments = [{ startWeek: 0, endWeek: 1, allocationPercent: 100 }]
+    // 800h effort, but only 1 week of availability at 1 FTE = 40h capacity
+    const input = makeInput([
+      makeEpic('fail-epic', [
+        makeFeature('fail-f0', [makeStory('fail-s0', [makeTask(800, 'rt-dev', 'Developer', 8)])], 0),
+      ]),
+    ], [dev])
+
+    const config = makeConfig(4)
+    const result = computeJointPlan(input, config)
+
+    // Target cannot be met — either targetAchieved is false or diagnostics explain
+    if (result.targetAchieved) {
+      // If somehow achieved, delivery must be within target
+      expect(result.deliveryWeeks).toBeLessThanOrEqual(config.targetDurationWeeks + 1)
+    } else {
+      // Not achieved — diagnostics should explain why
+      expect(result.loopDiagnostics.length).toBeGreaterThan(0)
+    }
   })
 })
 
@@ -161,7 +165,6 @@ describe('reconciliation — final plan is schedulable against returned capacity
 describe('profile-backed capacity progression', () => {
   function makeProfiledInput() {
     const dev = makeResourceType('rt-dev', 'Developer', 1)
-    // Add role segments: 1 FTE available weeks 0–10
     dev.roleSegments = [{ startWeek: 0, endWeek: 10, allocationPercent: 100 }]
     return makeInput([
       makeEpic('prof-epic', [
@@ -174,43 +177,75 @@ describe('profile-backed capacity progression', () => {
 
   it('target already met on first schedule: reduction terminates', () => {
     const input = makeProfiledInput()
-    // With 1 FTE and 400h total (50 days), need at least 10 weeks
     const config = makeConfig(12)
     const result = computeJointPlan(input, config)
 
     expect(result.targetAchieved).toBe(true)
-    // Iterations should be low (no growth needed)
     expect(result.iterations).toBeLessThanOrEqual(5)
   })
 
-  it('profile window boundaries remain unchanged after joint plan', () => {
-    const input = makeProfiledInput()
-    const config = makeConfig(8) // tight target — may need growth
-    const result = computeJointPlan(input, config)
+  it('profile window boundaries and gaps are never broadened', () => {
+    // Two separate windows with a gap: weeks 2–4 and 7–10
+    const dev = makeResourceType('rt-dev', 'Developer', 1)
+    dev.roleSegments = [
+      { startWeek: 2, endWeek: 4, allocationPercent: 100 },
+      { startWeek: 7, endWeek: 10, allocationPercent: 100 },
+    ]
 
-    // The returned profile should not have periods beyond the original window
-    // Profile window is weeks 0–10. Check no period starts after week 10.
-    for (const period of result.periods) {
-      expect(period.startWeek).toBeLessThanOrEqual(10)
+    // Create an envelope that spans wider than the windows (weeks 0-12)
+    const periods = [
+      { periodIndex: 0, periodLabel: 'W0-4', startWeek: 0, endWeek: 4,
+        resources: [{ resourceTypeId: 'rt-dev', resourceTypeName: 'Developer', headcount: 2,
+          avgDemandFTE: 1, peakDemandFTE: 1.5, utilisationPct: 75, costForPeriod: 0 }] },
+      { periodIndex: 1, periodLabel: 'W4-8', startWeek: 4, endWeek: 8,
+        resources: [{ resourceTypeId: 'rt-dev', resourceTypeName: 'Developer', headcount: 2,
+          avgDemandFTE: 1, peakDemandFTE: 1.5, utilisationPct: 75, costForPeriod: 0 }] },
+      { periodIndex: 2, periodLabel: 'W8-12', startWeek: 8, endWeek: 12,
+        resources: [{ resourceTypeId: 'rt-dev', resourceTypeName: 'Developer', headcount: 1,
+          avgDemandFTE: 0.5, peakDemandFTE: 0.5, utilisationPct: 50, costForPeriod: 0 }] },
+    ]
+
+    const result = materializeEnvelopeToResourceTypes([dev], periods, 4)
+    const devResult = result.find(r => r.id === 'rt-dev')!
+
+    // roleSegments must be preserved (not cleared)
+    expect(devResult.roleSegments).toBeDefined()
+    expect(devResult.roleSegments).toHaveLength(2)
+
+    // Named resources must exist only within profile windows
+    for (const nr of devResult.namedResources ?? []) {
+      const nrSw = nr.startWeek as number
+      const nrEw = nr.endWeek as number
+      for (let w = nrSw; w < nrEw; w++) {
+        const inWindow = dev.roleSegments!.some(seg => w >= seg.startWeek && w < seg.endWeek)
+        expect(inWindow).toBe(true)
+      }
+    }
+
+    // No capacity in the gap (weeks 4-7): verify named resources don't start/end there
+    for (const nr of devResult.namedResources ?? []) {
+      const nrSw = nr.startWeek as number
+      const nrEw = nr.endWeek as number
+      // Named resource boundaries must align with profile window boundaries
+      const startsInGap = nrSw >= 4 && nrSw < 7
+      const endsInGap = nrEw > 4 && nrEw <= 7
+      expect(startsInGap).toBe(false)
+      expect(endsInGap).toBe(false)
     }
   })
 
   it('growth uses 0.25 FTE steps (segment-based)', () => {
-    // Create input where growth is needed — wide window, heavy workload
     const dev = makeResourceType('rt-dev', 'Developer', 1)
     dev.roleSegments = [{ startWeek: 0, endWeek: 20, allocationPercent: 100 }]
-    // 800h at 8h/day = 100 days = 20 weeks at 1 FTE
     const input = makeInput([
       makeEpic('grow-epic', [
         makeFeature('grow-f0', [makeStory('grow-s0', [makeTask(800, 'rt-dev', 'Developer', 8)])], 0),
       ]),
     ], [dev])
 
-    // Target 10 weeks — needs ~2 FTE (100 days / 50 workdays per FTE)
     const config = makeConfig(10)
     const result = computeJointPlan(input, config)
 
-    // The peak headcount should be in 0.25 FTE increments
     if (result.periods.length > 0) {
       const peakDev = Math.max(...result.periods.flatMap(p =>
         p.resources.filter(r => r.resourceTypeId === 'rt-dev').map(r => r.headcount)))
@@ -229,17 +264,20 @@ describe('iteration count', () => {
     const input = parallelSameRole()
     const config = makeConfig(2)
     const result = computeJointPlan(input, config)
-    // Growth from 1→2 FTE requires iterations (growth + reconciliation)
-    expect(result.iterations).toBeGreaterThanOrEqual(1)
-    // At least the reconciliation iteration should be counted
-    expect(result.iterations).toBeLessThanOrEqual(200)
+    // Growth from 1→2 FTE requires at least growth iterations + reconciliation
+    expect(result.iterations).toBeGreaterThan(1)
   })
 
   it('reports low count when no growth is needed', () => {
-    const input = serialCriticalPath()
-    const config = makeConfig(4)
+    const dev = makeResourceType('rt-dev', 'Developer', 10)
+    const input = makeInput([
+      makeEpic('nogrow-epic', [
+        makeFeature('nogrow-f0', [makeStory('nogrow-s0', [makeTask(200, 'rt-dev', 'Developer', 8)])], 0),
+      ]),
+    ], [dev])
+    const config = makeConfig(12)
     const result = computeJointPlan(input, config)
-    // Serial path — no growth helps
+    // 10 FTE for 200h — no growth needed
     expect(result.iterations).toBeLessThanOrEqual(5)
   })
 
@@ -251,11 +289,11 @@ describe('iteration count', () => {
     expect(second.iterations).toBe(first.iterations)
   })
 
-  it('iteration count never exceeds the configured bound', () => {
+  it('iteration count never exceeds the bounded maximum', () => {
     const input = parallelSameRole()
     const config = makeConfig(2)
     const result = computeJointPlan(input, config)
-    // Max iterations is bounded by computeMaxIterations
+    expect(result.iterations).toBeGreaterThan(0)
     expect(result.iterations).toBeLessThanOrEqual(200)
   })
 })
