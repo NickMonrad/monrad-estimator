@@ -22,8 +22,9 @@ import { runScheduler, type SchedulerInput, type SchedulerResourceType } from '.
 import { levelEpicStarts } from '../lib/leveller.js'
 import { runSAPlanner } from '../lib/sa-planner.js'
 import {
-  computeCapacityPlan,
+  computeJointPlan,
   type CapacityPlanConfig,
+  type JointPlanResult,
 } from '../lib/capacity-planner.js'
 import { SAPlannerInfeasibleError } from '../lib/sa-planner.js'
 import {
@@ -1174,9 +1175,9 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
     maxConcurrentEpics: body.maxConcurrentEpics,
   }
 
-  let result: ReturnType<typeof computeCapacityPlan>
+  let result: JointPlanResult
   try {
-    result = computeCapacityPlan(schedulerInput, config)
+    result = computeJointPlan(schedulerInput, config)
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     const isGenerationFailure =
