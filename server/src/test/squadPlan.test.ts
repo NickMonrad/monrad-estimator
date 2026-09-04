@@ -481,10 +481,19 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
         setActive: false,
       })
 
-    // Should return 400 (infeasible) because demand (200 days) exceeds what
-    // W0-W5 can deliver even at 3 FTE (3 x 5 days x 6 weeks = 90 days).
-    expect(res.status).toBe(400)
-    expect(res.body.error).toContain('No feasible squad plan')
+    // #481 contract: a hard-infeasible target is returned as a planning
+    // result (200) with targetAchieved: false plus structured blockers —
+    // not an HTTP error. The finite window W0-W5 at 3 FTE can deliver at
+    // most 90 days (3 x 5 days x 6 weeks) while the backlog needs 200 days,
+    // so NO completed schedule exists and the profile window must not be
+    // broadened to fake one.
+    expect(res.status).toBe(200)
+    expect(res.body.error).toBeUndefined()
+    expect(res.body.targetAchieved).toBe(false)
+    // No completed schedule exists: deliveryWeeks is Infinity, which JSON
+    // serialises to null (no finite best-achieved duration is claimable).
+    expect(res.body.deliveryWeeks).toBeNull()
+    expect(res.body.periods).toEqual([])
 
     // PROFILE_WINDOW diagnostic must be present
     const diagnostics = res.body.diagnostics as Array<{ blocker: string; resourceTypeId?: string }>
