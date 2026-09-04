@@ -336,11 +336,27 @@ function identifyBottleneckRole(
   return bestRt
 }
 
+/** Effective candidate capacity (in FTE) of a resource type as seen by the
+ *  scheduler. Profile-backed roles derive capacity from roleSegments
+ *  allocationPercent (100% = 1 FTE); other roles from count. */
+function currentCapacityFte(rt: SchedulerResourceType): number {
+  if (rt.roleSegments && rt.roleSegments.length > 0) {
+    let maxPct = 0
+    for (const seg of rt.roleSegments) {
+      if (seg.allocationPercent > maxPct) maxPct = seg.allocationPercent
+    }
+    return maxPct / 100
+  }
+  return rt.count
+}
+
 /** Create a copy of resource types with capacity increased by one quantum
  *  for the specified role. For segment-free roles, increments rt.count.
- *  For segment-based roles, adds a named resource at 25% (0.25 FTE) within
- *  the existing segment window — never broadening the window. */
-function augmentResourceType(
+ *  For profile-backed roles (roleSegments present), raises aggregate role
+ *  capacity by 25 percentage points inside EVERY existing segment window.
+ *  Segment boundaries and gaps are preserved — capacity is never created
+ *  outside an existing segment. */
+export function augmentResourceType(
   resourceTypes: SchedulerResourceType[],
   rtId: string,
 ): SchedulerResourceType[] {
@@ -349,32 +365,26 @@ function augmentResourceType(
     if (!rt.roleSegments || rt.roleSegments.length === 0) {
       return { ...rt, count: round2(rt.count + CAPACITY_QUANTUM) }
     }
-    // Segment-based: add a named resource at 25% (0.25 FTE) within the
-    // existing segment window. 100% would add a full FTE, not the quantum.
-    const startWeek = Math.min(...rt.roleSegments.map(s => s.startWeek))
-    const endWeek = Math.max(...rt.roleSegments.map(s => s.endWeek))
-    const boostIndex = (rt.namedResources ?? []).filter(
-      nr => nr.id.startsWith('joint-boost-'),
-    ).length
-    const boostId = `joint-boost-${rt.id}-${boostIndex}`
+    // Profile-backed: adjust the aggregate role capacity by one quantum
+    // (0.25 FTE = 25 percentage points) per segment. The same representation
+    // is used for reduction so grow/reduce stays symmetric.
     return {
       ...rt,
-      namedResources: [
-        ...(rt.namedResources ?? []),
-        { id: boostId, name: `${rt.name} joint-boost-${boostIndex}`, startWeek, endWeek,
-          allocationPct: CAPACITY_QUANTUM * 100, allocationMode: 'CAPACITY_PLAN',
-          allocationPercent: CAPACITY_QUANTUM * 100,
-          allocationStartWeek: null, allocationEndWeek: null },
-      ],
+      roleSegments: rt.roleSegments.map(seg => ({
+        ...seg,
+        allocationPercent: seg.allocationPercent + CAPACITY_QUANTUM * 100,
+      })),
     }
   })
 }
 
 /** Create a copy of resource types with capacity reduced by one quantum
  *  for the specified role. For segment-free roles, decrements rt.count.
- *  For segment-based roles, removes the last joint-boost named resource.
- *  Returns the original RT unchanged when no further reduction is possible. */
-function reduceResourceType(
+ *  For profile-backed roles (roleSegments present), lowers aggregate role
+ *  capacity by 25 percentage points inside EVERY existing segment window,
+ *  never below zero. Segment boundaries and gaps are preserved.
+ *  Returns reduced=false when no further reduction is possible. */
+export function reduceResourceType(
   resourceTypes: SchedulerResourceType[],
   rtId: string,
 ): { rts: SchedulerResourceType[]; reduced: boolean } {
@@ -385,21 +395,20 @@ function reduceResourceType(
 
   const newRts = resourceTypes.map(rt => {
     if (rt.id !== rtId) return rt
-    if (!isSegmentBased) {
+    const roleSegments = rt.roleSegments
+    if (!isSegmentBased || !roleSegments || roleSegments.length === 0) {
       const newCount = round2(rt.count - CAPACITY_QUANTUM)
       return { ...rt, count: Math.max(0, newCount) }
     }
-    // Segment-based: remove the last joint-boost named resource
-    const namedResources = rt.namedResources ?? []
-    let boostIndex = -1
-    for (let i = namedResources.length - 1; i >= 0; i--) {
-      const nr = namedResources[i]
-      if (nr.id.startsWith('joint-boost-')) { boostIndex = i; break }
+    // Profile-backed: lower aggregate role capacity by one quantum
+    // (0.25 FTE = 25 percentage points) per segment, floor at zero.
+    return {
+      ...rt,
+      roleSegments: roleSegments.map(seg => ({
+        ...seg,
+        allocationPercent: Math.max(0, seg.allocationPercent - CAPACITY_QUANTUM * 100),
+      })),
     }
-    if (boostIndex >= 0) {
-      return { ...rt, namedResources: namedResources.filter((_, i) => i !== boostIndex) }
-    }
-    return rt
   })
 
   // Report whether effective capacity actually decreased
@@ -410,10 +419,18 @@ function reduceResourceType(
     // Count-based: reduced if count genuinely decreased
     return { rts: newRts, reduced: newRt.count < originalRt.count - FLOAT_EPSILON }
   }
-  // Segment-based: reduced if a boost was removed
-  const originalBoosts = originalRt.namedResources?.filter(nr => nr.id.startsWith('joint-boost-')).length ?? 0
-  const newBoosts = newRt.namedResources?.filter(nr => nr.id.startsWith('joint-boost-')).length ?? 0
-  return { rts: newRts, reduced: newBoosts < originalBoosts }
+  // Profile-backed: reduced if at least one segment's capacity decreased
+  const originalSegments = originalRt.roleSegments ?? []
+  const newSegments = newRt.roleSegments ?? []
+  let reducedPercent = false
+  for (let idx = 0; idx < newSegments.length; idx++) {
+    const origPct = originalSegments[idx]?.allocationPercent ?? 0
+    if (newSegments[idx].allocationPercent < origPct - FLOAT_EPSILON) {
+      reducedPercent = true
+      break
+    }
+  }
+  return { rts: newRts, reduced: reducedPercent }
 }
 
 
@@ -445,8 +462,12 @@ export function materializeEnvelopeToResourceTypes(
     }
     const result: Array<{ startWeek: number; endWeek: number }> = []
     for (const seg of roleSegments) {
+      // roleSegments endWeek is INCLUSIVE in the scheduler model
+      // (week <= seg.endWeek contributes capacity), while envelope period
+      // endWeek is EXCLUSIVE. Extend the window end by one so a demand week
+      // on the final window week is still covered by the materialized NR.
       const overlapStart = Math.max(periodStart, seg.startWeek)
-      const overlapEnd = Math.min(periodEnd, seg.endWeek)
+      const overlapEnd = Math.min(periodEnd, seg.endWeek + 1)
       if (overlapStart < overlapEnd) {
         result.push({ startWeek: overlapStart, endWeek: overlapEnd })
       }
@@ -465,6 +486,15 @@ export function materializeEnvelopeToResourceTypes(
     }
     if (envelopeByPeriod.length === 0) return rt
 
+    // Peak envelope headcount — used as the count on the materialized RT so
+    // getWeeklyCapacity() never adds phantom count slots beyond the
+    // reconcile-* named resources (which always cover >= this headcount).
+    let maxEnvelopeHeadcount = 0
+    for (const ep of envelopeByPeriod) {
+      if (ep.headcount > maxEnvelopeHeadcount) maxEnvelopeHeadcount = ep.headcount
+    }
+    maxEnvelopeHeadcount = round2(maxEnvelopeHeadcount)
+
     // Intersect each envelope period with authoritative profile windows
     const slotWindows: Array<{ startWeek: number; endWeek: number; allocationPercent: number }> = []
     for (const ep of envelopeByPeriod) {
@@ -475,7 +505,8 @@ export function materializeEnvelopeToResourceTypes(
           const pct = slot < Math.floor(ep.headcount) ? 100 : (ep.headcount % 1) * 100 || 100
           slotWindows.push({
             startWeek: range.startWeek,
-            endWeek: range.endWeek,
+            // range.endWeek is exclusive; scheduler NR endWeek is inclusive.
+            endWeek: range.endWeek - 1,
             allocationPercent: Math.max(25, Math.round(pct)),
           })
         }
@@ -486,16 +517,28 @@ export function materializeEnvelopeToResourceTypes(
     const segments: Array<{ startWeek: number; endWeek: number; allocationPercent: number }> = []
     for (const sw of slotWindows) {
       const last = segments[segments.length - 1]
-      if (last && last.endWeek === sw.startWeek && last.allocationPercent === sw.allocationPercent) {
+      // NR endWeek is inclusive, so two segments tile contiguously when
+      // last.endWeek + 1 === sw.startWeek (identical single-week slots must
+      // NOT merge — each slot is separate capacity).
+      if (last && last.endWeek + 1 === sw.startWeek && last.allocationPercent === sw.allocationPercent) {
         last.endWeek = sw.endWeek
       } else {
         segments.push({ ...sw })
       }
     }
 
+    // The materialized named resources ARE the authoritative capacity for
+    // the reconciliation replay. Clear the stale aggregate roleSegments so
+    // getWeeklyCapacity() cannot count them on top of the envelope, and set
+    // count to the envelope peak so no phantom count slots appear either
+    // (the reconcile-* named resources cover at least that headcount).
+    // Precedent: buildReplayPlannerResourceTypes (#362 fix 3). Windows and
+    // gaps remain hard because every reconcile-* window is clipped to the
+    // original roleSegments above.
     return {
       ...rt,
-      // Preserve authoritative roleSegments — they define availability windows
+      count: maxEnvelopeHeadcount,
+      roleSegments: undefined,
       namedResources: segments.map((seg, idx) => ({
         id: `reconcile-${rt.id}-${idx}`,
         name: `${rt.name} reconcile-${idx}`,
@@ -753,10 +796,14 @@ export function computeJointPlan(
       const bottleneckRtId = identifyBottleneckRole(lastSchedule!.weeklyDemandByResourceType, currentRts)
       if (bottleneckRtId == null) break // no demand-driven bottleneck found
 
-      // Check if explicit max cap prevents further growth for this role
+      // Check if explicit max cap prevents further growth for this role.
+      // Compare scheduler-effective FTE capacity (count for plain roles,
+      // roleSegments allocationPercent for profile-backed roles) so an
+      // explicit cap stays hard for both representations.
       const maxForRole = maxCap?.get(bottleneckRtId)
-      const currentCount = currentRts.find(rt => rt.id === bottleneckRtId)?.count ?? 0
-      if (maxForRole != null && currentCount >= maxForRole - FLOAT_EPSILON) {
+      const currentBottleneckRt = currentRts.find(rt => rt.id === bottleneckRtId)
+      const currentCapFte = currentBottleneckRt ? currentCapacityFte(currentBottleneckRt) : 0
+      if (maxForRole != null && currentCapFte >= maxForRole - FLOAT_EPSILON) {
         // Role is at its explicit max — identify the next bottleneck
         const remainingRts = currentRts.filter(rt => rt.id !== bottleneckRtId)
         const nextBottleneck = identifyBottleneckRole(lastSchedule!.weeklyDemandByResourceType, remainingRts)
@@ -869,11 +916,14 @@ export function computeJointPlan(
     )
     try {
       const reconciledSchedule = runSAPlanner({ ...input, resourceTypes: reconciledRts }, saConfig)
-      // Validate: the reconciled schedule must complete all features
+      // Validate: the reconciled schedule must complete all features. When it
+      // completes, the reconciled schedule is authoritative EVEN IF it is
+      // slower than the pre-reconciliation candidate: deliveryWeeks, periods
+      // and demand must all describe the schedule the returned capacity can
+      // actually reproduce (never keep a better-looking unreconciled result).
       const allComplete = reconciledSchedule.totalDeliveryWeeks < Infinity &&
         reconciledSchedule.weeklyDemandByResourceType.size > 0
-      if (allComplete && reconciledSchedule.totalDeliveryWeeks <= bestResult.deliveryWeeks + FLOAT_EPSILON) {
-        // Reconciled schedule is feasible — rebuild result from it
+      if (allComplete) {
         bestResult = buildResult(reconciledSchedule, reconciledRts)
         bestSchedule = reconciledSchedule
         reconciliationSucceeded = true
@@ -896,6 +946,12 @@ export function computeJointPlan(
   }
 
   let finalResult = bestResult
+  // Surface the structured blockers on the returned result whenever the
+  // final (reconciled) schedule misses the target, so callers see the same
+  // diagnostics that explain targetAchieved: false (wire contract #481).
+  if (finalResult && finalResult.deliveryWeeks > targetDurationWeeks + FLOAT_EPSILON && !finalResult.diagnostics) {
+    finalResult = { ...finalResult, diagnostics: allDiagnostics }
+  }
   if (!finalResult) {
     try {
       finalResult = computeCapacityPlan(input, config)
