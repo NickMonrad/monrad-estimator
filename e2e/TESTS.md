@@ -171,7 +171,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 | Test | Description |
 |------|-------------|
-| generate, apply, verify planned resources, reapply, and snapshot history | Seeds Developer + Tech Lead tasks via CSV, schedules, opens Squad Planner drawer, generates a capacity profile, applies it (accepts confirm dialog), navigates to Resource Profile — asserts planned resource badges, "Squad Planner" source tag, and disabled name inputs appear. Reopens Squad Planner with changed settings, reapplies, and verifies stable identity and updated capacity. Exercises Snapshot History panel — verifies `optimiser_apply` trigger snapshot visibility and rollback button click |
+| generate, apply, verify planned resources, reapply, and snapshot history | Seeds Developer + Tech Lead tasks via CSV, schedules, opens Squad Planner drawer, generates a capacity profile, applies it (accepts confirm dialog), asserts exact generated-vs-persisted feature starts, delivery duration, and every staffed weekly capacity point through the Timeline API, navigates to Resource Profile — asserts planned resource badges, "Squad Planner" source tag, and disabled name inputs appear. Reopens Squad Planner with changed settings, reapplies, and verifies stable identity and updated capacity. Exercises Snapshot History panel — verifies `optimiser_apply` trigger snapshot visibility and rollback button click |
 
 #### `Snapshot History — retired pre-V4 display` describe block (2 tests — issue #444)
 

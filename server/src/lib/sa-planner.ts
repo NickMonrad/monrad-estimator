@@ -13,8 +13,7 @@ import {
   type SchedulerInput,
   type SchedulerResourceType,
 } from './scheduler.js'
-import { effortDays } from '../utils/round.js'
-
+import { effortDays, scheduleDurationDays } from '../utils/round.js'
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 export interface SAPlannerConfig {
@@ -329,6 +328,83 @@ export function analyzeTargetMiss(
     }
   }
 
+  // Check 6: Manual schedule locks — a fixed completion/start constraint can
+  // make the target impossible even when the rest of the schedule is feasible.
+  // Only diagnose pins whose active feature/story owners are present in the
+  // actual input plan and whose schedule evidence is present in the result.
+  const activeFeatures = new Map<string, typeof input.epics[number]['features'][number]>()
+  const activeStories = new Map<string, {
+    featureId: string
+    story: typeof input.epics[number]['features'][number]['userStories'][number]
+  }>()
+  for (const epic of input.epics) {
+    for (const feature of epic.features) {
+      if (feature.isActive === false) continue
+      activeFeatures.set(feature.id, feature)
+      for (const story of feature.userStories) {
+        if (story.isActive === false) continue
+        activeStories.set(story.id, { featureId: feature.id, story })
+      }
+    }
+  }
+
+  for (const pin of input.manualFeatureEntries) {
+    const feature = activeFeatures.get(pin.featureId)
+    if (!feature) continue
+
+    const fixedEndWeek = pin.startWeek + Math.max(0, pin.durationWeeks)
+    if (fixedEndWeek <= targetDurationWeeks + EPSILON) continue
+    if (result.featureStartWeeks.get(feature.id) == null) continue
+
+    diagnostics.push({
+      blocker: 'SCHEDULE_LOCK',
+      featureId: feature.id,
+      configuredLimit: `W${pin.startWeek}–W${fixedEndWeek}`,
+      explanation: `Feature ${feature.id} is manually pinned to W${pin.startWeek}–W${fixedEndWeek}; its fixed completion is beyond the ${targetDurationWeeks}-week target.`,
+    })
+  }
+
+  for (const pin of input.manualStoryEntries) {
+    const owner = activeStories.get(pin.storyId)
+    if (!owner) continue
+
+    const pinnedResourceTypeIds = new Set<string>()
+    let totalPinnedDays = 0
+    const storyHours = owner.story.tasks.reduce((sum, task) => {
+      const taskHpd = task.resourceType?.hoursPerDay ?? input.project.hoursPerDay
+      const durationDays = scheduleDurationDays(task.durationDays, task.hoursEffort, taskHpd)
+      if (task.resourceTypeId) {
+        pinnedResourceTypeIds.add(task.resourceTypeId)
+        totalPinnedDays += effortDays(task.hoursEffort, taskHpd)
+      }
+      return sum + durationDays * taskHpd
+    }, 0)
+    if (totalPinnedDays <= EPSILON || pinnedResourceTypeIds.size === 0) continue
+
+    const fixedEndWeek = pin.startWeek + Math.max(
+      0.2,
+      storyHours / input.project.hoursPerDay / 5,
+    )
+    if (fixedEndWeek <= targetDurationWeeks + EPSILON) continue
+
+    const featureStart = result.featureStartWeeks.get(owner.featureId)
+    const featureAllocations = result.weeklyAllocationsByFeature.get(owner.featureId)
+    if (featureStart == null || !featureAllocations) continue
+    const hasPinnedIntervalEvidence = [...featureAllocations.entries()].some(([week, allocations]) => {
+      const overlapsPin = week + 1 > pin.startWeek && week < fixedEndWeek
+      if (!overlapsPin) return false
+      return [...pinnedResourceTypeIds].some(rtId => (allocations.get(rtId) ?? 0) > EPSILON)
+    })
+    if (!hasPinnedIntervalEvidence) continue
+
+    diagnostics.push({
+      blocker: 'SCHEDULE_LOCK',
+      featureId: owner.featureId,
+      configuredLimit: `W${pin.startWeek}–W${fixedEndWeek}`,
+      explanation: `Story ${pin.storyId} is manually pinned to W${pin.startWeek}–W${fixedEndWeek}; its fixed completion is beyond the ${targetDurationWeeks}-week target.`,
+    })
+  }
+
   // Deduplicate diagnostics by (blocker, resourceTypeId, featureId)
   const seen = new Set<string>()
   return diagnostics.filter(d => {
@@ -352,6 +428,12 @@ interface FeatureInfo {
   startedWeek?: number
   completedWeek?: number
   hasDemand: boolean
+  /** A manual feature pin fixes the feature's entire automatic window. */
+  manualStartWeek?: number
+  manualEndWeek?: number
+  /** Pinned stories are independent phases, but still block feature dependencies. */
+  pinnedStartWeek?: number
+  pinnedEndWeek?: number
 }
 
 const EPSILON = 1e-6
@@ -371,12 +453,62 @@ export function runSAPlanner(
 
   const { epics, resourceTypes, epicDeps } = input
   const hpd = input.project.hoursPerDay
+  const manualFeatureById = new Map(input.manualFeatureEntries.map(entry => [entry.featureId, entry]))
+  const manualStoryById = new Map(input.manualStoryEntries.map(entry => [entry.storyId, entry]))
+  const featureByStoryId = new Map<string, typeof epics[number]['features'][number]>()
+  for (const epic of epics) {
+    for (const feature of epic.features) {
+      for (const story of feature.userStories) featureByStoryId.set(story.id, feature)
+    }
+  }
+
+  const pinnedStoryIntervals: Array<{
+    featureId: string
+    storyId: string
+    rtId: string
+    startWeek: number
+    endWeek: number
+    days: number
+  }> = []
+  let latestPinWeek = 0
+  for (const [storyId, pin] of manualStoryById) {
+    const feature = featureByStoryId.get(storyId)
+    if (!feature) continue
+    latestPinWeek = Math.max(latestPinWeek, pin.startWeek)
+    const story = feature.userStories.find(candidate => candidate.id === storyId)
+    if (!story || story.isActive === false) continue
+    const totalHours = story.tasks.reduce((sum, task) => {
+      const taskHpd = task.resourceType?.hoursPerDay ?? hpd
+      return sum + scheduleDurationDays(task.durationDays, task.hoursEffort, taskHpd) * taskHpd
+    }, 0)
+    const durationWeeks = Math.max(0.2, totalHours / hpd / 5)
+    const endWeek = pin.startWeek + durationWeeks
+    latestPinWeek = Math.max(latestPinWeek, endWeek)
+    for (const task of story.tasks) {
+      if (!task.resourceTypeId) continue
+      const taskHpd = task.resourceType?.hoursPerDay ?? hpd
+      const days = effortDays(task.hoursEffort, taskHpd)
+      pinnedStoryIntervals.push({
+        featureId: feature.id,
+        storyId,
+        rtId: task.resourceTypeId,
+        startWeek: pin.startWeek,
+        endWeek,
+        days,
+      })
+    }
+  }
+
+  for (const pin of manualFeatureById.values()) {
+    latestPinWeek = Math.max(latestPinWeek, pin.startWeek + Math.max(0, pin.durationWeeks))
+  }
+
+  const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
 
   const features: FeatureInfo[] = []
   const featureMap = new Map<string, FeatureInfo>()
   const featuresByEpic = new Map<string, FeatureInfo[]>()
   const epicById = new Map(epics.map(epic => [epic.id, epic]))
-  const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
 
   // effectiveRtCount is used only for per-feature parallelism caps.
   // Blank/unrestricted maxCap must NOT cap overall planning capacity.
@@ -398,7 +530,7 @@ export function runSAPlanner(
       const totalDaysByRt = new Map<string, number>()
 
       for (const story of feature.userStories) {
-        if (story.isActive === false) continue
+        if (story.isActive === false || manualStoryById.has(story.id)) continue
         for (const task of story.tasks) {
           if (!task.resourceTypeId) continue
           const rtHpd = task.resourceType?.hoursPerDay ?? hpd
@@ -407,6 +539,14 @@ export function runSAPlanner(
         }
       }
 
+      const manualFeature = manualFeatureById.get(feature.id)
+      const featurePins = pinnedStoryIntervals.filter(pin => pin.featureId === feature.id)
+      const pinnedStartWeek = featurePins.length > 0
+        ? Math.min(...featurePins.map(pin => pin.startWeek))
+        : undefined
+      const pinnedEndWeek = featurePins.length > 0
+        ? Math.max(...featurePins.map(pin => pin.endWeek))
+        : undefined
       const info: FeatureInfo = {
         id: feature.id,
         epicId: epic.id,
@@ -416,6 +556,12 @@ export function runSAPlanner(
         totalDaysByRt,
         predecessors: new Set(),
         hasDemand: totalDaysByRt.size > 0,
+        manualStartWeek: manualFeature?.startWeek,
+        manualEndWeek: manualFeature
+          ? manualFeature.startWeek + Math.max(0, manualFeature.durationWeeks)
+          : undefined,
+        pinnedStartWeek,
+        pinnedEndWeek,
       }
 
       features.push(info)
@@ -597,10 +743,32 @@ export function runSAPlanner(
     52,
     Math.ceil(targetDurationWeeks * 3),
     Math.ceil(aggregateDurationWithDelayWeeks * 4) + features.length + 12,
+    Math.ceil(latestPinWeek) + features.length + 12,
   )
 
   let completedFeatureCount = 0
   let lastAllocationWeek = -1
+
+  function scheduleLock(featureId: string | undefined, explanation: string): PlannerDiagnostic {
+    return { blocker: 'SCHEDULE_LOCK', featureId, explanation }
+  }
+  function assertPinnedStoryDependencies(feature: FeatureInfo): void {
+    const pinnedStart = feature.pinnedStartWeek
+    if (pinnedStart === undefined) return
+
+    for (const predId of feature.predecessors) {
+      const predecessor = featureMap.get(predId)
+      if (!predecessor || predecessor.completedWeek === undefined || predecessor.completedWeek >= pinnedStart - EPSILON) {
+        throw new SAPlannerInfeasibleError(
+          `Manual story lock for feature ${feature.id} conflicts with its dependencies`,
+          [scheduleLock(
+            feature.id,
+            `Manual story work for feature ${feature.id} is pinned to W${pinnedStart}, but its predecessor chain does not complete before that locked start.`,
+          )],
+        )
+      }
+    }
+  }
 
   function isFeatureComplete(feature: FeatureInfo): boolean {
     for (const remaining of feature.remainingDaysByRt.values()) {
@@ -611,12 +779,29 @@ export function runSAPlanner(
 
   function isFeatureReady(feature: FeatureInfo, week: number): boolean {
     if (feature.completedWeek !== undefined) return false
+    if (feature.manualStartWeek !== undefined && feature.manualEndWeek !== undefined) {
+      const overlapsLock = Math.min(week + 1, feature.manualEndWeek)
+        - Math.max(week, feature.manualStartWeek)
+      if (overlapsLock <= EPSILON) return false
+      // A manual feature pin may begin part-way through a scheduler week, but
+      // it must not be silently shifted to a later whole week.
+      if (feature.startedWeek === undefined && week > Math.floor(feature.manualStartWeek)) return false
+    }
     for (const predId of feature.predecessors) {
       const pred = featureMap.get(predId)
       if (!pred || pred.completedWeek === undefined || pred.completedWeek >= week) return false
     }
     return true
   }
+
+  function getFeatureWindowOverlap(feature: FeatureInfo, week: number): number {
+    if (feature.manualStartWeek === undefined || feature.manualEndWeek === undefined) return 1
+    return Math.max(
+      0,
+      Math.min(week + 1, feature.manualEndWeek) - Math.max(week, feature.manualStartWeek),
+    )
+  }
+
 
   function getEpicStartedWeek(epicId: string): number | undefined {
     const epicFeatures = featuresByEpic.get(epicId) ?? []
@@ -698,6 +883,64 @@ export function runSAPlanner(
     }
   }
 
+  const pinnedDemandByRtWeek = new Map<string, number>()
+  for (const interval of pinnedStoryIntervals) {
+    const rt = rtById.get(interval.rtId)
+    if (!rt) {
+      throw new SAPlannerInfeasibleError(
+        `Manual story ${interval.storyId} references unknown resource type ${interval.rtId}`,
+        [scheduleLock(interval.featureId, `Manual story ${interval.storyId} cannot be placed because resource type ${interval.rtId} is unavailable.`)],
+      )
+    }
+    const startWeek = Math.floor(interval.startWeek)
+    const endWeek = Math.ceil(interval.endWeek)
+    for (let week = startWeek; week < endWeek; week++) {
+      const overlap = Math.min(week + 1, interval.endWeek) - Math.max(week, interval.startWeek)
+      if (overlap <= EPSILON) continue
+      const days = interval.days * overlap / (interval.endWeek - interval.startWeek)
+      const key = `${interval.rtId}|${week}`
+      pinnedDemandByRtWeek.set(key, (pinnedDemandByRtWeek.get(key) ?? 0) + days)
+      recordAllocation(featureMap.get(interval.featureId)!, interval.rtId, week, days)
+      lastAllocationWeek = Math.max(lastAllocationWeek, week)
+    }
+  }
+
+  for (const rt of resourceTypes) {
+    for (let week = 0; week < MAX_WEEKS; week++) {
+      const pinnedDays = pinnedDemandByRtWeek.get(`${rt.id}|${week}`) ?? 0
+      if (pinnedDays <= EPSILON) continue
+      const capacityDays = getWeeklyCapacityDays(rt, week)
+      if (pinnedDays > capacityDays + EPSILON) {
+        throw new SAPlannerInfeasibleError(
+          `Manual schedule locks exceed ${rt.name} capacity in week ${week}`,
+          [scheduleLock(
+            undefined,
+            `${rt.name} has ${capacityDays.toFixed(2)} available days in week ${week}, but manual story locks require ${pinnedDays.toFixed(2)} days.`,
+          )],
+        )
+      }
+    }
+  }
+
+  for (const feature of features) {
+    if (feature.manualStartWeek === undefined || feature.manualEndWeek === undefined) continue
+    const featurePins = pinnedStoryIntervals.filter(pin => pin.featureId === feature.id)
+    if (feature.manualEndWeek <= feature.manualStartWeek && feature.hasDemand) {
+      throw new SAPlannerInfeasibleError(
+        `Manual feature lock for ${feature.id} has no usable duration`,
+        [scheduleLock(feature.id, `Feature ${feature.id} is pinned to an empty window (${feature.manualStartWeek}–${feature.manualEndWeek}).`)],
+      )
+    }
+    for (const pin of featurePins) {
+      if (pin.startWeek < feature.manualStartWeek - EPSILON || pin.endWeek > feature.manualEndWeek + EPSILON) {
+        throw new SAPlannerInfeasibleError(
+          `Manual feature and story locks conflict for ${feature.id}`,
+          [scheduleLock(feature.id, `Story ${pin.storyId} is pinned to W${pin.startWeek}–W${pin.endWeek}, outside feature lock W${feature.manualStartWeek}–W${feature.manualEndWeek}.`)],
+        )
+      }
+    }
+  }
+
   for (let week = 0; week < MAX_WEEKS && completedFeatureCount < features.length; week++) {
     const readyFeatures = features
       .filter(feature => isFeatureReady(feature, week) && canStartFeature(feature))
@@ -706,14 +949,21 @@ export function runSAPlanner(
     if (readyFeatures.length === 0) continue
 
     for (const feature of readyFeatures) {
-      if (feature.startedWeek !== undefined || feature.hasDemand) continue
-      feature.startedWeek = week
-      feature.completedWeek = week
+      const wasStarted = feature.startedWeek !== undefined
+      if (wasStarted || feature.hasDemand) continue
+      assertPinnedStoryDependencies(feature)
+      feature.startedWeek = feature.manualStartWeek ?? feature.pinnedStartWeek ?? week
+      const lockedEnd = feature.manualEndWeek ?? feature.pinnedEndWeek
+      feature.completedWeek = lockedEnd !== undefined
+        ? lockedEnd - EPSILON
+        : feature.startedWeek
       completedFeatureCount++
+      lastAllocationWeek = Math.max(lastAllocationWeek, Math.ceil(feature.completedWeek) - 1)
     }
 
     for (const rt of resourceTypes) {
       let availableCapacity = getWeeklyCapacityDays(rt, week)
+      availableCapacity -= pinnedDemandByRtWeek.get(`${rt.id}|${week}`) ?? 0
       if (availableCapacity <= EPSILON) continue
 
       const estimatedFeatureWeeks = new Map<string, number>()
@@ -741,12 +991,20 @@ export function runSAPlanner(
         if (perFeatureCap <= EPSILON) continue
 
         const featureRemainingWeeks = estimatedFeatureWeeks.get(feature.id) ?? 1
-        const pacingWeeks = week < targetDurationWeeks
+        const lockRemainingWeeks = feature.manualEndWeek !== undefined
+          ? Math.max(1, feature.manualEndWeek - week)
+          : undefined
+        const pacingWeeks = lockRemainingWeeks ?? (week < targetDurationWeeks
           ? Math.max(1, Math.min(weeksLeftToTarget, featureRemainingWeeks))
-          : 1
+          : 1)
         const smoothedTarget = Math.min(perFeatureCap, remaining / pacingWeeks)
+        const windowOverlap = getFeatureWindowOverlap(feature, week)
+        const windowCapacity = getWeeklyCapacityDays(rt, week) * windowOverlap
+        const featureCapacity = windowOverlap < 1 - EPSILON
+          ? Math.min(availableCapacity, windowCapacity)
+          : availableCapacity
 
-        const allocation = Math.min(availableCapacity, smoothedTarget)
+        const allocation = Math.min(featureCapacity, smoothedTarget)
         if (allocation <= EPSILON) continue
 
         baselineAllocations.set(feature.id, allocation)
@@ -757,8 +1015,9 @@ export function runSAPlanner(
       // capacity whenever multiple features compete for the same role. This
       // keeps smaller role slices on long-running features from disappearing
       // early while the feature remains active. We still top up when there is
-      // only one ready candidate so blockers can clear quickly.
-      if (availableCapacity > EPSILON && candidates.length === 1) {
+      // only one ready candidate so blockers can clear quickly. Manual feature
+      // locks are paced across their exact persisted duration instead.
+      if (availableCapacity > EPSILON && candidates.length === 1 && candidates[0]?.manualEndWeek === undefined) {
         for (const feature of candidates) {
           if (availableCapacity <= EPSILON) break
 
@@ -785,7 +1044,10 @@ export function runSAPlanner(
         const nextRemaining = Math.max(0, remaining - allocation)
         feature.remainingDaysByRt.set(rt.id, nextRemaining)
 
-        if (feature.startedWeek === undefined) feature.startedWeek = week
+        if (feature.startedWeek === undefined) {
+          assertPinnedStoryDependencies(feature)
+          feature.startedWeek = feature.manualStartWeek ?? week
+        }
 
         recordAllocation(feature, rt.id, week, allocation)
         lastAllocationWeek = Math.max(lastAllocationWeek, week)
@@ -796,8 +1058,14 @@ export function runSAPlanner(
       if (feature.completedWeek !== undefined) continue
       if (!isFeatureComplete(feature)) continue
 
-      feature.completedWeek = week
       if (feature.startedWeek === undefined) feature.startedWeek = week
+      const lockEnd = Math.max(
+        feature.manualEndWeek ?? 0,
+        feature.pinnedEndWeek ?? 0,
+      )
+      feature.completedWeek = lockEnd > 0
+        ? Math.max(week, lockEnd - EPSILON)
+        : week
       completedFeatureCount++
     }
   }
@@ -821,6 +1089,21 @@ export function runSAPlanner(
   }
 
   function collectInfeasibilityDiagnostics(failedFeature: FeatureInfo, diags: PlannerDiagnostic[]) {
+    if (failedFeature.manualStartWeek !== undefined) {
+      diags.push(scheduleLock(
+        failedFeature.id,
+        `Feature ${failedFeature.id} is pinned to W${failedFeature.manualStartWeek}–W${failedFeature.manualEndWeek}; its effort and dependencies cannot be satisfied inside that locked window.`,
+      ))
+      return
+    }
+    // A pinned story reserves its exact interval; if automatic work remains
+    // impossible, surface the lock rather than pretending it was movable.
+    if (failedFeature.pinnedStartWeek !== undefined && failedFeature.pinnedEndWeek !== undefined) {
+      diags.push(scheduleLock(
+        failedFeature.id,
+        `Manual story work for feature ${failedFeature.id} is locked to W${failedFeature.pinnedStartWeek}–W${failedFeature.pinnedEndWeek}; remaining work cannot be placed by moving that lock.`,
+      ))
+    }
     // Check 1: Zero capacity for a role with demand in any week
     for (const [rtId, totalDays] of failedFeature.totalDaysByRt) {
       if (totalDays <= EPSILON) continue
@@ -834,7 +1117,7 @@ export function runSAPlanner(
         if (cap > EPSILON) {
           hasSomeCapacity = true
         } else if (w === 0 || hasSomeCapacity) {
-          if (!hasZeroCapacityWeek) hasZeroCapacityWeek = true
+          hasZeroCapacityWeek = true
         }
       }
 
