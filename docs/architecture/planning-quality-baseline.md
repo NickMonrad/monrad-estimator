@@ -78,3 +78,21 @@ locks and profile windows remain hard (including zero-capacity gaps), while
 growth and reduction operate in deterministic 0.25-FTE quanta. A target failure
 must return the best truthful result or structured diagnostics rather than a
 vacuous successful claim.
+
+The generated envelope is normalised to the same week-level authority used by
+replay. Periods use an inclusive `startWeek` and exclusive `endWeek`; zero
+periods are retained so unavailable weeks and profile gaps cannot be inferred
+away. A role-level `roleSegments` profile constrains only aggregate role
+capacity, while named-person windows remain independent. When a role has both
+named and unnamed slots, unrestricted unnamed capacity remains available
+outside a named person's window. A named-only role does not gain synthetic
+out-of-window capacity. Protected named allocations are floors of the reported
+envelope and therefore remain included in cost, peak, and utilisation metrics.
+
+Manual feature windows, including fractional-week starts, and individual story
+pins are enforced during planning and replay. A story pin does not delay its
+automatic siblings, and applying a plan preserves manual timeline rows. When
+an immutable pin prevents the target, the completed plan retains its achieved
+duration and reports a `SCHEDULE_LOCK` diagnostic. Generated periods can split
+at availability or protected-allocation boundaries within the requested planning
+period; the apply path must reproduce their weekly capacity and feature starts.

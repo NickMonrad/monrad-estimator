@@ -18,6 +18,12 @@ import {
   sparseSpecialist,
   mixedProgramme,
   factorySupplyChainBenchmark,
+  makeEpic,
+  makeFeature,
+  makeInput,
+  makeResourceType,
+  makeStory,
+  makeTask,
 } from './planningBenchmarkFixtures.js'
 
 const TOLERANCE = 1e-6
@@ -246,5 +252,95 @@ describe('Factory / Supply Chain benchmark through joint planning loop', () => {
     const second = computeJointPlan(input, config)
     expect(second.deliveryWeeks).toBe(jointResult.deliveryWeeks)
     expect(second.periods).toEqual(jointResult.periods)
+  })
+})
+describe('joint planning loop — bounded growth regressions', () => {
+  it('crosses a quarter-FTE plateau to meet a one-week profile target', () => {
+    const role = makeResourceType('rt-dev', 'Developer', 4, 8, {
+      roleSegments: [{ startWeek: 0, endWeek: 3, allocationPercent: 100 }],
+    })
+    const input = makeInput([
+      makeEpic('plateau-epic', [
+        makeFeature('plateau-feature', [
+          makeStory('plateau-story', [makeTask(80, 'rt-dev', 'Developer')]),
+        ]),
+      ]),
+    ], [role])
+    const result = computeJointPlan(input, { ...makeConfig(1), maxCap: new Map([['rt-dev', 4]]) })
+
+    expect(result.targetAchieved).toBe(true)
+    expect(result.deliveryWeeks).toBeLessThanOrEqual(1)
+    expect(result.periods.flatMap(period => period.resources)
+      .filter(resource => resource.resourceTypeId === 'rt-dev')
+      .some(resource => resource.headcount >= 2 - TOLERANCE)).toBe(true)
+  })
+
+  it('recovers both roles inside finite profile windows', () => {
+    const roles = ['rt-a', 'rt-b'].map(id => makeResourceType(id, id, 2, 8, {
+      roleSegments: [{ startWeek: 0, endWeek: 3, allocationPercent: 50 }],
+    }))
+    const features = roles.map((role, index) => makeFeature(`recover-f${index}`, [
+      makeStory(`recover-s${index}`, [makeTask(160, role.id, role.name)]),
+    ], index))
+    const input = makeInput([makeEpic('recover-epic', features, 0, { featureMode: 'parallel' })], roles)
+    const result = computeJointPlan(input, makeConfig(10))
+
+    expect(result.targetAchieved).toBe(true)
+    expect(result.deliveryWeeks).toBeLessThanOrEqual(10)
+    expect(Number.isFinite(result.deliveryWeeks)).toBe(true)
+    // Failed recovery probes are historical loop evidence only; a successful
+    // final schedule must not expose them as final infeasibility diagnostics.
+    expect(result.diagnostics ?? []).toEqual([])
+  })
+
+  it('grows only the later under-capacity profile segment', () => {
+    const role = makeResourceType('rt-dev', 'Developer', 2, 8, {
+      roleSegments: [
+        { startWeek: 0, endWeek: 1, allocationPercent: 200 },
+        { startWeek: 2, endWeek: 10, allocationPercent: 50 },
+      ],
+    })
+    const emptyFeature = (id: string, order: number) => makeFeature(id, [], order)
+    const effortFeature = makeFeature('later-effort', [
+      makeStory('later-story', [makeTask(80, 'rt-dev', 'Developer')]),
+    ], 2)
+    const input = makeInput([
+      makeEpic('later-epic', [
+        emptyFeature('predecessor-0', 0),
+        emptyFeature('predecessor-1', 1),
+        effortFeature,
+      ]),
+    ], [role])
+    const result = computeJointPlan(input, {
+      ...makeConfig(3),
+      maxCap: new Map([['rt-dev', 2]]),
+    })
+
+    expect(result.targetAchieved).toBe(true)
+    expect(result.deliveryWeeks).toBeLessThanOrEqual(3)
+    expect(result.periods.flatMap(period => period.resources)
+      .filter(resource => resource.resourceTypeId === 'rt-dev')
+      .every(resource => resource.headcount <= 2 + TOLERANCE)).toBe(true)
+    expect(result.loopDiagnostics.some(diagnostic =>
+      diagnostic.blocker === 'ROLE_MAX_CAP' && diagnostic.resourceTypeId === 'rt-dev')).toBe(false)
+  })
+
+  it('reports both explicit caps for a small capped target miss', () => {
+    const roles = ['rt-a', 'rt-b'].map(id => makeResourceType(id, id, 1))
+    const features = roles.map((role, index) => makeFeature(`capped-f${index}`, [
+      makeStory(`capped-s${index}`, [makeTask(42, role.id, role.name)]),
+    ], index))
+    const input = makeInput([makeEpic('capped-epic', features, 0, { featureMode: 'parallel' })], roles)
+    const result = computeJointPlan(input, {
+      ...makeConfig(1),
+      maxCap: new Map(roles.map(role => [role.id, 1])),
+    })
+
+    expect(result.targetAchieved).toBe(false)
+    expect(result.deliveryWeeks).toBeGreaterThan(1)
+    for (const role of roles) {
+      expect(result.loopDiagnostics.some(diagnostic =>
+        diagnostic.blocker === 'ROLE_MAX_CAP' && diagnostic.resourceTypeId === role.id)).toBe(true)
+    }
   })
 })

@@ -818,5 +818,135 @@ describe('real planner regressions for #481 review findings', () => {
     expect(result.totalCost).toBe(periodCosts.reduce((sum, cost) => sum + cost, 0))
     expect(result.budgetExceeded).toBe(false)
   })
+  it('keeps mixed named and unnamed slots available outside the named window', () => {
+    const namedResource = {
+      id: 'nr-mixed-window',
+      name: 'Developer 50% W2-4',
+      startWeek: 2,
+      endWeek: 4,
+      allocationPct: 50,
+      allocationMode: 'TIMELINE',
+      allocationPercent: 50,
+      allocationStartWeek: 2,
+      allocationEndWeek: 4,
+    }
+    const input = makeInput([
+      makeEpic('mixed-window-epic', [
+        makeFeature('mixed-window-feature', [
+          makeStory('mixed-window-story', [makeTask(40, 'rt-dev', 'Developer', 8)]),
+        ]),
+      ]),
+    ], [makeResourceType('rt-dev', 'Developer', 2, 8, { namedResources: [namedResource] })])
+    const config = makeConfig(1)
+    config.maxCap = new Map([['rt-dev', 2]])
+
+    const result = computeJointPlan(input, config)
+    expect(result.targetAchieved).toBe(true)
+    expect(result.deliveryWeeks).toBeCloseTo(1, 6)
+    expect(result.levellingResult.featureStartWeeks.get('mixed-window-feature')).toBe(0)
+
+    const replayed = materializeEnvelopeToResourceTypes(input.resourceTypes, result.periods, config.periodWeeks)
+    const replayedDev = replayed.find(rt => rt.id === 'rt-dev')!
+    expect(replayedDev.namedResources?.find(resource => resource.id === namedResource.id)).toBe(namedResource)
+    // The unnamed slot is unrestricted, so the work can use a full 40-hour
+    // week at W0; the named person's 50% availability remains protected.
+    expect(getWeeklyCapacity(replayedDev, 0, HPD)).toBeCloseTo(40, 6)
+    for (let week = 2; week <= 4; week++) {
+      expect(getWeeklyCapacity(replayedDev, week, HPD)).toBeCloseTo(20, 6)
+    }
+
+    // Every serialized period is the same aggregate capacity that replay
+    // actually consumes; do not require unused unnamed staffing in the
+    // named-resource window.
+    for (const period of result.periods) {
+      const resource = period.resources.find(candidate => candidate.resourceTypeId === 'rt-dev')!
+      const expectedHours = resource.headcount * HPD * 5
+      for (let week = period.startWeek; week < period.endWeek; week++) {
+        expect(getWeeklyCapacity(replayedDev, week, HPD)).toBeCloseTo(expectedHours, 6)
+      }
+    }
+
+    const replaySchedule = runSAPlanner({ ...input, resourceTypes: replayed }, makeSaConfig(config))
+    expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(1, 6)
+    expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 6)
+    expect(replaySchedule.featureStartWeeks).toEqual(result.levellingResult.featureStartWeeks)
+  })
+
+  it('prices the complete protected named allocation instead of the demand envelope', () => {
+    const namedResource = {
+      id: 'nr-protected-floor',
+      name: 'Developer protected',
+      startWeek: 0,
+      endWeek: 3,
+      allocationPct: 100,
+      allocationMode: 'TIMELINE',
+      allocationPercent: 100,
+      allocationStartWeek: 0,
+      allocationEndWeek: 3,
+    }
+    const input = makeInput([
+      makeEpic('protected-floor-epic', [
+        makeFeature('protected-floor-feature', [
+          makeStory('protected-floor-story', [makeTask(8, 'rt-dev', 'Developer', 8)]),
+        ]),
+      ]),
+    ], [makeResourceType('rt-dev', 'Developer', 1, 8, { namedResources: [namedResource] })])
+    // An empty aggregate profile does not erase protected named capacity.
+    input.resourceTypes[0].roleSegments = []
+    const config = makeConfig(4)
+    config.periodWeeks = 4
+    config.dayRates = new Map([['rt-dev', 100]])
+    config.maxCap = new Map([['rt-dev', 1]])
+
+    const result = computeJointPlan(input, config)
+    expect(result.targetAchieved).toBe(true)
+    expect(result.totalCost).toBe(2_000)
+    expect(result.periods.reduce((sum, period) => sum + period.endWeek - period.startWeek, 0)).toBe(4)
+    for (const period of result.periods) {
+      expect(period.resources.find(resource => resource.resourceTypeId === 'rt-dev')?.headcount)
+        .toBeCloseTo(1, 6)
+    }
+
+    const replayed = materializeEnvelopeToResourceTypes(input.resourceTypes, result.periods, config.periodWeeks)
+    const replaySchedule = runSAPlanner({ ...input, resourceTypes: replayed }, makeSaConfig(config))
+    expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 6)
+  })
+
+  it('encodes role-window gaps as explicit zero-capacity periods for replay', () => {
+    const role = makeResourceType('rt-dev', 'Developer', 1, 8, {
+      roleSegments: [{ startWeek: 2, endWeek: 4, allocationPercent: 100 }],
+    })
+    const input = makeInput([
+      makeEpic('role-window-epic', [
+        makeFeature('role-window-feature', [
+          makeStory('role-window-story', [makeTask(40, 'rt-dev', 'Developer', 8)]),
+        ]),
+      ]),
+    ], [role])
+    const config = makeConfig(3)
+    config.periodWeeks = 4
+    config.maxCap = new Map([['rt-dev', 1]])
+
+    const result = computeJointPlan(input, config)
+    expect(result.targetAchieved).toBe(true)
+    expect(result.levellingResult.featureStartWeeks.get('role-window-feature')).toBe(2)
+    const byWeek = (week: number) => result.periods
+      .find(period => week >= period.startWeek && week < period.endWeek)
+      ?.resources.find(resource => resource.resourceTypeId === 'rt-dev')?.headcount ?? 0
+    expect(byWeek(0)).toBe(0)
+    expect(byWeek(1)).toBe(0)
+    // W2 is the needed week; the profile's inclusive end boundary does not
+    // require staffing a later unused week in the returned envelope.
+    expect(byWeek(2)).toBe(1)
+    expect(byWeek(4)).toBe(0)
+    expect(byWeek(5)).toBe(0)
+
+    const replayed = materializeEnvelopeToResourceTypes(input.resourceTypes, result.periods, config.periodWeeks)
+    const replaySchedule = runSAPlanner({ ...input, resourceTypes: replayed }, makeSaConfig(config))
+    expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(3, 6)
+    expect(replaySchedule.featureStartWeeks.get('role-window-feature')).toBe(2)
+    expect(getWeeklyCapacity(replayed[0]!, 0, HPD)).toBeCloseTo(0, 6)
+    expect(getWeeklyCapacity(replayed[0]!, 1, HPD)).toBeCloseTo(0, 6)
+  })
 
 })

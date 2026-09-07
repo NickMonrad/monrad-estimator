@@ -78,6 +78,42 @@ function quantizeHeadcountUp(value: number): number {
   return round2(Math.ceil((value - FLOAT_EPSILON) / HEADCOUNT_QUANTUM) * HEADCOUNT_QUANTUM)
 }
 
+/** Weekly FTE supplied by preserved named resources. */
+function namedCapacityFte(rt: SchedulerResourceType, week: number): number {
+  let capacity = 0
+  for (const resource of rt.namedResources ?? []) {
+    if (!resource.capacitySegments || resource.capacitySegments.length === 0) {
+      const start = resource.startWeek ?? 0
+      const end = resource.endWeek ?? Infinity
+      if (week < start || week > end) continue
+    }
+    capacity += effectiveAllocationPct(resource, week) / 100
+  }
+  return capacity
+}
+
+/** Whether an aggregate role profile permits capacity in this week. */
+function isWithinRoleWindow(rt: SchedulerResourceType, week: number): boolean {
+  return rt.roleSegments == null
+    || rt.roleSegments.some(segment => week >= segment.startWeek && week <= segment.endWeek)
+}
+
+/**
+ * Mirror materializeEnvelopeToResourceTypes: profile windows constrain where
+ * synthetic capacity may exist, but the starting count is not an upper bound.
+ * With no profile, an existing unnamed slot or explicit envelope growth
+ * permits unrestricted synthetic capacity; named-only capacity remains tied
+ * to the named person's active window.
+ */
+function canMaterializeSyntheticCapacity(
+  rt: SchedulerResourceType,
+  envelopeHeadcount: number,
+): boolean {
+  if (rt.roleSegments != null) return rt.roleSegments.length > 0
+  const baseUnnamedSlots = Math.max(0, rt.count - (rt.namedResources ?? []).length)
+  return baseUnnamedSlots > FLOAT_EPSILON || envelopeHeadcount > rt.count + FLOAT_EPSILON
+}
+
 export interface CapacityPlanResult {
   periods: CapacityPlanPeriodResult[]
   totalCost: number
@@ -92,7 +128,6 @@ export interface CapacityPlanResult {
   /** Structured infeasibility diagnostics (present when planner fails) */
   diagnostics?: PlannerDiagnostic[]
 }
-
 /** Result from the joint schedule/capacity planning loop (#481). */
 export interface JointPlanResult extends CapacityPlanResult {
   /** Number of iterations the joint loop ran before converging or stopping. */
@@ -114,7 +149,7 @@ export const CAPACITY_QUANTUM = HEADCOUNT_QUANTUM
  * headcount that covers demand with optional smoothing.
  */
 function deriveCapacityEnvelope(
-  _resourceTypes: SchedulerResourceType[],
+  resourceTypes: SchedulerResourceType[],
   totalWeeks: number,
   periodWeeks: number,
   peakFTE: Map<string, number[]>,
@@ -125,6 +160,15 @@ function deriveCapacityEnvelope(
   const { maxDeltaPerPeriod, smoothingMode = 'smooth', minFloor, maxCap, maxAllocationBufferPct } = config
   const numPeriods = Math.max(1, Math.ceil(totalWeeks / periodWeeks))
   const plannedRtIds = [...peakFTE.keys()]
+  const namedFloorFor = (rt: SchedulerResourceType, period: number): number => {
+    const startWeek = period * periodWeeks
+    const endWeek = Math.min((period + 1) * periodWeeks, totalWeeks + 1)
+    let floor = 0
+    for (let week = startWeek; week < endWeek; week++) {
+      floor = Math.max(floor, namedCapacityFte(rt, week))
+    }
+    return round2(floor)
+  }
 
   // Reconstruct demandDays from avgFTE for buffer calculation
   const demandDays = new Map<string, Float64Array>()
@@ -153,6 +197,18 @@ function deriveCapacityEnvelope(
     capacity.set(rtId, cap)
   }
 
+  // Protected named allocations are part of the truthful envelope even when
+  // demand is lower than the locked person's capacity.
+  for (const rtId of plannedRtIds) {
+    const rt = resourceTypes.find(candidate => candidate.id === rtId)
+    if (!rt) continue
+    const cap = capacity.get(rtId)!
+    for (let p = 0; p < numPeriods; p++) {
+      cap[p] = Math.max(cap[p], namedFloorFor(rt, p))
+    }
+  }
+
+
   // Apply minimum floor
   for (const rtId of plannedRtIds) {
     const floor = minFloor.get(rtId) ?? 0
@@ -175,9 +231,12 @@ function deriveCapacityEnvelope(
         if (cap[p] > cap[p + 1] + maxDeltaPerPeriod) { cap[p] = cap[p + 1] + maxDeltaPerPeriod; changed = true }
       }
       const floor = minFloor.get(rtId) ?? 0
+      const rt = resourceTypes.find(candidate => candidate.id === rtId)
       for (let p = 0; p < numPeriods; p++) {
         const minFloorCapacity = quantizeHeadcountUp(floor)
-        if (cap[p] < minFloorCapacity) { cap[p] = minFloorCapacity; changed = true }
+        const namedFloor = rt ? namedFloorFor(rt, p) : 0
+        const lowerBound = Math.max(minFloorCapacity, namedFloor)
+        if (cap[p] < lowerBound) { cap[p] = lowerBound; changed = true }
       }
       const peaks = peakFTE.get(rtId)!
       for (let p = 0; p < numPeriods; p++) {
@@ -207,6 +266,7 @@ function deriveCapacityEnvelope(
     if (totalDemand <= 0) continue
     const maxAllocatedDays = totalDemand * (1 + bufferPct)
     const cap = capacity.get(rtId)!
+    const rt = resourceTypes.find(candidate => candidate.id === rtId)
     const floor = quantizeHeadcountUp(minFloor.get(rtId) ?? 0)
     const getAllocatedDays = () => {
       let total = 0
@@ -223,15 +283,26 @@ function deriveCapacityEnvelope(
     const periodsByUtil = Array.from({ length: numPeriods }, (_, i) => i)
       .sort((a, b) => (cap[a] > 0 ? avgs[a] / cap[a] : 0) - (cap[b] > 0 ? avgs[b] / cap[b] : 0))
     for (const p of periodsByUtil) {
-      if (currentAllocated <= maxAllocatedDays) break
       const peaks = peakFTE.get(rtId)!
-      const minRequired = Math.max(floor, quantizeHeadcountUp(peaks[p]))
+      const namedFloor = rt ? namedFloorFor(rt, p) : 0
+      const minRequired = Math.max(floor, namedFloor, quantizeHeadcountUp(peaks[p]))
       while (cap[p] > minRequired + FLOAT_EPSILON && currentAllocated > maxAllocatedDays) {
         cap[p] = round2(Math.max(minRequired, cap[p] - HEADCOUNT_QUANTUM))
         currentAllocated = getAllocatedDays()
       }
     }
   }
+  // Max-cap and allocation-buffer trimming must not erase protected named
+  // capacity. A locked person remains represented even when demand is small.
+  for (const rtId of plannedRtIds) {
+    const rt = resourceTypes.find(candidate => candidate.id === rtId)
+    if (!rt) continue
+    const cap = capacity.get(rtId)!
+    for (let p = 0; p < numPeriods; p++) {
+      cap[p] = Math.max(cap[p], namedFloorFor(rt, p))
+    }
+  }
+
 
   return capacity
 }
@@ -241,54 +312,120 @@ function deriveCapacityEnvelope(
  * Pure function: no I/O, no side effects.
  */
 function buildEnvelopeOutput(
-  input: SchedulerInput,
+  resourceTypes: SchedulerResourceType[],
   totalWeeks: number,
   periodWeeks: number,
   capacity: Map<string, number[]>,
-  peakFTE: Map<string, number[]>,
   avgFTE: Map<string, number[]>,
   levelResult: LevellingResult,
   config: CapacityPlanConfig,
+  weeklyDemandByResourceType?: Map<string, number[]>,
 ): CapacityPlanResult {
   const { dayRates, maxBudget } = config
-  const numPeriods = Math.max(1, Math.ceil(totalWeeks / periodWeeks))
   const plannedRtIds = [...capacity.keys()]
-  const rtById = new Map(input.resourceTypes.map(rt => [rt.id, rt]))
+  const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
+  const weeklyCapacity = new Map<string, number[]>()
+  // Preserve named-resource allocations beyond demand's horizon when they
+  // are explicitly represented/protected. Role-profile availability alone is
+  // not staffing and must not extend the priced envelope.
+  let horizonEnd = totalWeeks + 1
+  for (const rtId of plannedRtIds) {
+    const rt = rtById.get(rtId)
+    if (!rt) continue
+    for (const resource of rt.namedResources ?? []) {
+      for (const segment of resource.capacitySegments ?? []) {
+        if (Number.isFinite(segment.endWeek)) horizonEnd = Math.max(horizonEnd, segment.endWeek + 1)
+      }
+      if (resource.endWeek != null) horizonEnd = Math.max(horizonEnd, resource.endWeek + 1)
+    }
+  }
+  const outputPeriods = Math.max(1, Math.ceil(horizonEnd / periodWeeks))
+
+  for (const rtId of plannedRtIds) {
+    const rt = rtById.get(rtId)!
+    const values = new Array<number>(horizonEnd).fill(0)
+    const envelope = capacity.get(rtId)!
+    for (let week = 0; week < horizonEnd; week++) {
+      const coarsePeriod = Math.floor(week / periodWeeks)
+      const envelopeHeadcount = envelope[coarsePeriod] ?? 0
+      const inRoleWindow = isWithinRoleWindow(rt, week)
+      const protectedFte = namedCapacityFte(rt, week)
+      const canMaterializeSynthetic = canMaterializeSyntheticCapacity(rt, envelopeHeadcount)
+      values[week] = !inRoleWindow || (!canMaterializeSynthetic && protectedFte <= FLOAT_EPSILON)
+        ? protectedFte
+        : Math.max(envelopeHeadcount, protectedFte)
+    }
+    weeklyCapacity.set(rtId, values)
+  }
+
+  const ranges: Array<{ startWeek: number; endWeek: number; coarsePeriod: number }> = []
+  for (let coarse = 0; coarse < outputPeriods; coarse++) {
+    const start = coarse * periodWeeks
+    const end = Math.min((coarse + 1) * periodWeeks, horizonEnd)
+    let runStart = start
+    for (let week = start + 1; week < end; week++) {
+      const changed = plannedRtIds.some(rtId =>
+        Math.abs(weeklyCapacity.get(rtId)![week] - weeklyCapacity.get(rtId)![week - 1]) > FLOAT_EPSILON ||
+        Math.abs(namedCapacityFte(rtById.get(rtId)!, week) - namedCapacityFte(rtById.get(rtId)!, week - 1)) > FLOAT_EPSILON)
+      if (!changed) continue
+      ranges.push({ startWeek: runStart, endWeek: week, coarsePeriod: coarse })
+      runStart = week
+    }
+    if (end > runStart) ranges.push({ startWeek: runStart, endWeek: end, coarsePeriod: coarse })
+  }
+  if (ranges.length === 0) ranges.push({ startWeek: 0, endWeek: horizonEnd, coarsePeriod: 0 })
+
   const periods: CapacityPlanPeriodResult[] = []
   let totalCost = 0
   let peakHeadcount = 0
   let totalUtilWeighted = 0
   let totalUtilWeight = 0
 
-  for (let p = 0; p < numPeriods; p++) {
-    const pStartWeek = p * periodWeeks
-    const pEndWeek = Math.min((p + 1) * periodWeeks, totalWeeks + 1)
-    const periodLabel = periodWeeks === 4 ? `Month ${p + 1}` : `Q${p + 1}`
+  for (const range of ranges) {
     let periodHeadcount = 0
     const resources: CapacityPlanPeriodResult['resources'] = []
-
     for (const rtId of plannedRtIds) {
       const rt = rtById.get(rtId)!
-      const headcount = capacity.get(rtId)![p]
-      const peak = peakFTE.get(rtId)![p]
-      const avg = avgFTE.get(rtId)![p]
+      const headcount = weeklyCapacity.get(rtId)![range.startWeek] ?? 0
+      const weeklyDemand = weeklyDemandByResourceType?.get(rtId) ?? []
+      let peak = 0
+      let totalFte = 0
+      for (let week = range.startWeek; week < range.endWeek; week++) {
+        const fte = weeklyDemandByResourceType
+          ? (weeklyDemand[week] ?? 0) / 5
+          : (avgFTE.get(rtId)?.[range.coarsePeriod] ?? 0)
+        peak = Math.max(peak, fte)
+        totalFte += fte
+      }
+      const width = range.endWeek - range.startWeek
+      const avg = width > 0 ? totalFte / width : 0
       const util = headcount > 0 ? (avg / headcount) * 100 : 0
       const dayRate = dayRates.get(rtId) ?? 0
-      const costForPeriod = headcount * dayRate * (pEndWeek - pStartWeek) * 5
+      const costForPeriod = headcount * dayRate * width * 5
       resources.push({
         resourceTypeId: rtId, resourceTypeName: rt.name,
         headcount: round2(headcount), peakDemandFTE: Math.round(peak * 100) / 100,
         avgDemandFTE: Math.round(avg * 100) / 100, utilisationPct: Math.round(util * 10) / 10,
         costForPeriod: Math.round(costForPeriod),
       })
-      totalCost += costForPeriod; periodHeadcount += headcount
-      totalUtilWeighted += util * headcount; totalUtilWeight += headcount
+      totalCost += costForPeriod
+      periodHeadcount += headcount
+      totalUtilWeighted += util * headcount
+      totalUtilWeight += headcount
     }
     if (periodHeadcount > peakHeadcount) peakHeadcount = periodHeadcount
-    periods.push({ periodIndex: p, periodLabel, startWeek: pStartWeek, endWeek: pEndWeek, resources })
+    const periodIndex = periods.length
+    const periodLabel = periodWeeks === 4 && range.endWeek - range.startWeek === 4
+      ? `Month ${range.coarsePeriod + 1}`
+      : periodWeeks === 13 && range.endWeek - range.startWeek === 13
+        ? `Q${range.coarsePeriod + 1}`
+        : `W${range.startWeek}-${range.endWeek}`
+    periods.push({ periodIndex, periodLabel, startWeek: range.startWeek, endWeek: range.endWeek, resources })
   }
 
-  const avgUtilisationPct = totalUtilWeight > 0 ? Math.round((totalUtilWeighted / totalUtilWeight) * 10) / 10 : 0
+  const avgUtilisationPct = totalUtilWeight > 0
+    ? Math.round((totalUtilWeighted / totalUtilWeight) * 10) / 10
+    : 0
   return {
     periods, totalCost: Math.round(totalCost), deliveryWeeks: levelResult.totalDeliveryWeeks,
     peakHeadcount, avgUtilisationPct,
@@ -300,19 +437,58 @@ function buildEnvelopeOutput(
 // ─── Resource type augmentation helpers (#481) ───────────────────────────────
 
 /** Maximum iterations for the joint planning loop. Derived from the bounded
- *  search space: each iteration adds one quantum to one role. The bound is
- *  proportional to total possible increments across all roles. */
+ * search space: each iteration adds one quantum to one role. The bound is
+ * proportional to total possible increments across all roles. */
 function computeMaxIterations(resourceTypes: SchedulerResourceType[], maxCap?: Map<string, number>): number {
   let totalSlots = 0
   for (const rt of resourceTypes) {
     const cap = maxCap?.get(rt.id) ?? 100
-    totalSlots += Math.ceil(cap / CAPACITY_QUANTUM)
+    totalSlots += Math.ceil(Math.max(0, cap) / CAPACITY_QUANTUM)
   }
-  return Math.min(totalSlots + 10, 200)
+  // Keep a finite safety bound even for unrestricted roles. The loop has a
+  // tighter useful-capacity stop, but this protects malformed inputs.
+  return Math.min(Math.max(totalSlots + 10, 32), 200)
 }
 
-/** Identify the primary bottleneck role: the role whose capacity-to-demand
- *  ratio is closest to 1.0 (fully utilised), breaking ties by total demand. */
+/** Effective capacity in FTE for a role, optionally at one scheduler week. */
+function currentCapacityFte(rt: SchedulerResourceType, week?: number): number {
+
+  if (week != null) {
+    if (rt.roleSegments !== undefined) {
+      const segmentCapacity = rt.roleSegments
+        .find(segment => week >= segment.startWeek && week <= segment.endWeek)
+        ?.allocationPercent
+      return (segmentCapacity ?? 0) / 100 + namedCapacityFte(rt, week)
+    }
+    const phantomCapacity = Math.max(0, rt.count - (rt.namedResources ?? []).length)
+    return phantomCapacity + namedCapacityFte(rt, week)
+  }
+
+  if (rt.roleSegments !== undefined) {
+    let maximum = 0
+    const weeks = new Set<number>()
+    for (const segment of rt.roleSegments) {
+      if (Number.isFinite(segment.startWeek)) weeks.add(segment.startWeek)
+      if (Number.isFinite(segment.endWeek)) weeks.add(segment.endWeek)
+    }
+    for (const resource of rt.namedResources ?? []) {
+      if (resource.startWeek != null) weeks.add(resource.startWeek)
+      if (resource.endWeek != null) weeks.add(resource.endWeek)
+      if (resource.allocationStartWeek != null) weeks.add(resource.allocationStartWeek)
+      if (resource.allocationEndWeek != null) weeks.add(resource.allocationEndWeek)
+      for (const segment of resource.capacitySegments ?? []) {
+        weeks.add(segment.startWeek)
+        weeks.add(segment.endWeek)
+      }
+    }
+    if (weeks.size === 0 && (rt.namedResources ?? []).length > 0) weeks.add(0)
+    for (const weekValue of weeks) maximum = Math.max(maximum, currentCapacityFte(rt, weekValue))
+    return maximum
+  }
+  return rt.count
+}
+
+/** Identify the role with the tightest weekly capacity-to-demand ratio. */
 function identifyBottleneckRole(
   weeklyDemandByRt: Map<string, number[]>,
   currentRts: SchedulerResourceType[],
@@ -323,115 +499,109 @@ function identifyBottleneckRole(
   for (const rt of currentRts) {
     const demand = weeklyDemandByRt.get(rt.id) ?? []
     let totalDemand = 0
-    for (const d of demand) totalDemand += d ?? 0
-    if (totalDemand <= EPSILON) continue
-
-    const maxWeeks = demand.length
-    const maxCapacityDays = rt.count * 5 * maxWeeks
-    if (maxCapacityDays <= EPSILON) continue
-    const ratio = totalDemand / maxCapacityDays
-    const score = ratio + totalDemand * 1e-10
-    if (score > bestScore) { bestScore = score; bestRt = rt.id }
+    let roleScore = 0
+    for (let week = 0; week < demand.length; week++) {
+      const days = demand[week] ?? 0
+      if (days <= EPSILON) continue
+      totalDemand += days
+      const capacityDays = currentCapacityFte(rt, week) * 5
+      roleScore = Math.max(roleScore, days / Math.max(capacityDays, EPSILON))
+    }
+    if (totalDemand <= EPSILON || roleScore < 0) continue
+    const score = roleScore + totalDemand * 1e-10
+    if (score > bestScore) {
+      bestScore = score
+      bestRt = rt.id
+    }
   }
   return bestRt
 }
 
-/** Effective candidate capacity (in FTE) of a resource type as seen by the
- *  scheduler. Profile-backed roles derive capacity from roleSegments
- *  allocationPercent (100% = 1 FTE); other roles from count. */
-function currentCapacityFte(rt: SchedulerResourceType): number {
-  if (rt.roleSegments && rt.roleSegments.length > 0) {
-    let maxPct = 0
-    for (const seg of rt.roleSegments) {
-      if (seg.allocationPercent > maxPct) maxPct = seg.allocationPercent
-    }
-    return maxPct / 100
-  }
-  return rt.count
+interface CapacityGrowthOptions {
+  /** Restrict profile growth to the segment containing this week. */
+  week?: number
+  /** Clamp effective aggregate capacity to this FTE maximum. */
+  maxFte?: number
 }
 
-/** Create a copy of resource types with capacity increased by one quantum
- *  for the specified role. For segment-free roles, increments rt.count.
- *  For profile-backed roles (roleSegments present), raises aggregate role
- *  capacity by 25 percentage points inside EVERY existing segment window.
- *  Segment boundaries and gaps are preserved — capacity is never created
- *  outside an existing segment. */
+/** Create a copy of resource types with capacity increased by one quantum.
+ * Two-argument callers retain the historical all-segment behaviour. */
 export function augmentResourceType(
   resourceTypes: SchedulerResourceType[],
   rtId: string,
+  options?: CapacityGrowthOptions,
 ): SchedulerResourceType[] {
   return resourceTypes.map(rt => {
     if (rt.id !== rtId) return rt
     if (!rt.roleSegments || rt.roleSegments.length === 0) {
-      return { ...rt, count: round2(rt.count + CAPACITY_QUANTUM) }
+      const namedCount = (rt.namedResources ?? []).length
+      const namedFte = options?.week == null ? 0 : namedCapacityFte(rt, options.week)
+      const maxCount = options?.maxFte == null
+        ? Infinity
+        : namedCount + Math.max(0, options.maxFte - namedFte)
+      if (rt.count >= maxCount - FLOAT_EPSILON) return rt
+      return { ...rt, count: round2(Math.min(maxCount, rt.count + CAPACITY_QUANTUM)) }
     }
-    // Profile-backed: adjust the aggregate role capacity by one quantum
-    // (0.25 FTE = 25 percentage points) per segment. The same representation
-    // is used for reduction so grow/reduce stays symmetric.
+
+    const targetWeek = options?.week
+    let updated = false
     return {
       ...rt,
-      roleSegments: rt.roleSegments.map(seg => ({
-        ...seg,
-        allocationPercent: seg.allocationPercent + CAPACITY_QUANTUM * 100,
-      })),
+      roleSegments: rt.roleSegments.map(segment => {
+        if (targetWeek != null &&
+          (targetWeek < segment.startWeek || targetWeek > segment.endWeek || updated)) return segment
+        const namedFte = targetWeek == null
+          ? namedCapacityFte(rt, segment.startWeek)
+          : namedCapacityFte(rt, targetWeek)
+        const maximumPercent = options?.maxFte == null
+          ? Infinity
+          : Math.max(0, options.maxFte - namedFte) * 100
+        if (segment.allocationPercent >= maximumPercent - FLOAT_EPSILON) return segment
+        updated = true
+        return {
+          ...segment,
+          allocationPercent: Math.min(
+            maximumPercent,
+            segment.allocationPercent + CAPACITY_QUANTUM * 100,
+          ),
+        }
+      }),
     }
   })
 }
 
-/** Create a copy of resource types with capacity reduced by one quantum
- *  for the specified role. For segment-free roles, decrements rt.count.
- *  For profile-backed roles (roleSegments present), lowers aggregate role
- *  capacity by 25 percentage points inside EVERY existing segment window,
- *  never below zero. Segment boundaries and gaps are preserved.
- *  Returns reduced=false when no further reduction is possible. */
+
+/** Create a copy of resource types with capacity reduced by one quantum. */
 export function reduceResourceType(
   resourceTypes: SchedulerResourceType[],
   rtId: string,
 ): { rts: SchedulerResourceType[]; reduced: boolean } {
   const originalRt = resourceTypes.find(rt => rt.id === rtId)
   if (!originalRt) return { rts: resourceTypes, reduced: false }
-
   const isSegmentBased = originalRt.roleSegments && originalRt.roleSegments.length > 0
-
   const newRts = resourceTypes.map(rt => {
     if (rt.id !== rtId) return rt
-    const roleSegments = rt.roleSegments
-    if (!isSegmentBased || !roleSegments || roleSegments.length === 0) {
-      const newCount = round2(rt.count - CAPACITY_QUANTUM)
-      return { ...rt, count: Math.max(0, newCount) }
+    if (!isSegmentBased || !rt.roleSegments || rt.roleSegments.length === 0) {
+      return { ...rt, count: Math.max(0, round2(rt.count - CAPACITY_QUANTUM)) }
     }
-    // Profile-backed: lower aggregate role capacity by one quantum
-    // (0.25 FTE = 25 percentage points) per segment, floor at zero.
     return {
       ...rt,
-      roleSegments: roleSegments.map(seg => ({
-        ...seg,
-        allocationPercent: Math.max(0, seg.allocationPercent - CAPACITY_QUANTUM * 100),
+      roleSegments: rt.roleSegments.map(segment => ({
+        ...segment,
+        allocationPercent: Math.max(0, segment.allocationPercent - CAPACITY_QUANTUM * 100),
       })),
     }
   })
-
-  // Report whether effective capacity actually decreased
   const newRt = newRts.find(rt => rt.id === rtId)
   if (!newRt) return { rts: newRts, reduced: false }
-
-  if (!isSegmentBased) {
-    // Count-based: reduced if count genuinely decreased
-    return { rts: newRts, reduced: newRt.count < originalRt.count - FLOAT_EPSILON }
+  if (!isSegmentBased) return { rts: newRts, reduced: newRt.count < originalRt.count - FLOAT_EPSILON }
+  return {
+    rts: newRts,
+    reduced: (newRt.roleSegments ?? []).some((segment, index) =>
+      segment.allocationPercent < (originalRt.roleSegments?.[index]?.allocationPercent ?? 0) - FLOAT_EPSILON),
   }
-  // Profile-backed: reduced if at least one segment's capacity decreased
-  const originalSegments = originalRt.roleSegments ?? []
-  const newSegments = newRt.roleSegments ?? []
-  let reducedPercent = false
-  for (let idx = 0; idx < newSegments.length; idx++) {
-    const origPct = originalSegments[idx]?.allocationPercent ?? 0
-    if (newSegments[idx].allocationPercent < origPct - FLOAT_EPSILON) {
-      reducedPercent = true
-      break
-    }
-  }
-  return { rts: newRts, reduced: reducedPercent }
 }
+
 
 
 /**
@@ -448,48 +618,7 @@ export function materializeEnvelopeToResourceTypes(
   periods: CapacityPlanPeriodResult[],
   _periodWeeks: number,
 ): SchedulerResourceType[] {
-  type Window = { startWeek: number; endWeek: number }
-  type SlotWindow = Window & { allocationPercent: number }
-
-  function profileWindows(rt: SchedulerResourceType): Window[] | null {
-    // A resolved role profile is an authoritative availability boundary. An
-    // empty profile is an explicit zero-capacity profile, not an unrestricted
-    // role.
-    if (rt.roleSegments) {
-      return rt.roleSegments.map(seg => ({ startWeek: seg.startWeek, endWeek: seg.endWeek }))
-    }
-
-    const named = rt.namedResources ?? []
-    if (named.length === 0) return null
-
-    const windows: Window[] = []
-    for (const nr of named) {
-      if (nr.capacitySegments && nr.capacitySegments.length > 0) {
-        windows.push(...nr.capacitySegments.map(seg => ({ startWeek: seg.startWeek, endWeek: seg.endWeek })))
-        continue
-      }
-
-      // Match getWeeklyCapacity: legacy availability bounds always apply.
-      // TIMELINE allocation bounds further restrict that physical window;
-      // unbounded legacy resources remain available throughout the envelope.
-      const availabilityStart = nr.startWeek ?? 0
-      const availabilityEnd = nr.endWeek ?? Infinity
-      if (nr.allocationMode === 'TIMELINE') {
-        const allocationStart = nr.allocationStartWeek ?? nr.startWeek ?? 0
-        const allocationEnd = nr.allocationEndWeek ?? nr.endWeek ?? Infinity
-        windows.push({
-          startWeek: Math.max(availabilityStart, allocationStart),
-          endWeek: Math.min(availabilityEnd, allocationEnd),
-        })
-      } else if (nr.startWeek != null || nr.endWeek != null) {
-        windows.push({ startWeek: availabilityStart, endWeek: availabilityEnd })
-      } else {
-        return null
-      }
-    }
-    return windows
-  }
-
+  type SlotWindow = { startWeek: number; endWeek: number; allocationPercent: number }
 
   return baseResourceTypes.map(rt => {
     const envelopeByPeriod: Array<{ startWeek: number; endWeek: number; headcount: number }> = []
@@ -508,8 +637,10 @@ export function materializeEnvelopeToResourceTypes(
     for (const ep of envelopeByPeriod) maxEnvelopeHeadcount = Math.max(maxEnvelopeHeadcount, ep.headcount)
     maxEnvelopeHeadcount = round2(maxEnvelopeHeadcount)
 
+    // Role-level profile windows are authoritative for aggregate capacity.
+    // Named-person availability is independent: when roleSegments is absent,
+    // preserve unrestricted phantom slots while retaining named windows.
     const preservedNamedResources = [...(rt.namedResources ?? [])]
-    const authorityWindows = profileWindows(rt)
     const addedWindows: SlotWindow[][] = []
 
     // Materialise only the shortfall over preserved named resources. This is
@@ -518,7 +649,7 @@ export function materializeEnvelopeToResourceTypes(
     // retaining it while adding a full envelope slot would double-count it.
     for (const ep of envelopeByPeriod) {
       for (let week = ep.startWeek; week < ep.endWeek; week++) {
-        if (authorityWindows != null && !authorityWindows.some(window => week >= window.startWeek && week <= window.endWeek)) continue
+        if (!isWithinRoleWindow(rt, week)) continue
 
         let preservedFte = 0
         for (const nr of preservedNamedResources) {
@@ -531,6 +662,13 @@ export function materializeEnvelopeToResourceTypes(
           }
           preservedFte += effectiveAllocationPct(nr, week) / 100
         }
+
+        // With no role profile, count slots beyond named resources are
+        // unrestricted. A named-only role remains tied to its people unless
+        // the envelope explicitly grows beyond the original count.
+        const canMaterializeSynthetic = canMaterializeSyntheticCapacity(rt, ep.headcount)
+        if (!canMaterializeSynthetic && preservedFte <= FLOAT_EPSILON) continue
+
         const remaining = Math.max(0, ep.headcount - preservedFte)
         const fullSlots = Math.floor(remaining + FLOAT_EPSILON)
         const fractional = remaining - fullSlots
@@ -666,7 +804,8 @@ export function computeCapacityPlan(
     : undefined
 
   return {
-    ...buildEnvelopeOutput(input, totalWeeks, periodWeeks, capacity, peakFTE, avgFTE, levelResult, config),
+    ...buildEnvelopeOutput(resourceTypes, totalWeeks, periodWeeks, capacity, avgFTE, levelResult, config,
+      saResult.weeklyDemandByResourceType),
     diagnostics,
   }
 }
@@ -715,6 +854,72 @@ export function computeJointPlan(
   let currentRts = [...input.resourceTypes]
   const allDiagnostics: PlannerDiagnostic[] = []
   let totalIterations = 0
+  // A protected named allocation above an explicit role cap cannot be
+  // represented truthfully: lowering the envelope would erase the named
+  // person, while retaining it would violate the configured maximum. Reject
+  // only demanded roles, since undemanded resource types are not part of
+  // this plan.
+  if (maxCap) {
+    for (const rt of input.resourceTypes) {
+      const cap = maxCap.get(rt.id)
+      if (cap == null) continue
+      const hasDemand = input.epics.some(epic => epic.isActive !== false &&
+        epic.features.some(feature => feature.isActive !== false &&
+          feature.userStories.some(story => story.isActive !== false &&
+            story.tasks.some(task => task.resourceTypeId === rt.id && task.hoursEffort > EPSILON))))
+      if (!hasDemand) continue
+
+      const weeks = new Set<number>([0])
+      const addBoundary = (value: number | null | undefined) => {
+        if (!Number.isFinite(value)) return
+        weeks.add(value!)
+        weeks.add(value! + 1)
+      }
+      for (const resource of rt.namedResources ?? []) {
+        addBoundary(resource.startWeek)
+        addBoundary(resource.endWeek)
+        addBoundary(resource.allocationStartWeek)
+        addBoundary(resource.allocationEndWeek)
+        for (const segment of resource.capacitySegments ?? []) {
+          addBoundary(segment.startWeek)
+          addBoundary(segment.endWeek)
+        }
+      }
+      const conflictWeek = [...weeks].sort((a, b) => a - b).find(week =>
+        namedCapacityFte(rt, week) > cap + FLOAT_EPSILON)
+      if (conflictWeek == null) continue
+      const protectedFte = namedCapacityFte(rt, conflictWeek)
+      const diagnostic: PlannerDiagnostic = {
+        blocker: 'ROLE_MAX_CAP',
+        resourceTypeId: rt.id,
+        resourceTypeName: rt.name,
+        configuredLimit: `${cap}`,
+        requested: `${protectedFte} FTE required in week ${conflictWeek}`,
+        achieved: `${cap} FTE maximum`,
+        explanation: `${rt.name} has ${protectedFte} FTE of protected named capacity in week ${conflictWeek}, above the configured ${cap} FTE maximum.`,
+      }
+      return {
+        periods: [],
+        totalCost: 0,
+        deliveryWeeks: Infinity,
+        peakHeadcount: 0,
+        avgUtilisationPct: 0,
+        budgetExceeded: false,
+        levellingResult: {
+          epicStartWeeks: new Map(),
+          featureStartWeeks: new Map(),
+          totalDeliveryWeeks: Infinity,
+          peakUtilisationPct: 0,
+        },
+        plannedResourceTypeIds: [],
+        diagnostics: [diagnostic],
+        iterations: 0,
+        loopDiagnostics: [diagnostic],
+        targetAchieved: false,
+      }
+    }
+  }
+
   let iteration = 0
 
   // ── Phase 1: Initial run ──────────────────────────────────────────────────
@@ -728,110 +933,165 @@ export function computeJointPlan(
     allDiagnostics.push(...error.diagnostics)
   }
 
-  // A failed run is recoverable when more capacity can still be consumed
-  // inside the unchanged profile window. The useful upper bound is the sum
-  // of the configured per-feature parallelism across active features; beyond
-  // that, another quarter-FTE cannot change the scheduler's constraints.
+  // A failed run is recoverable when a role still has useful capacity in its
+  // own available window. Each recovery candidate is raised to a finite,
+  // evidence-based throughput bound before the expensive planner is rerun.
   const maxUsefulParallelism = saConfig.maxParallelismPerFeature ?? 2
   function usefulCapacityFor(rtId: string): { capacity: number; activeFeatures: number } | undefined {
     let activeFeatures = 0
     for (const epic of input.epics) {
       for (const feature of epic.features) {
         if (feature.isActive === false) continue
-        const hasDemand = feature.userStories.some(story => story.isActive !== false &&
-          story.tasks.some(task => task.resourceTypeId === rtId))
-        if (hasDemand) activeFeatures++
+        let featureHasDemand = false
+        for (const story of feature.userStories) {
+          if (story.isActive === false) continue
+          for (const task of story.tasks) {
+            if (task.resourceTypeId !== rtId) continue
+            const hoursPerDay = task.resourceType?.hoursPerDay ?? input.project.hoursPerDay
+            if (hoursPerDay <= 0) continue
+            featureHasDemand = true
+          }
+        }
+        if (featureHasDemand) activeFeatures++
       }
     }
     if (activeFeatures === 0) return undefined
     const configuredMax = maxCap?.get(rtId)
+    // Each active feature may consume up to the configured parallelism
+    // allowance at once. This is a finite safe upper bound: hard windows can
+    // squeeze all of that work into the target, so do not use target-average
+    // effort as a smaller hidden cap.
+    const usefulCapacity = activeFeatures * maxUsefulParallelism
     return {
-      capacity: configuredMax == null
-        ? activeFeatures * maxUsefulParallelism
-        : Math.min(configuredMax, activeFeatures * maxUsefulParallelism),
+      capacity: configuredMax == null ? usefulCapacity : Math.min(configuredMax, usefulCapacity),
       activeFeatures,
     }
   }
 
-  let recoveryAttempts = 0
-  while (!initialSchedule && initialFailure && recoveryAttempts < maxIterations) {
-    // These blockers are independent of additional staffing. In particular,
-    // do not spend recovery runs rediscovering a dependency or lock limit.
-    if (initialFailure.diagnostics.some(d =>
-      d.blocker === 'DEPENDENCY_PATH' ||
-      d.blocker === 'FEATURE_PARALLELISM' ||
-      d.blocker === 'SCHEDULE_LOCK')) break
-
-    let growRtId: string | undefined
-    let maxBlockedRt: SchedulerResourceType | undefined
-    let maxBlocked: number | undefined
-    for (const diagnostic of initialFailure.diagnostics) {
-      if (!diagnostic.resourceTypeId) continue
-      const rt = currentRts.find(candidate => candidate.id === diagnostic.resourceTypeId)
-      if (!rt) continue
-      const configuredMax = maxCap?.get(rt.id)
-      if (configuredMax != null && currentCapacityFte(rt) >= configuredMax - FLOAT_EPSILON) {
-        maxBlockedRt = rt
-        maxBlocked = configuredMax
-        continue
+  function chooseGrowthWeeks(rt: SchedulerResourceType, demand: number[]): number[] {
+    const scoredWeeks: Array<{ week: number; score: number }> = []
+    for (let week = 0; week < demand.length; week++) {
+      const days = demand[week] ?? 0
+      if (days > EPSILON) {
+        scoredWeeks.push({
+          week,
+          score: days / Math.max(currentCapacityFte(rt, week) * 5, EPSILON),
+        })
       }
-      growRtId = rt.id
-      break
     }
-    if (!growRtId) {
-      if (maxBlockedRt && maxBlocked != null) {
+    if (scoredWeeks.length === 0 && rt.roleSegments && rt.roleSegments.length > 0) {
+      for (const segment of rt.roleSegments) {
+        scoredWeeks.push({ week: segment.startWeek, score: 0 })
+      }
+    }
+    if (scoredWeeks.length === 0) {
+      for (const resource of rt.namedResources ?? []) {
+        scoredWeeks.push({ week: resource.startWeek ?? 0, score: 0 })
+      }
+    }
+    if (scoredWeeks.length === 0) scoredWeeks.push({ week: 0, score: 0 })
+    scoredWeeks.sort((a, b) => b.score - a.score || a.week - b.week)
+    return [...new Set(scoredWeeks.map(candidate => candidate.week))]
+  }
+
+  function canGrowAt(rt: SchedulerResourceType, week: number, useful?: { capacity: number }): boolean {
+    // A role profile cannot be augmented at a week outside every configured
+    // segment. Rejecting that candidate here avoids no-op probes and repeated
+    // planner runs for a permanently unavailable profile window.
+    if (rt.roleSegments !== undefined &&
+      !rt.roleSegments.some(segment => week >= segment.startWeek && week <= segment.endWeek)) {
+      return false
+    }
+    const capacity = currentCapacityFte(rt, week)
+    if (useful && capacity >= useful.capacity - FLOAT_EPSILON) return false
+    const configuredMax = maxCap?.get(rt.id)
+    return configuredMax == null || capacity < configuredMax - FLOAT_EPSILON
+  }
+
+
+  let recoveryAttempts = 0
+  const recoveryProbes = new Set<string>()
+  while (!initialSchedule && initialFailure && recoveryAttempts < maxIterations) {
+    const diagnosticRoleIds = initialFailure.diagnostics
+      .map(diagnostic => diagnostic.resourceTypeId)
+      .filter((id): id is string => id != null)
+    const demandedRoleIds = currentRts
+      .filter(rt => usefulCapacityFor(rt.id) != null)
+      .map(rt => rt.id)
+    const orderedRoleIds = [...new Set([...diagnosticRoleIds, ...demandedRoleIds])]
+    let growth: { rt: SchedulerResourceType; week: number } | undefined
+    const blockedCaps = new Map<string, number>()
+
+    for (const roleId of orderedRoleIds) {
+      const rt = currentRts.find(candidate => candidate.id === roleId)
+      if (!rt) continue
+      const useful = usefulCapacityFor(roleId)
+      for (const week of chooseGrowthWeeks(rt, [])) {
+        if (!canGrowAt(rt, week, useful)) {
+          const configuredMax = maxCap?.get(rt.id)
+          if (configuredMax != null) blockedCaps.set(rt.id, configuredMax)
+          continue
+        }
+        const probeKey = `${roleId}:${week}:${currentCapacityFte(rt, week).toFixed(6)}`
+        if (!recoveryProbes.has(probeKey)) {
+          growth = { rt, week }
+          break
+        }
+      }
+      if (growth) break
+    }
+
+    if (!growth) {
+      for (const [roleId, configuredMax] of blockedCaps) {
+        const rt = currentRts.find(candidate => candidate.id === roleId)
+        if (!rt) continue
         allDiagnostics.push({
           blocker: 'ROLE_MAX_CAP',
-          resourceTypeId: maxBlockedRt.id,
-          resourceTypeName: maxBlockedRt.name,
-          configuredLimit: `${maxBlocked}`,
-          requested: `>${maxBlocked}`,
-          achieved: `${maxBlocked}`,
-          explanation: `${maxBlockedRt.name} is capped at ${maxBlocked}; the target requires more capacity.`,
+          resourceTypeId: rt.id,
+          resourceTypeName: rt.name,
+          configuredLimit: `${configuredMax}`,
+          requested: `>${configuredMax}`,
+          achieved: `${configuredMax}`,
+          explanation: `${rt.name} is capped at ${configuredMax}; the target requires more capacity.`,
         })
       }
       break
     }
 
-    const rt = currentRts.find(candidate => candidate.id === growRtId)
-    const useful = usefulCapacityFor(growRtId)
-    // Profile-backed capacity can only grow inside its existing windows. Jump
-    // to the evidence-based saturation point once, then let the SA result
-    // prove whether that bounded useful capacity is sufficient. This avoids
-    // repeatedly rerunning the same impossible profile-window schedule.
-    if (rt?.roleSegments && rt.roleSegments.length > 0 && useful) {
-      const currentCapacity = currentCapacityFte(rt)
-      if (currentCapacity >= useful.capacity - FLOAT_EPSILON) {
-        allDiagnostics.push({
-          blocker: 'FEATURE_PARALLELISM',
-          resourceTypeId: rt.id,
-          resourceTypeName: rt.name,
-          configuredLimit: `${maxUsefulParallelism} per active feature`,
-          requested: `>${currentCapacity}`,
-          achieved: `${currentCapacity}`,
-          explanation: `${rt.name} already has the maximum useful in-window capacity for ${useful.activeFeatures} active feature(s); further staffing cannot overcome the remaining constraint.`,
-        })
-        break
-      }
+    const { rt, week } = growth
+    const currentCapacity = currentCapacityFte(rt, week)
+    recoveryProbes.add(`${rt.id}:${week}:${currentCapacity.toFixed(6)}`)
 
-      while (currentCapacityFte(currentRts.find(candidate => candidate.id === growRtId)!) <
-        useful.capacity - FLOAT_EPSILON) {
-        currentRts = augmentResourceType(currentRts, growRtId)
-      }
-      recoveryAttempts++
-    } else {
-      currentRts = augmentResourceType(currentRts, growRtId)
-      recoveryAttempts++
-    }
+    // Recovery probes are evidence-gathering runs, not a reason to invoke SA
+    // once per quarter-FTE. Raise this role to the finite useful-throughput
+    // bound in one candidate, then run the expensive planner once.
+    const usefulTarget = usefulCapacityFor(rt.id)?.capacity
+    let nextCapacity = currentCapacity
+    let nextRts = currentRts
+    do {
+      const augmented = augmentResourceType(nextRts, rt.id, {
+        week,
+        maxFte: maxCap?.get(rt.id),
+      })
+      const candidate = augmented.find(candidateRt => candidateRt.id === rt.id)
+      const candidateCapacity = candidate ? currentCapacityFte(candidate, week) : nextCapacity
+      if (!candidate || candidateCapacity <= nextCapacity + FLOAT_EPSILON) break
+      nextRts = augmented
+      nextCapacity = candidateCapacity
+    } while (usefulTarget != null && nextCapacity < usefulTarget - FLOAT_EPSILON)
+
+    if (nextCapacity <= currentCapacity + FLOAT_EPSILON) continue
+    currentRts = nextRts
+    recoveryAttempts++
 
     try {
       initialSchedule = runSAPlanner({ ...input, resourceTypes: currentRts }, saConfig)
     } catch (error) {
       if (!(error instanceof SAPlannerInfeasibleError)) throw error
+      // Replace the active failure with the latest evidence, while retaining
+      // the diagnostic history for the operator-facing loop diagnostics.
+      initialFailure = error
       allDiagnostics.push(...error.diagnostics)
-      // A saturation probe that still fails is evidence that the remaining
-      // profile/dependency/parallelism constraint cannot be fixed by growth.
-      break
     }
   }
   totalIterations += recoveryAttempts
@@ -849,6 +1109,14 @@ export function computeJointPlan(
       targetAchieved: false,
     }
   }
+  // Use the successful post-recovery schedule and its actual resource
+  // representation as the starting-state evidence. Failed-run diagnostics
+  // describe infeasibility, but must not be guessed into the blocked-growth
+  // set once recovery has produced a schedule.
+  const initialDiags = initialSchedule.totalDeliveryWeeks > targetDurationWeeks
+    ? analyzeTargetMiss(initialSchedule, { ...input, resourceTypes: currentRts }, saConfig)
+    : []
+
 
   const initialDelivery = initialSchedule.totalDeliveryWeeks
   let bestResult = buildResult(initialSchedule, currentRts)
@@ -909,7 +1177,8 @@ export function computeJointPlan(
       totalDeliveryWeeks: sched.totalDeliveryWeeks,
       peakUtilisationPct: sched.peakUtilisationPct,
     }
-    return buildEnvelopeOutput(input, totalWeeks, periodWeeks, capacity, peakFTE, avgFTE, levelResult, config)
+    return buildEnvelopeOutput(rts, totalWeeks, periodWeeks, capacity, avgFTE, levelResult, config,
+      sched.weeklyDemandByResourceType)
   }
 
   // Keep the already-materialized envelope as the returned capacity. Refresh
@@ -985,72 +1254,113 @@ export function computeJointPlan(
   if (initialDelivery <= targetDurationWeeks) {
     // Target met on first run — skip to capacity reduction
   } else {
-    // Collect post-completion diagnostics from initial run
-    const initialDiags = analyzeTargetMiss(initialSchedule, input, saConfig)
-    allDiagnostics.push(...initialDiags)
+    // These diagnostics prove that more capacity for the affected role cannot
+    // change the observed schedule (for example demand beyond a closed
+    // profile window). Do not spend later SA runs re-proving that blocker.
+    const blockedGrowthRoles = new Set(
+      initialDiags
+        .filter(diagnostic =>
+          diagnostic.resourceTypeId != null &&
+          (diagnostic.blocker === 'PROFILE_WINDOW' ||
+            diagnostic.blocker === 'SCHEDULE_LOCK' ||
+            diagnostic.blocker === 'FEATURE_PARALLELISM'))
+        .map(diagnostic => diagnostic.resourceTypeId as string),
+    )
 
     // ── Phase 2: Iterative capacity growth ──────────────────────────────────
     let lastDelivery = initialDelivery
-    let consecutiveNoImprove = 0
-
+    const growthProbes = new Set<string>()
     while (iteration < maxIterations && lastDelivery > targetDurationWeeks) {
       iteration++
-      const bottleneckRtId = identifyBottleneckRole(lastSchedule!.weeklyDemandByResourceType, currentRts)
-      if (bottleneckRtId == null) break // no demand-driven bottleneck found
+      const demand = lastSchedule.weeklyDemandByResourceType
+      const primaryRoleId = identifyBottleneckRole(demand, currentRts)
+      if (primaryRoleId == null) break
 
-      // Check if explicit max cap prevents further growth for this role.
-      // Compare scheduler-effective FTE capacity (count for plain roles,
-      // roleSegments allocationPercent for profile-backed roles) so an
-      // explicit cap stays hard for both representations.
-      const maxForRole = maxCap?.get(bottleneckRtId)
-      const currentBottleneckRt = currentRts.find(rt => rt.id === bottleneckRtId)
-      const currentCapFte = currentBottleneckRt ? currentCapacityFte(currentBottleneckRt) : 0
-      if (maxForRole != null && currentCapFte >= maxForRole - FLOAT_EPSILON) {
-        // Role is at its explicit max — identify the next bottleneck
-        const remainingRts = currentRts.filter(rt => rt.id !== bottleneckRtId)
-        const nextBottleneck = identifyBottleneckRole(lastSchedule!.weeklyDemandByResourceType, remainingRts)
-        if (nextBottleneck == null) {
-          // All bottlenecks are at their explicit maxes
-          allDiagnostics.push({
-            blocker: 'ROLE_MAX_CAP',
-            resourceTypeId: bottleneckRtId,
-            resourceTypeName: currentRts.find(rt => rt.id === bottleneckRtId)?.name,
-            configuredLimit: `${maxForRole}`,
-            requested: `>${maxForRole}`,
-            achieved: `${maxForRole}`,
-            explanation: `${currentRts.find(rt => rt.id === bottleneckRtId)?.name} is capped at ${maxForRole}; target requires more capacity.`,
-          })
+      const orderedRoles = [
+        primaryRoleId,
+        ...currentRts
+          .filter(rt => rt.id !== primaryRoleId)
+          .map(rt => rt.id),
+      ]
+      let growthRole: SchedulerResourceType | undefined
+      let growthWeek = 0
+      let growthMax: number | undefined
+      for (const roleId of orderedRoles) {
+        const rt = currentRts.find(candidate => candidate.id === roleId)
+        if (!rt || blockedGrowthRoles.has(roleId)) continue
+        const useful = usefulCapacityFor(roleId)
+        for (const week of chooseGrowthWeeks(rt, demand.get(roleId) ?? [])) {
+          if (!canGrowAt(rt, week, useful)) continue
+          const probeKey = `${roleId}:${week}:${currentCapacityFte(rt, week).toFixed(6)}`
+          if (growthProbes.has(probeKey)) continue
+          growthRole = rt
+          growthWeek = week
+          growthMax = maxCap?.get(roleId)
+          growthProbes.add(probeKey)
           break
         }
-        currentRts = augmentResourceType(currentRts, nextBottleneck)
-      } else {
-        currentRts = augmentResourceType(currentRts, bottleneckRtId)
+        if (growthRole) break
       }
 
-      let newSchedule: SAPlannerResult
-      try {
-        newSchedule = runSAPlanner({ ...input, resourceTypes: currentRts }, saConfig)
-      } catch (error) {
-        if (!(error instanceof SAPlannerInfeasibleError)) throw error
-        allDiagnostics.push(...error.diagnostics)
-        // Can't grow further — stop growing
+      if (!growthRole) {
+        // Only report a hard cap when every demanded week for that role is
+        // already at the configured limit. A historical peak in an earlier
+        // segment must not cap a later under-capacity segment.
+        for (const rt of currentRts) {
+          const cap = maxCap?.get(rt.id)
+          const roleDemand = demand.get(rt.id) ?? []
+          if (cap == null || !roleDemand.some(days => days > EPSILON)) continue
+          const allDemandWeeksCapped = roleDemand.every((days, week) =>
+            days <= EPSILON || currentCapacityFte(rt, week) >= cap - FLOAT_EPSILON)
+          if (!allDemandWeeksCapped ||
+            allDiagnostics.some(diagnostic =>
+              diagnostic.blocker === 'ROLE_MAX_CAP' && diagnostic.resourceTypeId === rt.id)) continue
+          const totalDemand = roleDemand.reduce((sum, days) => sum + Math.max(0, days ?? 0), 0)
+          const requiredDays = targetDurationWeeks * cap * 5
+          if (totalDemand <= requiredDays + FLOAT_EPSILON) continue
+          allDiagnostics.push({
+            blocker: 'ROLE_MAX_CAP',
+            resourceTypeId: rt.id,
+            resourceTypeName: rt.name,
+            configuredLimit: `${cap}`,
+            requested: `>${cap} FTE needed for ${Math.round(totalDemand)} days in ${targetDurationWeeks} weeks`,
+            achieved: `${cap} FTE (${Math.round(cap * 5)} days/week)`,
+            explanation: `${rt.name} is capped at ${cap}; target requires more capacity.`,
+          })
+        }
         break
       }
 
-      lastSchedule = newSchedule
-      const newDelivery = newSchedule.totalDeliveryWeeks
+      const nextRts = augmentResourceType(currentRts, growthRole.id, {
+        week: growthWeek,
+        maxFte: growthMax,
+      })
+      const nextRole = nextRts.find(rt => rt.id === growthRole!.id)!
+      if (currentCapacityFte(nextRole, growthWeek) <=
+        currentCapacityFte(growthRole, growthWeek) + FLOAT_EPSILON) continue
+      currentRts = nextRts
 
-      if (newDelivery < lastDelivery) {
-        // Improvement — update best
-        bestResult = buildResult(newSchedule, currentRts)
-        bestSchedule = newSchedule
-        lastDelivery = newDelivery
-        consecutiveNoImprove = 0
-      } else {
-        consecutiveNoImprove++
-        if (consecutiveNoImprove >= 3) {
-          // No improvement for 3 consecutive iterations — stop growing
-          break
+      try {
+        const newSchedule = runSAPlanner({ ...input, resourceTypes: currentRts }, saConfig)
+        lastSchedule = newSchedule
+        const newDelivery = newSchedule.totalDeliveryWeeks
+        if (newDelivery < lastDelivery) {
+          bestResult = buildResult(newSchedule, currentRts)
+          bestSchedule = newSchedule
+          lastDelivery = newDelivery
+        }
+      } catch (error) {
+        if (!(error instanceof SAPlannerInfeasibleError)) throw error
+        // Preserve failed-probe evidence, but stop revisiting a role when
+        // diagnostics prove its remaining blocker is not capacity growth.
+        allDiagnostics.push(...error.diagnostics)
+        for (const diagnostic of error.diagnostics) {
+          if (diagnostic.resourceTypeId == null) continue
+          if (diagnostic.blocker === 'PROFILE_WINDOW' ||
+            diagnostic.blocker === 'SCHEDULE_LOCK' ||
+            diagnostic.blocker === 'FEATURE_PARALLELISM') {
+            blockedGrowthRoles.add(diagnostic.resourceTypeId)
+          }
         }
       }
     }
@@ -1201,10 +1511,35 @@ export function computeJointPlan(
   }
 
   // ── Phase 6: Final diagnostics from the best schedule ─────────────────────
-  if (bestSchedule && bestResult) {
-    if (bestResult.deliveryWeeks > targetDurationWeeks) {
-      const finalDiags = analyzeTargetMiss(bestSchedule, input, saConfig)
-      allDiagnostics.push(...finalDiags)
+  if (bestSchedule && bestResult && bestResult.deliveryWeeks > targetDurationWeeks) {
+    allDiagnostics.push(...analyzeTargetMiss(bestSchedule, input, saConfig))
+    // analyzeTargetMiss intentionally uses a tolerance for noisy estimates.
+    // A hard cap must still be reported for a small (even 5%) target miss.
+    for (const rt of currentRts) {
+      const cap = maxCap?.get(rt.id)
+      if (cap == null) continue
+      const demand = bestSchedule.weeklyDemandByResourceType.get(rt.id) ?? []
+      const demandWeeks = demand
+        .map((days, week) => ({ days: days ?? 0, week }))
+        .filter(entry => entry.days > EPSILON)
+      if (demandWeeks.length === 0) continue
+      // A role is hard-capped only when every week carrying demand is at the
+      // configured maximum. An earlier peak must not suppress later growth.
+      const allDemandWeeksCapped = demandWeeks.every(entry =>
+        currentCapacityFte(rt, entry.week) >= cap - FLOAT_EPSILON)
+      if (!allDemandWeeksCapped) continue
+      const totalDemand = demandWeeks.reduce((sum, entry) => sum + entry.days, 0)
+      if (totalDemand <= targetDurationWeeks * cap * 5 + FLOAT_EPSILON) continue
+      if (allDiagnostics.some(d => d.blocker === 'ROLE_MAX_CAP' && d.resourceTypeId === rt.id)) continue
+      allDiagnostics.push({
+        blocker: 'ROLE_MAX_CAP',
+        resourceTypeId: rt.id,
+        resourceTypeName: rt.name,
+        configuredLimit: `${cap}`,
+        requested: `>${cap} FTE needed for ${Math.round(totalDemand)} days in ${targetDurationWeeks} weeks`,
+        achieved: `${cap} FTE (${Math.round(cap * 5)} days/week)`,
+        explanation: `${rt.name} is capped at ${cap}; the target requires ${Math.round(totalDemand)} days in ${targetDurationWeeks} weeks.`,
+      })
     }
   }
 
@@ -1212,7 +1547,7 @@ export function computeJointPlan(
   // Surface the structured blockers on the returned result whenever the
   // final (reconciled) schedule misses the target, so callers see the same
   // diagnostics that explain targetAchieved: false (wire contract #481).
-  if (finalResult && finalResult.deliveryWeeks > targetDurationWeeks + FLOAT_EPSILON && !finalResult.diagnostics) {
+  if (finalResult && finalResult.deliveryWeeks > targetDurationWeeks + FLOAT_EPSILON) {
     finalResult = { ...finalResult, diagnostics: allDiagnostics }
   }
   if (!finalResult) {

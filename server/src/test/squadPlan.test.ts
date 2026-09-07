@@ -36,11 +36,18 @@ import {
   deriveFeatureSpanFromWeeklyAllocations,
   stripCapacityPlanMaterialization,
   buildReplayPlannerResourceTypes,
+  deriveSlotWindowsByResourceType,
 } from '../routes/squadPlan.js'
 import { buildSnapshot } from '../routes/snapshots.js'
+import { materializeProfilesForResourceType } from '../lib/squadPlannerProfileWriter.js'
 import type { CapacityPlanSlotWindow } from '../lib/capacityPlanMaterialisation.js'
-import type { SchedulerResourceType } from '../lib/scheduler.js'
+import type {
+  SchedulerInput,
+  SchedulerNamedResource,
+  SchedulerResourceType,
+} from '../lib/scheduler.js'
 import { getWeeklyCapacity } from '../lib/scheduler.js'
+import { runSAPlanner } from '../lib/sa-planner.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
 
 process.env.JWT_SECRET = 'test-secret'
@@ -262,7 +269,9 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
     expect(res.body.plannedResourceTypeIds).toEqual(['rt-dev'])
     expect(res.body.periods[0].resources[0]).toMatchObject({
       resourceTypeId: 'rt-dev',
-      headcount: 0.25,
+      // The resolved fixed role profile protects one full-time Developer;
+      // applied CAPACITY_PLAN materialization is still ignored on input.
+      headcount: 1,
     })
   })
 
@@ -774,7 +783,7 @@ function mockCapacityProfilesForApply(rtId = 'rt-dev', namedResourceIds: string[
   }) as any)
 }
 
-  it('refreshes demand from effort and preserves duration-weighted story spans', async () => {
+  it('refreshes demand, preserves child stories for manual features, and keeps duration-weighted spans', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
     mockCapacityProfilesForApply()
     vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
@@ -862,7 +871,9 @@ function mockCapacityProfilesForApply(rtId = 'rt-dev', namedResourceIds: string[
         ],
       },
     ] as never)
-    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([
+      { featureId: 'feature-1', startWeek: 0, durationWeeks: 4, isManual: true },
+    ] as never)
     vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
     vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
     vi.mocked(prisma.backlogSnapshot.create).mockResolvedValue({ id: 'snapshot-1' } as never)
@@ -947,6 +958,10 @@ function mockCapacityProfilesForApply(rtId = 'rt-dev', namedResourceIds: string[
     expect(storyRows).toEqual(expect.arrayContaining([
       expect.objectContaining({ storyId: 'story-1', durationWeeks: 3 }),
       expect.objectContaining({ storyId: 'story-2', durationWeeks: 2 }),
+    ]))
+    const featureRows = capturedTx.timelineEntry.createMany.mock.calls.at(-1)?.[0]?.data
+    expect(featureRows).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ featureId: 'feature-1' }),
     ]))
   })
 
@@ -1370,11 +1385,11 @@ describe('buildReplayPlannerResourceTypes (fix 3)', () => {
       slotWindows,
       maxHeadcount,
     )
-
     const replayed = result.find(rt => rt.id === 'rt-dev')!
-    // roleSegments must be cleared — the proposed plan IS the authority
-    expect(replayed.roleSegments).toBeUndefined()
-    // Named resources come from proposed plan, not old roleSegments
+
+    // roleSegments are replaced by an explicit empty marker and the
+    // proposed capacity is represented by CAPACITY_PLAN named slots.
+    expect(replayed.roleSegments).toEqual([])
     expect(replayed.namedResources).toHaveLength(2)
   })
 
@@ -1405,18 +1420,68 @@ describe('buildReplayPlannerResourceTypes (fix 3)', () => {
       slotWindows,
       maxHeadcount,
     )
-
     const replayed = result.find(rt => rt.id === 'rt-dev')!
-    expect(replayed.roleSegments).toBeUndefined()
+
+    expect(replayed.roleSegments).toEqual([])
 
     // Single NR at 50% = 20h/week (not role 100% = 40h)
     const capacity = getWeeklyCapacity(replayed, 5, 8)
     // 50% of 40h = 20h exactly (proposed plan only, no old roleSegments)
     expect(capacity).toBe(20)
   })
+  it('preserves named availability and adds only the per-week shortfall', () => {
+    const protectedResource: SchedulerNamedResource = {
+      id: 'nr-manual',
+      name: 'Developer 1',
+      startWeek: 4,
+      endWeek: 6,
+      allocationPct: 50,
+      allocationMode: 'TIMELINE',
+      allocationPercent: 50,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    }
+    const existingRT: SchedulerResourceType = {
+      id: 'rt-dev',
+      name: 'Developer',
+      count: 1,
+      hoursPerDay: 8,
+      namedResources: [protectedResource],
+      roleSegments: [{ startWeek: 0, endWeek: 10, allocationPercent: 100 }],
+    }
+    const slotWindows = new Map<string, CapacityPlanSlotWindow[]>([
+      ['rt-dev', [{ startWeek: 2, endWeek: 6, allocationPercent: 100 }]],
+    ])
+
+    const [replayed] = buildReplayPlannerResourceTypes(
+      [existingRT],
+      slotWindows,
+      new Map([['rt-dev', 1]]),
+    )
+
+    expect(replayed.namedResources?.[0]).toEqual(protectedResource)
+    expect(replayed.namedResources?.slice(1)).toEqual([
+      expect.objectContaining({
+        allocationMode: 'CAPACITY_PLAN',
+        startWeek: 2,
+        endWeek: 3,
+        allocationPercent: 100,
+      }),
+      expect.objectContaining({
+        allocationMode: 'CAPACITY_PLAN',
+        startWeek: 4,
+        endWeek: 6,
+        allocationPercent: 50,
+      }),
+    ])
+    expect(replayed.roleSegments).toEqual([])
+    expect([2, 3, 4, 5, 6].map(week => getWeeklyCapacity(replayed, week, 8)))
+      .toEqual([40, 40, 40, 40, 40])
+  })
 
   it('unaffected resource types keep their roleSegments', () => {
     const existingRTs: SchedulerResourceType[] = [
+
       {
         id: 'rt-affected',
         name: 'Affected',
@@ -1454,10 +1519,9 @@ describe('buildReplayPlannerResourceTypes (fix 3)', () => {
       slotWindows,
       maxHeadcount,
     )
-
     const affected = result.find(rt => rt.id === 'rt-affected')!
-    expect(affected.roleSegments).toBeUndefined()
 
+    expect(affected.roleSegments).toEqual([])
     const unaffected = result.find(rt => rt.id === 'rt-unaffected')!
     expect(unaffected.roleSegments).toBeDefined()
     expect(unaffected.roleSegments).toHaveLength(1)
@@ -1492,6 +1556,175 @@ describe('buildReplayPlannerResourceTypes (fix 3)', () => {
     )
 
     expect(result1).toEqual(result2)
+  })
+})
+describe('apply replay preserves generated windows', () => {
+  it('replays a split zero-gap envelope with the same capacity and schedule', () => {
+    const input: SchedulerInput = {
+      project: { hoursPerDay: 8 },
+      resourceTypes: [{
+        id: 'rt-dev',
+        name: 'Developer',
+        count: 1,
+        hoursPerDay: 8,
+        roleSegments: [{ startWeek: 2, endWeek: 3, allocationPercent: 100 }],
+        namedResources: [],
+      }],
+      epics: [{
+        id: 'epic-1',
+        name: 'Epic 1',
+        order: 0,
+        isActive: true,
+        featureMode: 'sequential',
+        scheduleMode: 'sequential',
+        timelineStartWeek: null,
+        features: [{
+          id: 'feature-1',
+          order: 0,
+          isActive: true,
+          timelineStartWeek: null,
+          dependencies: [],
+          userStories: [{
+            id: 'story-1',
+            order: 0,
+            isActive: true,
+            tasks: [{
+              resourceTypeId: 'rt-dev',
+              hoursEffort: 40,
+              durationDays: null,
+              resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+            }],
+          }],
+        }],
+      }],
+      epicDeps: [],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+      resourceLevel: false,
+    }
+    const periods = [
+      {
+        periodIndex: 0,
+        startWeek: 0,
+        endWeek: 2,
+        entries: [{ resourceTypeId: 'rt-dev', headcount: 0, demandFTE: 0, utilisationPct: 0 }],
+      },
+      {
+        periodIndex: 1,
+        startWeek: 2,
+        endWeek: 4,
+        entries: [{ resourceTypeId: 'rt-dev', headcount: 1, demandFTE: 1, utilisationPct: 100 }],
+      },
+    ]
+
+    const slotWindows = deriveSlotWindowsByResourceType(periods)
+    const replayed = buildReplayPlannerResourceTypes(
+      input.resourceTypes,
+      slotWindows,
+      new Map([['rt-dev', 1]]),
+    )
+    const replaySchedule = runSAPlanner(
+      { ...input, resourceTypes: replayed },
+      { targetDurationWeeks: 3, maxParallelismPerFeature: 2 },
+    )
+
+    expect([0, 1, 2, 3, 4].map(week => getWeeklyCapacity(replayed[0], week, 8)))
+      .toEqual([0, 0, 40, 40, 0])
+    expect(replaySchedule.featureStartWeeks.get('feature-1')).toBe(2)
+    expect(replaySchedule.totalDeliveryWeeks).toBe(3)
+  })
+  it('keeps explicit zero gaps and fractional slots in persistence-ready profiles', () => {
+    const periods = [
+      {
+        periodIndex: 0,
+        startWeek: 0,
+        endWeek: 2,
+        entries: [{ resourceTypeId: 'rt-dev', headcount: 0, demandFTE: 0, utilisationPct: 0 }],
+      },
+      {
+        periodIndex: 1,
+        startWeek: 2,
+        endWeek: 4,
+        entries: [{ resourceTypeId: 'rt-dev', headcount: 0.5, demandFTE: 0.5, utilisationPct: 100 }],
+      },
+      {
+        periodIndex: 2,
+        startWeek: 4,
+        endWeek: 5,
+        entries: [{ resourceTypeId: 'rt-dev', headcount: 0.25, demandFTE: 0.25, utilisationPct: 100 }],
+      },
+      {
+        periodIndex: 3,
+        startWeek: 5,
+        endWeek: 6,
+        entries: [{ resourceTypeId: 'rt-dev', headcount: 0, demandFTE: 0, utilisationPct: 0 }],
+      },
+    ]
+    const slotWindows = deriveSlotWindowsByResourceType(periods)
+    const expectedWeeklyCapacity = [0, 0, 20, 20, 10, 0]
+
+    // Replay consumes slot windows as per-resource trajectories. Assert the
+    // observable capacity rather than coupling this test to that decomposition.
+    const replayed = buildReplayPlannerResourceTypes(
+      [{
+        id: 'rt-dev',
+        name: 'Developer',
+        count: 0,
+        hoursPerDay: 8,
+        namedResources: [],
+      }],
+      slotWindows,
+      new Map([['rt-dev', 1]]),
+    )
+    expect([0, 1, 2, 3, 4, 5].map(week => getWeeklyCapacity(replayed[0], week, 8)))
+      .toEqual(expectedWeeklyCapacity)
+
+    const persisted = materializeProfilesForResourceType(
+      'rt-dev',
+      'Developer',
+      periods,
+      [{ id: 'nr-planned', name: 'Developer 1' }],
+    )
+    const roleResource: SchedulerResourceType = {
+      id: 'rt-dev',
+      name: 'Developer',
+      count: 1,
+      hoursPerDay: 8,
+      roleSegments: persisted.roleProfile.segments.map(segment => ({
+        startWeek: segment.startWeek,
+        endWeek: segment.endWeek,
+        allocationPercent: segment.capacityPercent,
+      })),
+      namedResources: [],
+    }
+    expect([0, 1, 2, 3, 4, 5].map(week => getWeeklyCapacity(roleResource, week, 8)))
+      .toEqual(expectedWeeklyCapacity)
+
+    const plannedResource: SchedulerResourceType = {
+      id: 'rt-dev',
+      name: 'Developer',
+      count: 1,
+      hoursPerDay: 8,
+      roleSegments: [],
+      namedResources: persisted.plannedProfiles.map(profile => ({
+        id: profile.namedResourceId,
+        name: 'Developer 1',
+        startWeek: profile.startWeek,
+        endWeek: profile.endWeek,
+        allocationPct: profile.defaultPercent ?? 0,
+        allocationMode: 'CAPACITY_PLAN',
+        allocationPercent: profile.defaultPercent ?? 0,
+        allocationStartWeek: null,
+        allocationEndWeek: null,
+        capacitySegments: profile.segments.map(segment => ({
+          startWeek: segment.startWeek,
+          endWeek: segment.endWeek,
+          allocationPercent: segment.capacityPercent,
+        })),
+      })),
+    }
+    expect([0, 1, 2, 3, 4, 5].map(week => getWeeklyCapacity(plannedResource, week, 8)))
+      .toEqual(expectedWeeklyCapacity)
   })
 })
 

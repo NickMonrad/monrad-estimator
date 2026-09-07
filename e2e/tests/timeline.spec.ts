@@ -1568,7 +1568,17 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
       { timeout: 30_000 },
     )
     await generateBtn.click()
-    await planResponse
+    const generatedPlanResponse = await planResponse
+    expect(generatedPlanResponse.ok()).toBeTruthy()
+    const generatedPlan = await generatedPlanResponse.json() as {
+      deliveryWeeks: number
+      periods: Array<{
+        startWeek: number
+        endWeek: number
+        resources: Array<{ resourceTypeName: string; headcount: number }>
+      }>
+      levellingResult?: { featureStartWeeks?: Record<string, number> }
+    }
 
     // Wait for result KPIs — Peak, Delivery, Planned squad cost, Avg Utilisation
     await expect(drawer.getByText(/Peak/i)).toBeVisible({ timeout: 10_000 })
@@ -1600,6 +1610,76 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     expect(applyData.id).toBeTruthy()
     expect(typeof applyData.id).toBe('string')
     expect(applyData.isActive).toBe(true)
+    // Apply must replay the same validated schedule and weekly capacity that
+    // generation returned, rather than reconstructing a coarse whole-horizon
+    // period.
+    const plannerToken = await page.evaluate(() => localStorage.getItem('token'))
+    expect(plannerToken).toBeTruthy()
+    const appliedTimelineResponse = await page.request.get(`/api/projects/${projectId}/timeline`, {
+      headers: { Authorization: `Bearer ${plannerToken}` },
+    })
+    expect(appliedTimelineResponse.ok()).toBeTruthy()
+    const appliedTimeline = await appliedTimelineResponse.json() as {
+      entries: Array<{ featureId: string; startWeek: number; durationWeeks: number }>
+      weeklyCapacity: Array<{ week: number; resourceTypeName: string; capacityDays: number }>
+    }
+
+    const generatedStarts = generatedPlan.levellingResult?.featureStartWeeks ?? {}
+    const appliedStarts = Object.fromEntries(
+      appliedTimeline.entries.map(entry => [entry.featureId, entry.startWeek]),
+    )
+    expect(Object.keys(appliedStarts).sort()).toEqual(Object.keys(generatedStarts).sort())
+    for (const [featureId, startWeek] of Object.entries(generatedStarts)) {
+      expect(appliedStarts[featureId], `Applied timeline is missing generated feature ${featureId}`).toBe(startWeek)
+    }
+    const persistedDeliveryWeeks = appliedTimeline.entries.reduce(
+      (latest, entry) => Math.max(latest, entry.startWeek + entry.durationWeeks),
+      0,
+    )
+    expect(persistedDeliveryWeeks).toBeCloseTo(generatedPlan.deliveryWeeks, 6)
+
+    const generatedResource = generatedPlan.periods
+      .flatMap(period => period.resources.map(resource => ({
+        ...resource,
+        startWeek: period.startWeek,
+        endWeek: period.endWeek,
+      })))
+      .find(resource => resource.headcount > 0)
+    expect(generatedResource, 'Generated plan did not contain staffed capacity').toBeDefined()
+    const expectedCapacityByWeek = new Map<number, number>()
+    for (const period of generatedPlan.periods) {
+      const resource = period.resources.find(
+        candidate => candidate.resourceTypeName === generatedResource!.resourceTypeName,
+      )
+      const capacityDays = (resource?.headcount ?? 0) * 5
+      for (let week = period.startWeek; week < period.endWeek; week++) {
+        expectedCapacityByWeek.set(week, capacityDays)
+      }
+    }
+    const actualCapacityByWeek = new Map<number, number>()
+    for (const row of appliedTimeline.weeklyCapacity) {
+      if (row.resourceTypeName !== generatedResource!.resourceTypeName) continue
+      actualCapacityByWeek.set(row.week, (actualCapacityByWeek.get(row.week) ?? 0) + row.capacityDays)
+    }
+    const allCapacityWeeks = new Set([...expectedCapacityByWeek.keys(), ...actualCapacityByWeek.keys()])
+    for (const week of allCapacityWeeks) {
+      expect(actualCapacityByWeek.get(week) ?? 0).toBeCloseTo(expectedCapacityByWeek.get(week) ?? 0, 6)
+    }
+
+    /*
+     * Keep this explicit parity assertion: a plan that only happens to
+     * overlap on one positive week is not an apply round-trip.
+     */
+    expect(
+      [...actualCapacityByWeek.entries()]
+        .filter(([, capacityDays]) => capacityDays > 0)
+        .map(([week]) => week),
+    ).toEqual(
+      [...expectedCapacityByWeek.entries()]
+        .filter(([, capacityDays]) => capacityDays > 0)
+        .map(([week]) => week),
+    )
+
     expect(applyData.name).toBeTruthy()
 
     // Drawer closes after successful apply

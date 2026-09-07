@@ -18,7 +18,12 @@ import { effortDays, scheduleDurationDays } from '../utils/round.js'
 import { ownedProject } from '../lib/ownership.js'
 import { buildSnapshot } from './snapshots.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
-import { runScheduler, type SchedulerInput, type SchedulerResourceType } from '../lib/scheduler.js'
+import {
+  getWeeklyCapacity,
+  runScheduler,
+  type SchedulerInput,
+  type SchedulerResourceType,
+} from '../lib/scheduler.js'
 import { levelEpicStarts } from '../lib/leveller.js'
 import { runSAPlanner } from '../lib/sa-planner.js'
 import {
@@ -235,24 +240,102 @@ export function buildReplayPlannerResourceTypes(
 
     if (!slotWindows || maxHeadcount == null) return resourceType
 
+    const existingNamedResources = resourceType.namedResources ?? []
+    const hoursPerDay = resourceType.hoursPerDay ?? 8
+    const namedOnlyResourceType: SchedulerResourceType = {
+      ...resourceType,
+      count: existingNamedResources.length,
+      roleSegments: undefined,
+      namedResources: existingNamedResources,
+    }
+
+    // The generated envelope is aggregate capacity. Keep protected/manual
+    // named resources untouched and add only the shortfall as synthetic
+    // CAPACITY_PLAN slots. This prevents replay from inventing availability
+    // outside a named person's actual window.
+    const requiredFteByWeek = new Map<number, number>()
+    for (const window of slotWindows) {
+      for (let week = window.startWeek; week <= window.endWeek; week++) {
+        requiredFteByWeek.set(
+          week,
+          (requiredFteByWeek.get(week) ?? 0) + window.allocationPercent / 100,
+        )
+      }
+    }
+
+    const existingFteByWeek = new Map<number, number>()
+    for (const week of requiredFteByWeek.keys()) {
+      existingFteByWeek.set(
+        week,
+        getWeeklyCapacity(namedOnlyResourceType, week, hoursPerDay) / (hoursPerDay * 5),
+      )
+    }
+
+    const syntheticWindows: CapacityPlanSlotWindow[] = []
+    const openWindows: Array<CapacityPlanSlotWindow | null> = []
+    const requiredWeeks = [...requiredFteByWeek.keys()].sort((a, b) => a - b)
+    for (const week of requiredWeeks) {
+      const required = requiredFteByWeek.get(week) ?? 0
+      const existing = existingFteByWeek.get(week) ?? 0
+      let remainingPercent = Math.round(Math.max(0, required - existing) * 100)
+      const slotPercents: number[] = []
+      while (remainingPercent > 0) {
+        const slotPercent = Math.min(100, remainingPercent)
+        slotPercents.push(slotPercent)
+        remainingPercent -= slotPercent
+      }
+
+      const slotCount = Math.max(openWindows.length, slotPercents.length)
+      for (let slot = 0; slot < slotCount; slot++) {
+        const allocationPercent = slotPercents[slot] ?? 0
+        const openWindow = openWindows[slot]
+        if (allocationPercent <= 0) {
+          if (openWindow) syntheticWindows.push(openWindow)
+          openWindows[slot] = null
+          continue
+        }
+
+        if (
+          openWindow &&
+          openWindow.endWeek + 1 === week &&
+          openWindow.allocationPercent === allocationPercent
+        ) {
+          openWindow.endWeek = week
+          continue
+        }
+
+        if (openWindow) syntheticWindows.push(openWindow)
+        openWindows[slot] = {
+          startWeek: week,
+          endWeek: week,
+          allocationPercent,
+        }
+      }
+    }
+    for (const openWindow of openWindows) {
+      if (openWindow) syntheticWindows.push(openWindow)
+    }
+
+    const syntheticNamedResources = syntheticWindows.map((window, index) => ({
+      id: `capacity-plan-${resourceType.id}-${index}`,
+      name: `${resourceType.name} ${existingNamedResources.length + index + 1}`,
+      startWeek: window.startWeek,
+      endWeek: window.endWeek,
+      allocationPct: window.allocationPercent,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: window.allocationPercent,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    }))
+
     return {
       ...resourceType,
       count: maxHeadcount,
-      // Clear stale roleSegments: the proposed plan IS the authoritative
-      // capacity for affected resource types. Retaining old roleSegments
-      // would cause getWeeklyCapacity() to double-count (defect #362 fix 3).
-      roleSegments: undefined,
-      namedResources: slotWindows.map((slotWindow, idx) => ({
-        id: `capacity-plan-${resourceType.id}-${idx}`,
-        name: `${resourceType.name} ${idx + 1}`,
-        startWeek: slotWindow.startWeek,
-        endWeek: slotWindow.endWeek,
-        allocationPct: slotWindow.allocationPercent,
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: slotWindow.allocationPercent,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-      })),
+      // An explicit empty role profile suppresses the old aggregate role or
+      // phantom-slot fallback. Capacity is now exactly existing names plus
+      // the synthetic shortfall windows above.
+      roleSegments: [],
+      namedResources: [...existingNamedResources, ...syntheticNamedResources],
     }
   })
 }
@@ -404,7 +487,7 @@ export function deriveSlotSegments(
  *
  * This replaces deriveSlotSegmentsByResourceType in the apply path.
  */
-function deriveSlotWindowsByResourceType(periods: ApplyPeriod[]): Map<string, CapacityPlanSlotWindow[]> {
+export function deriveSlotWindowsByResourceType(periods: ApplyPeriod[]): Map<string, CapacityPlanSlotWindow[]> {
   // ApplyPeriod is a superset of CapacityPlanPeriodInput — extra entry fields
   // (demandFTE, utilisationPct) are simply ignored by the materialisation lib.
   const materialized = materializeCapacityPlanResources(periods as unknown as CapacityPlanPeriodInput[])
@@ -657,6 +740,8 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       })
 
       const hpd = project.hoursPerDay
+      const manualFeatureIds = new Set(schedulerInput.manualFeatureEntries.map(entry => entry.featureId))
+      const manualStoryIds = new Set(schedulerInput.manualStoryEntries.map(entry => entry.storyId))
       const featureStartWeeks = clientLevellingResult.featureStartWeeks
 
       for (const epic of allEpics) {
@@ -672,14 +757,18 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             fallbackStartWeek,
           )
 
-          const activeStories = feature.userStories.filter(s => s.isActive !== false)
-          pfFeatureRows.push({
-            projectId,
-            featureId: feature.id,
-            startWeek: span.startWeek,
-            durationWeeks: span.durationWeeks,
-            isManual: false as const,
-          })
+          const activeStories = feature.userStories.filter(
+            story => story.isActive !== false && !manualStoryIds.has(story.id),
+          )
+          if (!manualFeatureIds.has(feature.id)) {
+            pfFeatureRows.push({
+              projectId,
+              featureId: feature.id,
+              startWeek: span.startWeek,
+              durationWeeks: span.durationWeeks,
+              isManual: false as const,
+            })
+          }
 
           const storyScheduleDays = new Map<string, number>()
           for (const story of activeStories) {
