@@ -74,15 +74,19 @@ async function setupTimeline(
     { timeout: 10_000 },
   )
   const projectRefreshResponse = page.waitForResponse(
-    response =>
-      new URL(response.url()).pathname === `/api/projects/${projectId}` &&
-      response.request().method() === 'GET',
+    async response => {
+      if (new URL(response.url()).pathname !== `/api/projects/${projectId}` || response.request().method() !== 'GET') return false
+      if (response.status() !== 200) return true
+      return String((await response.json()).startDate ?? '').startsWith('2026-06-01')
+    },
     { timeout: 10_000 },
   )
   const timelineRefreshResponse = page.waitForResponse(
-    response =>
-      new URL(response.url()).pathname === `/api/projects/${projectId}/timeline` &&
-      response.request().method() === 'GET',
+    async response => {
+      if (new URL(response.url()).pathname !== `/api/projects/${projectId}/timeline` || response.request().method() !== 'GET') return false
+      if (response.status() !== 200) return true
+      return String((await response.json()).startDate ?? '').startsWith('2026-06-01')
+    },
     { timeout: 10_000 },
   )
   await dateInput.fill('2026-06-01')
@@ -106,9 +110,11 @@ async function setupTimeline(
     { timeout: 15_000 },
   )
   const scheduledTimelineResponse = page.waitForResponse(
-    response =>
-      new URL(response.url()).pathname === `/api/projects/${projectId}/timeline` &&
-      response.request().method() === 'GET',
+    async response => {
+      if (new URL(response.url()).pathname !== `/api/projects/${projectId}/timeline` || response.request().method() !== 'GET') return false
+      if (response.status() !== 200) return true
+      return (await response.json()).entries?.length === featureCount
+    },
     { timeout: 15_000 },
   )
   await quickSchedule(page)
@@ -224,9 +230,12 @@ test.describe('Gantt Chart', () => {
       { timeout: 10_000 },
     )
     const timelineRefreshResponse = page.waitForResponse(
-      response =>
-        new URL(response.url()).pathname === `/api/projects/${projectId}/timeline` &&
-        response.request().method() === 'GET',
+      async response => {
+        if (new URL(response.url()).pathname !== `/api/projects/${projectId}/timeline` || response.request().method() !== 'GET') return false
+        if (response.status() !== 200) return true
+        const timeline = await response.json() as { entries: Array<{ startWeek: number; isManual: boolean }> }
+        return timeline.entries.some(entry => entry.startWeek === 2 && entry.isManual)
+      },
       { timeout: 10_000 },
     )
 
