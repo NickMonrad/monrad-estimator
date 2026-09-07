@@ -1,0 +1,50 @@
+name: One-off licence audit
+on:
+  push:
+    branches: [docs/mit-license]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install production dependencies without lifecycle scripts
+        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+      - name: Collect package licence evidence
+        run: |
+          mkdir -p .license-audit
+          npm exec --yes --package=license-checker-rseidelsohn@5.0.1 -- license-checker-rseidelsohn --production --json --out .license-audit/packages.json --files .license-audit/license-files
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          import path from 'node:path'
+          const data = JSON.parse(fs.readFileSync('.license-audit/packages.json', 'utf8'))
+          const output = ['# Third-party licence evidence', '', 'Generated from the production npm installation for the PR #491 review. This is an audit artefact, not an approved release notice.', '']
+          const unresolved = []
+          for (const [name, info] of Object.entries(data).sort(([a], [b]) => a.localeCompare(b))) {
+            output.push(`## ${name}`, '', `Declared licence: ${info.licenses || 'UNKNOWN'}`, '')
+            if (!info.licenses || /UNKNOWN|UNLICENSED|\*/i.test(info.licenses)) unresolved.push(name)
+            if (info.licenseFile && fs.existsSync(info.licenseFile)) {
+              output.push('### Original licence file', '', '```text', fs.readFileSync(info.licenseFile, 'utf8').replace(/```/g, '` ` `'), '```', '')
+              for (const file of fs.readdirSync(path.dirname(info.licenseFile)).filter(x => /^NOTICE(?:[._-].*)?$/i.test(x))) {
+                output.push(`### ${file}`, '', '```text', fs.readFileSync(path.join(path.dirname(info.licenseFile), file), 'utf8').replace(/```/g, '` ` `'), '```', '')
+              }
+            } else {
+              unresolved.push(name)
+              output.push('Original licence file not located; manual review required.', '')
+            }
+          }
+          fs.writeFileSync('.license-audit/THIRD_PARTY_NOTICES.md', output.join('\n'))
+          fs.writeFileSync('.license-audit/unresolved.txt', [...new Set(unresolved)].join('\n') + '\n')
+          console.log(`Collected ${Object.keys(data).length} packages; ${new Set(unresolved).size} require manual review.`)
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: licence-audit
+          path: .license-audit/
+          if-no-files-found: warn
