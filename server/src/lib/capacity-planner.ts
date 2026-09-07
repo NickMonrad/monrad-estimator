@@ -11,7 +11,7 @@
  * infeasibility is proven.
  */
 
-import { type SchedulerInput, type SchedulerResourceType } from './scheduler.js'
+import { effectiveAllocationPct, type SchedulerInput, type SchedulerResourceType } from './scheduler.js'
 import { type LevellingResult } from './leveller.js'
 import {
   runSAPlanner,
@@ -120,6 +120,7 @@ function deriveCapacityEnvelope(
   peakFTE: Map<string, number[]>,
   avgFTE: Map<string, number[]>,
   config: CapacityPlanConfig,
+  envelopeBuffer = 1.1,
 ): Map<string, number[]> {
   const { maxDeltaPerPeriod, smoothingMode = 'smooth', minFloor, maxCap, maxAllocationBufferPct } = config
   const numPeriods = Math.max(1, Math.ceil(totalWeeks / periodWeeks))
@@ -140,7 +141,6 @@ function deriveCapacityEnvelope(
   }
 
   const capacity = new Map<string, number[]>()
-  const envelopeBuffer = 1.1
 
   for (const rtId of plannedRtIds) {
     const avgs = avgFTE.get(rtId)!
@@ -448,108 +448,110 @@ export function materializeEnvelopeToResourceTypes(
   periods: CapacityPlanPeriodResult[],
   _periodWeeks: number,
 ): SchedulerResourceType[] {
-  /** Intersect an envelope period range [periodStart, periodEnd) with the
-   *  authoritative profile windows for a role.  Returns the list of sub-ranges
-   *  that fall inside a profile window.  When no roleSegments exist the entire
-   *  period range is returned unchanged (unconstrained role). */
-  function intersectWithWindows(
-    periodStart: number,
-    periodEnd: number,
-    roleSegments: Array<{ startWeek: number; endWeek: number }> | undefined,
-  ): Array<{ startWeek: number; endWeek: number }> {
-    if (!roleSegments || roleSegments.length === 0) {
-      return [{ startWeek: periodStart, endWeek: periodEnd }]
+  type Window = { startWeek: number; endWeek: number }
+  type SlotWindow = Window & { allocationPercent: number }
+
+  function profileWindows(rt: SchedulerResourceType): Window[] | null {
+    // A resolved role profile is an authoritative availability boundary. An
+    // empty profile is an explicit zero-capacity profile, not an unrestricted
+    // role.
+    if (rt.roleSegments) {
+      return rt.roleSegments.map(seg => ({ startWeek: seg.startWeek, endWeek: seg.endWeek }))
     }
-    const result: Array<{ startWeek: number; endWeek: number }> = []
-    for (const seg of roleSegments) {
-      // roleSegments endWeek is INCLUSIVE in the scheduler model
-      // (week <= seg.endWeek contributes capacity), while envelope period
-      // endWeek is EXCLUSIVE. Extend the window end by one so a demand week
-      // on the final window week is still covered by the materialized NR.
-      const overlapStart = Math.max(periodStart, seg.startWeek)
-      const overlapEnd = Math.min(periodEnd, seg.endWeek + 1)
-      if (overlapStart < overlapEnd) {
-        result.push({ startWeek: overlapStart, endWeek: overlapEnd })
+
+    const named = rt.namedResources ?? []
+    if (named.length === 0) return null
+
+    const windows: Window[] = []
+    for (const nr of named) {
+      if (nr.capacitySegments && nr.capacitySegments.length > 0) {
+        windows.push(...nr.capacitySegments.map(seg => ({ startWeek: seg.startWeek, endWeek: seg.endWeek })))
+        continue
       }
+      const mode = nr.allocationMode
+      const start = nr.allocationStartWeek ?? nr.startWeek
+      const end = nr.allocationEndWeek ?? nr.endWeek
+      // EFFORT and other unbounded legacy resources are available throughout
+      // the envelope. A TIMELINE resource with a finite window is not.
+      if (mode !== 'TIMELINE' || (start == null && end == null)) return null
+      windows.push({ startWeek: start ?? 0, endWeek: end ?? Infinity })
     }
-    return result
+    return windows
   }
 
+
   return baseResourceTypes.map(rt => {
-    // Collect envelope headcount for this RT across periods
     const envelopeByPeriod: Array<{ startWeek: number; endWeek: number; headcount: number }> = []
     for (const period of periods) {
       const resource = period.resources.find(r => r.resourceTypeId === rt.id)
-      if (resource && resource.headcount > 0) {
+      // An explicit zero is authoritative: materialize it so original count or
+      // profile capacity cannot reappear during replay. Only a missing role
+      // entry retains the base resource type unchanged.
+      if (resource) {
         envelopeByPeriod.push({ startWeek: period.startWeek, endWeek: period.endWeek, headcount: resource.headcount })
       }
     }
     if (envelopeByPeriod.length === 0) return rt
 
-    // Peak envelope headcount — used as the count on the materialized RT so
-    // getWeeklyCapacity() never adds phantom count slots beyond the
-    // reconcile-* named resources (which always cover >= this headcount).
     let maxEnvelopeHeadcount = 0
-    for (const ep of envelopeByPeriod) {
-      if (ep.headcount > maxEnvelopeHeadcount) maxEnvelopeHeadcount = ep.headcount
-    }
+    for (const ep of envelopeByPeriod) maxEnvelopeHeadcount = Math.max(maxEnvelopeHeadcount, ep.headcount)
     maxEnvelopeHeadcount = round2(maxEnvelopeHeadcount)
 
-    // Intersect each envelope period with authoritative profile windows
-    const slotWindows: Array<{ startWeek: number; endWeek: number; allocationPercent: number }> = []
+    const preservedNamedResources = [...(rt.namedResources ?? [])]
+    const authorityWindows = profileWindows(rt)
+    const addedWindows: SlotWindow[][] = []
+
+    // Materialise only the shortfall over preserved named resources. This is
+    // important for locks/availability: replacing a named TIMELINE resource
+    // with a CAPACITY_PLAN resource would invent capacity in locked weeks, and
+    // retaining it while adding a full envelope slot would double-count it.
     for (const ep of envelopeByPeriod) {
-      const subRanges = intersectWithWindows(ep.startWeek, ep.endWeek, rt.roleSegments)
-      for (const range of subRanges) {
-        const slotCount = Math.ceil(ep.headcount)
+      for (let week = ep.startWeek; week < ep.endWeek; week++) {
+        if (authorityWindows != null && !authorityWindows.some(window => week >= window.startWeek && week <= window.endWeek)) continue
+
+        let preservedFte = 0
+        for (const nr of preservedNamedResources) {
+          preservedFte += effectiveAllocationPct(nr, week) / 100
+        }
+        const remaining = Math.max(0, ep.headcount - preservedFte)
+        const fullSlots = Math.floor(remaining + FLOAT_EPSILON)
+        const fractional = remaining - fullSlots
+        const slotCount = fullSlots + (fractional > FLOAT_EPSILON ? 1 : 0)
         for (let slot = 0; slot < slotCount; slot++) {
-          const pct = slot < Math.floor(ep.headcount) ? 100 : (ep.headcount % 1) * 100 || 100
-          slotWindows.push({
-            startWeek: range.startWeek,
-            // range.endWeek is exclusive; scheduler NR endWeek is inclusive.
-            endWeek: range.endWeek - 1,
-            allocationPercent: Math.max(25, Math.round(pct)),
-          })
+          const allocationPercent = slot < fullSlots ? 100 : Math.round(fractional * 100)
+          if (allocationPercent <= 0) continue
+          if (!addedWindows[slot]) addedWindows[slot] = []
+          const slotRanges = addedWindows[slot]
+          const last = slotRanges[slotRanges.length - 1]
+          if (last && last.endWeek + 1 === week && last.allocationPercent === allocationPercent) {
+            last.endWeek = week
+          } else {
+            slotRanges.push({ startWeek: week, endWeek: week, allocationPercent })
+          }
         }
       }
     }
 
-    // Deduplicate identical adjacent windows into capacity segments
-    const segments: Array<{ startWeek: number; endWeek: number; allocationPercent: number }> = []
-    for (const sw of slotWindows) {
-      const last = segments[segments.length - 1]
-      // NR endWeek is inclusive, so two segments tile contiguously when
-      // last.endWeek + 1 === sw.startWeek (identical single-week slots must
-      // NOT merge — each slot is separate capacity).
-      if (last && last.endWeek + 1 === sw.startWeek && last.allocationPercent === sw.allocationPercent) {
-        last.endWeek = sw.endWeek
-      } else {
-        segments.push({ ...sw })
-      }
-    }
+    const addedNamedResources = addedWindows.flatMap((ranges, slot) => ranges.map((range, index) => ({
+      id: `reconcile-${rt.id}-${slot}-${index}`,
+      name: `${rt.name} reconcile-${slot}-${index}`,
+      startWeek: range.startWeek,
+      endWeek: range.endWeek,
+      allocationPct: range.allocationPercent,
+      allocationMode: 'CAPACITY_PLAN',
+      allocationPercent: range.allocationPercent,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+    })))
 
-    // The materialized named resources ARE the authoritative capacity for
-    // the reconciliation replay. Clear the stale aggregate roleSegments so
-    // getWeeklyCapacity() cannot count them on top of the envelope, and set
-    // count to the envelope peak so no phantom count slots appear either
-    // (the reconcile-* named resources cover at least that headcount).
-    // Precedent: buildReplayPlannerResourceTypes (#362 fix 3). Windows and
-    // gaps remain hard because every reconcile-* window is clipped to the
-    // original roleSegments above.
     return {
       ...rt,
+      // Named resources (preserved plus added shortfall slots) are the sole
+      // replay authority. Clearing roleSegments prevents aggregate profile
+      // capacity from being counted on top of them.
       count: maxEnvelopeHeadcount,
-      roleSegments: undefined,
-      namedResources: segments.map((seg, idx) => ({
-        id: `reconcile-${rt.id}-${idx}`,
-        name: `${rt.name} reconcile-${idx}`,
-        startWeek: seg.startWeek,
-        endWeek: seg.endWeek,
-        allocationPct: seg.allocationPercent,
-        allocationMode: 'CAPACITY_PLAN',
-        allocationPercent: seg.allocationPercent,
-        allocationStartWeek: null,
-        allocationEndWeek: null,
-      })),
+      roleSegments: rt.roleSegments && rt.roleSegments.length === 0 ? [] : undefined,
+      namedResources: [...preservedNamedResources, ...addedNamedResources],
     }
   })
 }
@@ -698,14 +700,125 @@ export function computeJointPlan(
   let iteration = 0
 
   // ── Phase 1: Initial run ──────────────────────────────────────────────────
-  let initialSchedule: SAPlannerResult
+  let initialSchedule: SAPlannerResult | undefined
+  let initialFailure: SAPlannerInfeasibleError | undefined
   try {
     initialSchedule = runSAPlanner({ ...input, resourceTypes: currentRts }, saConfig)
   } catch (error) {
-    if (error instanceof SAPlannerInfeasibleError) {
-      allDiagnostics.push(...error.diagnostics)
+    if (!(error instanceof SAPlannerInfeasibleError)) throw error
+    initialFailure = error
+    allDiagnostics.push(...error.diagnostics)
+  }
+
+  // A failed run is recoverable when more capacity can still be consumed
+  // inside the unchanged profile window. The useful upper bound is the sum
+  // of the configured per-feature parallelism across active features; beyond
+  // that, another quarter-FTE cannot change the scheduler's constraints.
+  const maxUsefulParallelism = saConfig.maxParallelismPerFeature ?? 2
+  function usefulCapacityFor(rtId: string): { capacity: number; activeFeatures: number } | undefined {
+    let activeFeatures = 0
+    for (const epic of input.epics) {
+      for (const feature of epic.features) {
+        if (feature.isActive === false) continue
+        const hasDemand = feature.userStories.some(story => story.isActive !== false &&
+          story.tasks.some(task => task.resourceTypeId === rtId))
+        if (hasDemand) activeFeatures++
+      }
     }
-    // Infeasible from the start — return minimal result with diagnostics
+    if (activeFeatures === 0) return undefined
+    const configuredMax = maxCap?.get(rtId)
+    return {
+      capacity: configuredMax == null
+        ? activeFeatures * maxUsefulParallelism
+        : Math.min(configuredMax, activeFeatures * maxUsefulParallelism),
+      activeFeatures,
+    }
+  }
+
+  let recoveryAttempts = 0
+  while (!initialSchedule && initialFailure && recoveryAttempts < maxIterations) {
+    // These blockers are independent of additional staffing. In particular,
+    // do not spend recovery runs rediscovering a dependency or lock limit.
+    if (initialFailure.diagnostics.some(d =>
+      d.blocker === 'DEPENDENCY_PATH' ||
+      d.blocker === 'FEATURE_PARALLELISM' ||
+      d.blocker === 'SCHEDULE_LOCK')) break
+
+    let growRtId: string | undefined
+    let maxBlockedRt: SchedulerResourceType | undefined
+    let maxBlocked: number | undefined
+    for (const diagnostic of initialFailure.diagnostics) {
+      if (!diagnostic.resourceTypeId) continue
+      const rt = currentRts.find(candidate => candidate.id === diagnostic.resourceTypeId)
+      if (!rt) continue
+      const configuredMax = maxCap?.get(rt.id)
+      if (configuredMax != null && currentCapacityFte(rt) >= configuredMax - FLOAT_EPSILON) {
+        maxBlockedRt = rt
+        maxBlocked = configuredMax
+        continue
+      }
+      growRtId = rt.id
+      break
+    }
+    if (!growRtId) {
+      if (maxBlockedRt && maxBlocked != null) {
+        allDiagnostics.push({
+          blocker: 'ROLE_MAX_CAP',
+          resourceTypeId: maxBlockedRt.id,
+          resourceTypeName: maxBlockedRt.name,
+          configuredLimit: `${maxBlocked}`,
+          requested: `>${maxBlocked}`,
+          achieved: `${maxBlocked}`,
+          explanation: `${maxBlockedRt.name} is capped at ${maxBlocked}; the target requires more capacity.`,
+        })
+      }
+      break
+    }
+
+    const rt = currentRts.find(candidate => candidate.id === growRtId)
+    const useful = usefulCapacityFor(growRtId)
+    // Profile-backed capacity can only grow inside its existing windows. Jump
+    // to the evidence-based saturation point once, then let the SA result
+    // prove whether that bounded useful capacity is sufficient. This avoids
+    // repeatedly rerunning the same impossible profile-window schedule.
+    if (rt?.roleSegments && rt.roleSegments.length > 0 && useful) {
+      const currentCapacity = currentCapacityFte(rt)
+      if (currentCapacity >= useful.capacity - FLOAT_EPSILON) {
+        allDiagnostics.push({
+          blocker: 'FEATURE_PARALLELISM',
+          resourceTypeId: rt.id,
+          resourceTypeName: rt.name,
+          configuredLimit: `${maxUsefulParallelism} per active feature`,
+          requested: `>${currentCapacity}`,
+          achieved: `${currentCapacity}`,
+          explanation: `${rt.name} already has the maximum useful in-window capacity for ${useful.activeFeatures} active feature(s); further staffing cannot overcome the remaining constraint.`,
+        })
+        break
+      }
+
+      while (currentCapacityFte(currentRts.find(candidate => candidate.id === growRtId)!) <
+        useful.capacity - FLOAT_EPSILON) {
+        currentRts = augmentResourceType(currentRts, growRtId)
+      }
+      recoveryAttempts++
+    } else {
+      currentRts = augmentResourceType(currentRts, growRtId)
+      recoveryAttempts++
+    }
+
+    try {
+      initialSchedule = runSAPlanner({ ...input, resourceTypes: currentRts }, saConfig)
+    } catch (error) {
+      if (!(error instanceof SAPlannerInfeasibleError)) throw error
+      allDiagnostics.push(...error.diagnostics)
+      // A saturation probe that still fails is evidence that the remaining
+      // profile/dependency/parallelism constraint cannot be fixed by growth.
+      break
+    }
+  }
+  totalIterations += recoveryAttempts
+
+  if (!initialSchedule) {
     return {
       periods: [], totalCost: 0, deliveryWeeks: Infinity, peakHeadcount: 0,
       avgUtilisationPct: 0, budgetExceeded: false,
@@ -713,7 +826,7 @@ export function computeJointPlan(
         totalDeliveryWeeks: Infinity, peakUtilisationPct: 0 },
       plannedResourceTypeIds: [],
       diagnostics: allDiagnostics,
-      iterations: 1,
+      iterations: Math.max(1, totalIterations),
       loopDiagnostics: allDiagnostics,
       targetAchieved: false,
     }
@@ -722,7 +835,6 @@ export function computeJointPlan(
   const initialDelivery = initialSchedule.totalDeliveryWeeks
   let bestResult = buildResult(initialSchedule, currentRts)
   let bestSchedule: SAPlannerResult = initialSchedule
-  let bestRts: SchedulerResourceType[] = [...currentRts]
   let lastSchedule: SAPlannerResult = initialSchedule
 
   // Helper: derive envelope peaks/averages from a schedule
@@ -768,9 +880,11 @@ export function computeJointPlan(
   }
 
   // Helper: build a full CapacityPlanResult from a schedule
-  function buildResult(sched: SAPlannerResult, rts: SchedulerResourceType[]): CapacityPlanResult {
+  function buildResult(sched: SAPlannerResult, rts: SchedulerResourceType[], minimizeBuffer = false): CapacityPlanResult {
     const { totalWeeks, peakFTE, avgFTE } = deriveDemandMetrics(sched, rts)
-    const capacity = deriveCapacityEnvelope(rts, totalWeeks, periodWeeks, peakFTE, avgFTE, config)
+    const capacity = deriveCapacityEnvelope(
+      rts, totalWeeks, periodWeeks, peakFTE, avgFTE, config, minimizeBuffer ? 1 : 1.1,
+    )
     const levelResult: LevellingResult = {
       epicStartWeeks: sched.epicStartWeeks,
       featureStartWeeks: sched.featureStartWeeks,
@@ -778,6 +892,76 @@ export function computeJointPlan(
       peakUtilisationPct: sched.peakUtilisationPct,
     }
     return buildEnvelopeOutput(input, totalWeeks, periodWeeks, capacity, peakFTE, avgFTE, levelResult, config)
+  }
+
+  // Keep the already-materialized envelope as the returned capacity. Refresh
+  // demand, cost, and levelling observations from the replayed schedule;
+  // calling buildResult here would derive a different, unvalidated envelope.
+  function adoptValidatedSchedule(
+    result: CapacityPlanResult,
+    sched: SAPlannerResult,
+    _rts: SchedulerResourceType[],
+  ): CapacityPlanResult {
+    // Replay demand must be aggregated over the committed output windows. The
+    // replay may finish earlier than those windows, but its missing weeks are
+    // still zero-demand weeks in the returned plan's utilisation denominator.
+    const periods = result.periods.map(period => {
+      const periodWeeks = period.endWeek - period.startWeek
+      return {
+        ...period,
+        resources: period.resources.map(resource => {
+          const weeklyDemand = sched.weeklyDemandByResourceType.get(resource.resourceTypeId) ?? []
+          let peak = 0
+          let totalFte = 0
+          for (let week = period.startWeek; week < period.endWeek; week++) {
+            const fte = (weeklyDemand[week] ?? 0) / 5
+            if (fte > peak) peak = fte
+            totalFte += fte
+          }
+          const avg = periodWeeks > 0 ? totalFte / periodWeeks : 0
+          const dayRate = config.dayRates.get(resource.resourceTypeId) ?? 0
+          const costForPeriod = resource.headcount * dayRate * periodWeeks * 5
+          return {
+            ...resource,
+            peakDemandFTE: Math.round(peak * 100) / 100,
+            avgDemandFTE: Math.round(avg * 100) / 100,
+            utilisationPct: resource.headcount > 0 ? Math.round((avg / resource.headcount) * 1000) / 10 : 0,
+            costForPeriod: Math.round(costForPeriod),
+          }
+        }),
+      }
+    })
+    let totalCost = 0
+    let peakHeadcount = 0
+    let totalUtilWeighted = 0
+    let totalUtilWeight = 0
+    for (const period of periods) {
+      let periodHeadcount = 0
+      for (const resource of period.resources) {
+        totalCost += resource.costForPeriod
+        periodHeadcount += resource.headcount
+        totalUtilWeighted += resource.utilisationPct * resource.headcount
+        totalUtilWeight += resource.headcount
+      }
+      if (periodHeadcount > peakHeadcount) peakHeadcount = periodHeadcount
+    }
+    return {
+      ...result,
+      periods,
+      totalCost: Math.round(totalCost),
+      peakHeadcount,
+      avgUtilisationPct: totalUtilWeight > 0
+        ? Math.round((totalUtilWeighted / totalUtilWeight) * 10) / 10
+        : 0,
+      budgetExceeded: config.maxBudget != null && totalCost > config.maxBudget,
+      deliveryWeeks: sched.totalDeliveryWeeks,
+      levellingResult: {
+        epicStartWeeks: sched.epicStartWeeks,
+        featureStartWeeks: sched.featureStartWeeks,
+        totalDeliveryWeeks: sched.totalDeliveryWeeks,
+        peakUtilisationPct: sched.peakUtilisationPct,
+      },
+    }
   }
 
   if (initialDelivery <= targetDurationWeeks) {
@@ -829,9 +1013,8 @@ export function computeJointPlan(
       try {
         newSchedule = runSAPlanner({ ...input, resourceTypes: currentRts }, saConfig)
       } catch (error) {
-        if (error instanceof SAPlannerInfeasibleError) {
-          allDiagnostics.push(...error.diagnostics)
-        }
+        if (!(error instanceof SAPlannerInfeasibleError)) throw error
+        allDiagnostics.push(...error.diagnostics)
         // Can't grow further — stop growing
         break
       }
@@ -843,7 +1026,6 @@ export function computeJointPlan(
         // Improvement — update best
         bestResult = buildResult(newSchedule, currentRts)
         bestSchedule = newSchedule
-        bestRts = [...currentRts]
         lastDelivery = newDelivery
         consecutiveNoImprove = 0
       } else {
@@ -859,50 +1041,98 @@ export function computeJointPlan(
 
   // ── Phase 3: Capacity reduction (minimise staffed FTE-weeks) ──────────────
   if (bestResult && bestSchedule && bestResult.deliveryWeeks <= targetDurationWeeks) {
-    let reducedRts = [...bestRts]
-    let reducedSchedule = bestSchedule
+    // Reduce the returned envelope directly. Reducing a role's aggregate
+    // capacity changes every period at once and can hide an independently
+    // removable quantum in another period after replay.
+    let currentResult = bestResult
+    let currentSchedule = bestSchedule
+    let reductionCommitted = false
 
-    for (const rt of reducedRts) {
-      const maxForRole = maxCap?.get(rt.id)
-      let currentCount = rt.count
-      let reduced = true
-
-      while (reduced && currentCount > CAPACITY_QUANTUM + FLOAT_EPSILON) {
-        if (maxForRole != null && currentCount > maxForRole + FLOAT_EPSILON) break
-
-        const { rts: candidateRts, reduced: didReduce } = reduceResourceType(reducedRts, rt.id)
-        if (!didReduce) break // no more boosts to remove — stop this role
-
-        let candidateSchedule: SAPlannerResult
-        try {
-          candidateSchedule = runSAPlanner({ ...input, resourceTypes: candidateRts }, saConfig)
-        } catch {
-          break // reduction broke feasibility — keep current
+    // Named resources are preserved by materializeEnvelopeToResourceTypes;
+    // never lower an envelope period beneath their greatest locked weekly
+    // capacity. The configured floor is a separate hard lower bound.
+    const namedFloors = new Map<string, number>()
+    for (const rt of input.resourceTypes) {
+      for (const period of currentResult.periods) {
+        let periodFloor = 0
+        for (let week = period.startWeek; week < period.endWeek; week++) {
+          let weeklyFloor = 0
+          for (const namedResource of rt.namedResources ?? []) {
+            weeklyFloor += effectiveAllocationPct(namedResource, week) / 100
+          }
+          if (weeklyFloor > periodFloor) periodFloor = weeklyFloor
         }
-
-        if (candidateSchedule.totalDeliveryWeeks <= targetDurationWeeks + FLOAT_EPSILON) {
-          reducedRts = candidateRts
-          reducedSchedule = candidateSchedule
-          currentCount = candidateRts.find(r => r.id === rt.id)?.count ?? 0
-        } else {
-          reduced = false
-        }
+        namedFloors.set(`${rt.id}:${period.periodIndex}`, periodFloor)
       }
     }
 
-    // Update best if reduction improved it (fewer FTE-weeks)
-    const reducedResult = buildResult(reducedSchedule, reducedRts)
-    if (reducedResult.totalCost <= bestResult.totalCost) {
-      bestResult = reducedResult
-      bestSchedule = reducedSchedule
+    const minimumFor = (resourceTypeId: string, periodIndex: number) => Math.max(
+      quantizeHeadcountUp(config.minFloor.get(resourceTypeId) ?? 0),
+      namedFloors.get(`${resourceTypeId}:${periodIndex}`) ?? 0,
+    )
+    const candidateSlots = Math.max(1, currentResult.periods.reduce((sum, period) => sum + period.resources.length, 0))
+    const removableSlots = currentResult.periods.reduce((sum, period) => sum + period.resources.reduce(
+      (periodSum, resource) => {
+        const removable = resource.headcount - minimumFor(resource.resourceTypeId, period.periodIndex)
+        return periodSum + Math.max(0, Math.ceil((removable - FLOAT_EPSILON) / HEADCOUNT_QUANTUM))
+      }, 0,
+    ), 0)
+    // Failed trials may become feasible after another period is reduced, so
+    // permit a complete bounded retry pass for each removable quantum.
+    const maxReductionTrials = Math.max(1, (removableSlots + 1) * candidateSlots)
+    let reductionTrials = 0
+    let reductionFound = true
+
+    while (reductionFound && reductionTrials < maxReductionTrials) {
+      reductionFound = false
+      for (const period of currentResult.periods) {
+        for (const resource of period.resources) {
+          if (reductionTrials >= maxReductionTrials) break
+          reductionTrials++
+          const minimum = minimumFor(resource.resourceTypeId, period.periodIndex)
+          const candidateHeadcount = round2(resource.headcount - HEADCOUNT_QUANTUM)
+          if (candidateHeadcount < minimum - FLOAT_EPSILON) continue
+
+          const candidatePeriods = currentResult.periods.map(candidatePeriod => ({
+            ...candidatePeriod,
+            resources: candidatePeriod.resources.map(candidateResource => (
+              candidatePeriod.periodIndex === period.periodIndex &&
+              candidateResource.resourceTypeId === resource.resourceTypeId
+                ? { ...candidateResource, headcount: Math.max(0, candidateHeadcount) }
+                : candidateResource
+            )),
+          }))
+          const candidateRts = materializeEnvelopeToResourceTypes(input.resourceTypes, candidatePeriods, periodWeeks)
+          let candidateSchedule: SAPlannerResult
+          try {
+            candidateSchedule = runSAPlanner({ ...input, resourceTypes: candidateRts }, saConfig)
+          } catch (error) {
+            if (!(error instanceof SAPlannerInfeasibleError)) throw error
+            continue
+          }
+
+          if (candidateSchedule.totalDeliveryWeeks <= targetDurationWeeks + FLOAT_EPSILON) {
+            currentResult = adoptValidatedSchedule(
+              { ...currentResult, periods: candidatePeriods }, candidateSchedule, candidateRts,
+            )
+            currentSchedule = candidateSchedule
+            reductionFound = true
+            reductionCommitted = true
+          }
+        }
+        if (reductionTrials >= maxReductionTrials) break
+      }
+    }
+
+    if (reductionCommitted) {
+      bestResult = currentResult
+      bestSchedule = currentSchedule
     }
   }
 
-  // ── Phase 4: Ensure best is at least as good as initial one-shot ──────────
-  if (bestResult && initialSchedule.totalDeliveryWeeks < bestResult.deliveryWeeks) {
-    bestResult = buildResult(initialSchedule, input.resourceTypes)
-    bestSchedule = initialSchedule
-  }
+  // Do not restore the faster initial schedule here. A slower schedule that
+  // still meets the target with fewer staffed FTE-weeks is the required plan;
+  // Phase 3 has already proved each retained reduction feasible.
 
   // ── Phase 5: Final reconciliation ─────────────────────────────────────────
   // Rerun the planner against the exact returned capacity envelope so that
@@ -924,11 +1154,18 @@ export function computeJointPlan(
       const allComplete = reconciledSchedule.totalDeliveryWeeks < Infinity &&
         reconciledSchedule.weeklyDemandByResourceType.size > 0
       if (allComplete) {
-        bestResult = buildResult(reconciledSchedule, reconciledRts)
+        // Keep bestResult.periods: those are the exact capacity envelope used
+        // to construct reconciledRts. Refreshing via buildResult would derive
+        // another envelope from the replay and claim it was validated.
+        bestResult = adoptValidatedSchedule(bestResult, reconciledSchedule, reconciledRts)
         bestSchedule = reconciledSchedule
         reconciliationSucceeded = true
+      } else {
+        bestResult = { ...bestResult, deliveryWeeks: Infinity }
       }
-    } catch {
+    } catch (error) {
+      if (!(error instanceof SAPlannerInfeasibleError)) throw error
+      allDiagnostics.push(...error.diagnostics)
       // Reconciliation failed — the pre-reconciliation result cannot be
       // claimed as reconciled. Mark as not achieved so callers know the
       // returned profile has not been validated against the scheduler.
@@ -955,7 +1192,8 @@ export function computeJointPlan(
   if (!finalResult) {
     try {
       finalResult = computeCapacityPlan(input, config)
-    } catch {
+    } catch (error) {
+      if (!(error instanceof SAPlannerInfeasibleError)) throw error
       finalResult = {
         periods: [], totalCost: 0, deliveryWeeks: Infinity, peakHeadcount: 0,
         avgUtilisationPct: 0, budgetExceeded: false,

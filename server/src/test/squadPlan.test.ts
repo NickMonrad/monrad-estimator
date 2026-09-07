@@ -257,6 +257,7 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
 
     expect(res.status).toBe(200)
     expect(res.body.error).toBeUndefined()
+    expect(res.body.targetAchieved).toBe(true)
     expect(res.body.deliveryWeeks).toBe(1)
     expect(res.body.plannedResourceTypeIds).toEqual(['rt-dev'])
     expect(res.body.periods[0].resources[0]).toMatchObject({
@@ -353,6 +354,7 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
     console.log('Test A response:', res.status, JSON.stringify(res.body).slice(0, 200))
     expect(res.status).toBe(200)
     expect(res.body.error).toBeUndefined()
+    expect(res.body.targetAchieved).toBe(true)
     // At count=3: 60 days / 15 days/week = 4 weeks. Must be well under 12.
     expect(res.body.deliveryWeeks).toBeLessThanOrEqual(8)
     // Canonical count was 1 — delivery under 8 weeks proves Finder capacity was used
@@ -415,6 +417,7 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
     console.log('Test B response:', res.status, JSON.stringify(res.body).slice(0, 200))
     expect(res.status).toBe(200)
     expect(res.body.error).toBeUndefined()
+    expect(res.body.targetAchieved).toBe(true)
     // Dynamic bound derived from 1000 days / 10 weeks = 200 days/week needed
     // → bound ≥ 40. With parallelism=20: 1000/(20*5)=10 weeks.
     expect(res.body.deliveryWeeks).toBeLessThanOrEqual(10)
@@ -564,6 +567,7 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
 
     // At 3 FTE inside W0-W5: 15 days/week. 30 days / 15 = 2 weeks. Should succeed.
     expect(res.status).toBe(200)
+    expect(res.body.targetAchieved).toBe(true)
     expect(res.body.error).toBeUndefined()
     expect(res.body.deliveryWeeks).toBeLessThanOrEqual(5)
     expect(res.body.deliveryWeeks).toBeGreaterThan(0)
@@ -629,6 +633,7 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
 
     // At 4 FTE inside W0-W5: 20 days/week. 40 days / 20 = 2 weeks. Should succeed.
     expect(res.status).toBe(200)
+    expect(res.body.targetAchieved).toBe(true)
     expect(res.body.error).toBeUndefined()
     expect(res.body.deliveryWeeks).toBeLessThanOrEqual(5)
     expect(res.body.deliveryWeeks).toBeGreaterThan(0)
@@ -698,6 +703,7 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
 
     // At 4 FTE (not 3): 20 days/week. 80 days / 20 = 4 weeks <= 5. Should succeed.
     expect(res.status).toBe(200)
+    expect(res.body.targetAchieved).toBe(true)
     expect(res.body.error).toBeUndefined()
     expect(res.body.deliveryWeeks).toBeLessThanOrEqual(5)
     expect(res.body.deliveryWeeks).toBeGreaterThan(0)

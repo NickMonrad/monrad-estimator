@@ -65,3 +65,16 @@ The source planning outputs provide a useful qualified comparison: the accepted 
 - #480 must distinguish an unrestricted role maximum from an explicit/profile-backed availability window; blank `maxCap` cannot erase a deliberate profile window, and diagnostics should identify the constrained role and window.
 - #481 must plan around explicit/manual profile windows and reconcile reported delivery with the same final capacity-aware schedule; the benchmark's 53-week control is the current evidence baseline, not a production target.
 - Both follow-on issues should retain the effort, dependency, capacity and deterministic invariants established here. No production planner behaviour is changed by this benchmark work.
+
+## Joint-planner regression contract (#481)
+
+The #481 joint planner adds a separate reconciliation contract; it does not
+change the deterministic #479 scheduler or capacity-plan baseline values above.
+The returned period envelope is authoritative and must be replayable through
+the production materializer: replay must preserve delivery duration and feature
+starts, conserve scheduled effort by role, complete dependencies, and keep
+weekly demand at or below effective committed capacity. Explicit named-resource
+locks and profile windows remain hard (including zero-capacity gaps), while
+growth and reduction operate in deterministic 0.25-FTE quanta. A target failure
+must return the best truthful result or structured diagnostics rather than a
+vacuous successful claim.

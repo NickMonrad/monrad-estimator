@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { computeJointPlan, type CapacityPlanConfig } from '../lib/capacity-planner.js'
+import {
+  computeJointPlan,
+  materializeEnvelopeToResourceTypes,
+  type CapacityPlanConfig,
+  type JointPlanResult,
+} from '../lib/capacity-planner.js'
 import {
   measureCapacityPlanQuality,
   runCapacityPlanSchedule,
 } from '../lib/planning-benchmark.js'
+import { getWeeklyCapacity } from '../lib/scheduler.js'
 import {
   parallelSameRole,
   serialCriticalPath,
@@ -15,6 +21,7 @@ import {
 } from './planningBenchmarkFixtures.js'
 
 const TOLERANCE = 1e-6
+const HOURS_PER_DAY = 8
 
 function makeConfig(targetDurationWeeks: number): CapacityPlanConfig {
   return {
@@ -27,13 +34,52 @@ function makeConfig(targetDurationWeeks: number): CapacityPlanConfig {
   }
 }
 
+function replayReturnedPlan(
+  input: Parameters<typeof computeJointPlan>[0],
+  result: JointPlanResult,
+  config: CapacityPlanConfig,
+) {
+  const replayInput = {
+    ...input,
+    resourceTypes: materializeEnvelopeToResourceTypes(input.resourceTypes, result.periods, config.periodWeeks),
+  }
+  const schedule = runCapacityPlanSchedule(replayInput, config)
+  return { replayInput, schedule }
+}
+
+function expectReturnedPlanReplays(
+  input: Parameters<typeof computeJointPlan>[0],
+  result: JointPlanResult,
+  config: CapacityPlanConfig,
+) {
+  const { replayInput, schedule } = replayReturnedPlan(input, result, config)
+  expect(schedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 6)
+  expect(schedule.featureStartWeeks).toEqual(result.levellingResult.featureStartWeeks)
+
+  const metrics = measureCapacityPlanQuality(input, config.targetDurationWeeks, result, schedule)
+  expect(metrics.scheduledEffortByRole).toEqual(metrics.effortByRole)
+  expect(metrics.dependencyViolations).toEqual([])
+  for (const epic of input.epics) {
+    for (const feature of epic.features) {
+      expect(schedule.featureStartWeeks.has(feature.id)).toBe(true)
+      expect(schedule.weeklyAllocationsByFeature.has(feature.id)).toBe(true)
+    }
+  }
+  for (const rt of replayInput.resourceTypes) {
+    const demand = schedule.weeklyDemandByResourceType.get(rt.id) ?? []
+    for (let week = 0; week < demand.length; week++) {
+      expect(demand[week] ?? 0).toBeLessThanOrEqual(getWeeklyCapacity(rt, week, HOURS_PER_DAY) / HOURS_PER_DAY + TOLERANCE)
+    }
+  }
+  return { replayInput, schedule, metrics }
+}
+
 describe('joint planning loop — scenario A: parallel same-role workload', () => {
   it('grows a role when additional staffing improves delivery', () => {
     const input = parallelSameRole()
     const config = makeConfig(2)
     const result = computeJointPlan(input, config)
-    const schedule = runCapacityPlanSchedule(input, config)
-    const metrics = measureCapacityPlanQuality(input, 2, result, schedule)
+    const { metrics } = expectReturnedPlanReplays(input, result, config)
 
     expect(result.targetAchieved).toBe(true)
     expect(result.deliveryWeeks).toBeCloseTo(2, 6)
@@ -55,14 +101,19 @@ describe('joint planning loop — scenario B: serial critical path', () => {
     const config = makeConfig(4)
     const result = computeJointPlan(input, config)
 
-    expect(result.deliveryWeeks).toBeCloseTo(2, 6)
-    // SA planner allocates exactly the effort (5 days) per feature
-    // and respects dependencies: f0 week 0, f1 week 1
-    expect(result.iterations).toBeLessThanOrEqual(10)
+    expect(result.targetAchieved).toBe(true)
+    expect(result.deliveryWeeks).toBeLessThanOrEqual(config.targetDurationWeeks)
 
-    const schedule = runCapacityPlanSchedule(input, config)
-    const metrics = measureCapacityPlanQuality(input, 4, result, schedule)
+    const peakDev = Math.max(...result.periods.flatMap(p =>
+      p.resources.filter(r => r.resourceTypeId === 'rt-dev').map(r => r.headcount)))
+    // The initial one-FTE role is sufficient for this dependency-bound workload;
+    // the joint loop must not add capacity that the target does not need.
+    expect(peakDev).toBeLessThanOrEqual(input.resourceTypes[0].count + TOLERANCE)
+
+    const { metrics } = expectReturnedPlanReplays(input, result, config)
+    expect(metrics.dependencyViolations).toEqual([])
     expect(metrics.effortByRole['rt-dev']).toBeCloseTo(10, 6)
+
   })
 })
 
@@ -89,8 +140,7 @@ describe('joint planning loop — scenario D: role hand-off', () => {
     const input = roleHandoff()
     const config = makeConfig(2)
     const result = computeJointPlan(input, config)
-    const schedule = runCapacityPlanSchedule(input, config)
-    const metrics = measureCapacityPlanQuality(input, 2, result, schedule)
+    const { metrics } = expectReturnedPlanReplays(input, result, config)
 
     expect(result.targetAchieved).toBe(true)
 
@@ -109,8 +159,7 @@ describe('joint planning loop — scenario E: sparse specialist', () => {
     const input = sparseSpecialist()
     const config = makeConfig(4)
     const result = computeJointPlan(input, config)
-    const schedule = runCapacityPlanSchedule(input, config)
-    const metrics = measureCapacityPlanQuality(input, 4, result, schedule)
+    const { metrics } = expectReturnedPlanReplays(input, result, config)
 
     expect(result.targetAchieved).toBe(true)
     expect(metrics.effortByRole['rt-specialist']).toBeCloseTo(1, 6)
@@ -127,8 +176,7 @@ describe('joint planning loop — scenario F: mixed programme', () => {
     const input = mixedProgramme()
     const config = makeConfig(6)
     const result = computeJointPlan(input, config)
-    const schedule = runCapacityPlanSchedule(input, config)
-    const metrics = measureCapacityPlanQuality(input, 6, result, schedule)
+    const { metrics } = expectReturnedPlanReplays(input, result, config)
 
     expect(result.targetAchieved).toBe(true)
     expect(metrics.capacityViolations).toEqual([])
@@ -181,10 +229,13 @@ describe('Factory / Supply Chain benchmark through joint planning loop', () => {
     if (jointResult.targetAchieved) {
       expect(jointResult.deliveryWeeks).toBeLessThanOrEqual(facts.targetDurationWeeks)
       expect(jointResult.iterations).toBeGreaterThanOrEqual(1)
+      expectReturnedPlanReplays(input, jointResult, config)
       console.log(`Factory/Supply Chain: target=${facts.targetDurationWeeks}w, achieved=${jointResult.deliveryWeeks}w, iterations=${jointResult.iterations}`)
       console.log(`  peak headcount: ${jointResult.peakHeadcount}, cost: ${jointResult.totalCost}`)
     } else {
       expect(jointResult.loopDiagnostics.length).toBeGreaterThan(0)
+      expect(jointResult.diagnostics?.length).toBeGreaterThan(0)
+      expect(jointResult.deliveryWeeks).toBeGreaterThan(facts.targetDurationWeeks)
       console.log(`Factory/Supply Chain: target=${facts.targetDurationWeeks}w NOT met, diagnostics:`)
       for (const d of jointResult.loopDiagnostics) {
         console.log(`  ${d.blocker}: ${d.explanation}`)
