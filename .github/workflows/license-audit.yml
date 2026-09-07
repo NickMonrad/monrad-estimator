@@ -2,7 +2,6 @@ name: One-off licence audit
 on:
   push:
     branches: [docs/mit-license]
-  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -15,37 +14,64 @@ jobs:
           node-version: '24'
       - name: Install production dependencies without lifecycle scripts
         run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
-      - name: Collect package licence evidence
+      - name: Collect exact upstream licence evidence
         run: |
-          mkdir -p license-audit
-          npm exec --yes --package=license-checker-rseidelsohn@5.0.1 -- license-checker-rseidelsohn --start "$PWD" --production --json --out "$PWD/license-audit/packages.json" --files "$PWD/license-audit/license-files"
           node --input-type=module <<'NODE'
           import fs from 'node:fs'
           import path from 'node:path'
-          const data = JSON.parse(fs.readFileSync('license-audit/packages.json', 'utf8'))
-          const names = Object.keys(data)
-          for (const expected of ['react', 'express', 'bcryptjs', 'dompurify', 'jszip']) {
-            if (!names.some(name => name === expected || name.startsWith(expected + '@'))) throw new Error(`Missing runtime dependency: ${expected}`)
-          }
-          if (names.length < 50) throw new Error(`Incomplete dependency inventory: ${names.length} packages`)
-          const output = ['# Third-party licence evidence', '', 'Generated from the production npm installation for the PR #491 review. This is an audit artefact, not an approved release notice.', '']
+          import crypto from 'node:crypto'
+          const root = process.cwd()
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'))
+          const out = path.join(root, 'license-audit')
+          fs.mkdirSync(out, { recursive: true })
+          const records = []
           const unresolved = []
-          for (const [name, info] of Object.entries(data).sort(([a], [b]) => a.localeCompare(b))) {
-            output.push(`## ${name}`, '', `Declared licence: ${info.licenses || 'UNKNOWN'}`, '')
-            if (!info.licenses || /UNKNOWN|UNLICENSED|\*/i.test(info.licenses)) unresolved.push(name)
-            if (info.licenseFile && fs.existsSync(info.licenseFile)) {
-              output.push('### Original licence file', '', '```text', fs.readFileSync(info.licenseFile, 'utf8').replace(/```/g, '` ` `'), '```', '')
-              for (const file of fs.readdirSync(path.dirname(info.licenseFile)).filter(x => /^NOTICE(?:[._-].*)?$/i.test(x))) {
-                output.push(`### ${file}`, '', '```text', fs.readFileSync(path.join(path.dirname(info.licenseFile), file), 'utf8').replace(/```/g, '` ` `'), '```', '')
-              }
-            } else {
-              unresolved.push(name)
-              output.push('Original licence file not located; manual review required.', '')
+          const omitted = []
+          const sections = ['# Third-party licence evidence', '', 'Generated from the installed production npm dependency tree. This is evidence for review, not an approved release notice.', '']
+          const seen = new Set()
+          for (const [lockPath, entry] of Object.entries(lock.packages)) {
+            if (!lockPath.includes('node_modules/') || entry.dev || entry.link) continue
+            const dir = path.join(root, lockPath)
+            const manifest = path.join(dir, 'package.json')
+            if (!fs.existsSync(manifest)) {
+              omitted.push({ path: lockPath, version: entry.version, optional: !!entry.optional })
+              if (!entry.optional) unresolved.push(`${lockPath}: required package not installed`)
+              continue
             }
+            const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'))
+            const key = `${pkg.name}@${pkg.version}`
+            if (seen.has(key)) continue
+            seen.add(key)
+            const license = typeof pkg.license === 'string' ? pkg.license : (typeof entry.license === 'string' ? entry.license : 'UNKNOWN')
+            const files = fs.readdirSync(dir).filter(name => /^(?:LICEN[CS]E|COPYING|COPYRIGHT|NOTICE|THIRD[_-]PARTY[_-]NOTICES?)(?:$|[._-])/i.test(name) && fs.statSync(path.join(dir, name)).isFile()).sort()
+            const record = { name: pkg.name, version: pkg.version, license, files: [], repository: pkg.repository || null }
+            sections.push(`## ${key}`, '', `Declared licence: ${license}`, '')
+            if (!files.length || /UNKNOWN|UNLICENSED|\*/i.test(license)) unresolved.push(`${key}: missing/unclear licence evidence`)
+            for (const file of files) {
+              const text = fs.readFileSync(path.join(dir, file), 'utf8')
+              record.files.push({ name: file, sha256: crypto.createHash('sha256').update(text).digest('hex') })
+              sections.push(`### ${file}`, '', '```text', text.replace(/```/g, '` ` `'), '```', '')
+              const dest = path.join(out, 'upstream', key)
+              fs.mkdirSync(dest, { recursive: true })
+              fs.writeFileSync(path.join(dest, file), text)
+            }
+            if (!files.length) {
+              const readme = fs.readdirSync(dir).find(name => /^README(?:$|\.)/i.test(name))
+              if (readme) sections.push('### README (for manual licence review)', '', '```text', fs.readFileSync(path.join(dir, readme), 'utf8').replace(/```/g, '` ` `'), '```', '')
+            }
+            records.push(record)
           }
-          fs.writeFileSync('license-audit/THIRD_PARTY_NOTICES.md', output.join('\n'))
-          fs.writeFileSync('license-audit/unresolved.txt', [...new Set(unresolved)].join('\n') + '\n')
-          console.log(`Collected ${names.length} packages; ${new Set(unresolved).size} require manual review.`)
+          records.sort((a,b) => `${a.name}@${a.version}`.localeCompare(`${b.name}@${b.version}`))
+          for (const expected of ['react', 'express', 'bcryptjs', 'dompurify', 'jszip']) {
+            if (!records.some(r => r.name === expected)) throw new Error(`Missing runtime dependency: ${expected}`)
+          }
+          if (records.length < 100) throw new Error(`Incomplete dependency inventory: ${records.length} packages`)
+          fs.writeFileSync(path.join(out, 'packages.json'), JSON.stringify(records, null, 2) + '\n')
+          fs.writeFileSync(path.join(out, 'omitted.json'), JSON.stringify(omitted, null, 2) + '\n')
+          fs.writeFileSync(path.join(out, 'unresolved.txt'), unresolved.join('\n') + '\n')
+          fs.writeFileSync(path.join(out, 'THIRD_PARTY_NOTICES.md'), sections.join('\n'))
+          console.log(`Inventoried ${records.length} unique production packages; ${unresolved.length} unresolved; ${omitted.length} platform-omitted packages.`)
+          if (unresolved.length) console.log('Manual review required:\n' + unresolved.join('\n'))
           NODE
       - uses: actions/upload-artifact@v4
         if: always()
