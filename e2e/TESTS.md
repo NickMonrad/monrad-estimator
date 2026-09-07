@@ -171,7 +171,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 | Test | Description |
 |------|-------------|
-| generate, apply, verify planned resources, reapply, and snapshot history | Seeds Developer + Tech Lead tasks via CSV, schedules, opens Squad Planner drawer, generates a capacity profile, applies it (accepts confirm dialog), asserts exact generated-vs-persisted feature starts, delivery duration, and every staffed weekly capacity point through the Timeline API, navigates to Resource Profile — asserts planned resource badges, "Squad Planner" source tag, and disabled name inputs appear. Reopens Squad Planner with changed settings, reapplies, and verifies stable identity and updated capacity. Exercises Snapshot History panel — verifies `optimiser_apply` trigger snapshot visibility and rollback button click |
+| generate, apply, verify planned resources, reapply, and snapshot history | Seeds Developer + Tech Lead tasks via CSV, schedules, opens Squad Planner drawer, generates a capacity profile, applies it (accepts confirm dialog), asserts exact generated-vs-persisted feature starts, delivery duration, and every staffed weekly capacity point through the Timeline API (with the documented one-decimal DTO rounding tolerance; zero/gap weeks and staffed-week coverage remain exact), navigates to Resource Profile — asserts planned resource badges, "Squad Planner" source tag, and disabled name inputs appear. Reopens Squad Planner with changed settings, reapplies, and verifies stable identity and updated capacity. Exercises Snapshot History panel — verifies `optimiser_apply` trigger snapshot visibility and rollback button click |
 
 #### `Snapshot History — retired pre-V4 display` describe block (2 tests — issue #444)
 
@@ -183,14 +183,14 @@ API-level tests using the `request` fixture. No browser UI involved.
 ---
 
 ### `gantt.spec.ts` — Gantt Chart (9 tests)
-Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each basic chart test calls `setupTimeline()` which logs in, creates a project with 1 epic + 1 feature, navigates to the Timeline page, fills the start date, runs Quick schedule, and waits for the "X features scheduled" footer. Dependency-drag tests create two features and exercise right/left handles, persistence, target validation, duplicate prevention, and server cycle rejection.
+Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each basic chart test calls `setupTimeline()`, which logs in, creates a project with 1 epic + 1 feature, persists the start date while waiting for the PATCH and project/Timeline refresh responses, runs Quick schedule, and waits for the schedule response, refreshed Timeline GET, and "X features scheduled" footer. Dependency-drag tests create two features and exercise right/left handles, persistence, target validation, duplicate prevention, and server cycle rejection.
 
 | Test | Description |
 |------|-------------|
-| quick schedule renders feature bars in the Gantt grid | After Quick schedule the SVG contains at least one `<rect>` element (feature bar) |
+| update timeline renders feature bars in the Gantt grid | After Update timeline the SVG contains at least one `<rect>` element (feature bar) |
 | epic feature-mode button toggles between sequential and parallel | Clicks the button with `aria-label="sequential"`, asserts it switches to `aria-label="parallel"` |
 | clicking a feature bar opens the inline edit panel | Clicks `[title="{featureName}"]` (a `<span>`), asserts Start week + duration inputs appear |
-| saving a manual start week shows the ✏ override indicator | Sets start week to 2, saves, asserts the "↺ Reset to auto" button appears (only rendered when `isManual=true`) |
+| saving a manual start week shows the ✏ override indicator | Sets start week to 2, saves, waits for the timeline PUT and refreshed Timeline GET, and asserts the "↺ Reset to auto" button appears (only rendered when `isManual=true`) |
 | searches and creates a feature dependency in Timeline order | Creates two epics with two features, verifies search focus and path filtering, checks Timeline-order options, selects with ArrowDown + Enter, escapes without changing dependencies, and confirms the persisted dependency after reload |
 | dragging a right dependency handle creates and persists an edge | Creates two features, drags Feature A's right handle to Feature B, confirms the arrow and dependency after reload |
 | dragging a left dependency handle maps the reverse direction | Drags Feature B's left handle to Feature A and confirms the same `Feature B depends on Feature A` edge |
