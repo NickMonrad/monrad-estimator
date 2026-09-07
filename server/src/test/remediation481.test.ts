@@ -497,6 +497,121 @@ describe('real planner regressions for #481 review findings', () => {
     expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 6)
     expect(replaySchedule.featureStartWeeks).toEqual(result.levellingResult.featureStartWeeks)
   })
+  it('replays a 50% named resource with finite availability and conserves effort', () => {
+    const namedResource = {
+      id: 'nr-fractional',
+      name: 'Developer 50%',
+      startWeek: 2,
+      endWeek: 4,
+      allocationPct: 50,
+      allocationMode: 'TIMELINE',
+      allocationPercent: 50,
+      allocationStartWeek: 2,
+      allocationEndWeek: 4,
+    }
+    const input = makeInput([
+      makeEpic('fractional-epic', [
+        makeFeature('fractional-feature', [
+          makeStory('fractional-story', [makeTask(40, 'rt-dev', 'Developer', 8)]),
+        ]),
+      ]),
+    ], [makeResourceType('rt-dev', 'Developer', 1, 8, { namedResources: [namedResource] })])
+    const config = makeConfig(5)
+    config.maxCap = new Map([['rt-dev', 1]])
+
+    const result = computeJointPlan(input, config)
+    expect(result.targetAchieved).toBe(true)
+    expect(result.periods.length).toBeGreaterThan(0)
+    expect(input.resourceTypes[0].count).toBe(1)
+    expect(config.maxCap?.get('rt-dev')).toBe(1)
+
+    const replayed = materializeEnvelopeToResourceTypes(input.resourceTypes, result.periods, config.periodWeeks)
+    const replayedDev = replayed.find(rt => rt.id === 'rt-dev')!
+    expect(replayedDev.roleSegments).toBeUndefined()
+    expect(replayedDev.count).toBeCloseTo(0.5, 6)
+    expect(replayedDev.namedResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'nr-fractional',
+        name: 'Developer 50%',
+        allocationPct: 50,
+        allocationPercent: 50,
+        startWeek: 2,
+        endWeek: 4,
+        allocationStartWeek: 2,
+        allocationEndWeek: 4,
+      }),
+    ]))
+    expect(replayedDev.namedResources?.find(resource => resource.id === namedResource.id)).toBe(namedResource)
+
+    const replaySchedule = runSAPlanner({ ...input, resourceTypes: replayed }, makeSaConfig(config))
+    expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 6)
+    expect(replaySchedule.featureStartWeeks).toEqual(result.levellingResult.featureStartWeeks)
+
+    const weeklyDemand = replaySchedule.weeklyDemandByResourceType.get('rt-dev') ?? []
+    let totalDemandDays = 0
+    for (let week = 0; week <= 6; week++) {
+      const expectedCapacityDays = week >= 2 && week <= 4 ? 2.5 : 0
+      expect(effectiveCapacityDays(replayedDev, week)).toBeCloseTo(expectedCapacityDays, 6)
+      const demand = weeklyDemand[week] ?? 0
+      expect(demand).toBeLessThanOrEqual(expectedCapacityDays + EPS)
+      totalDemandDays += demand
+    }
+    expect(totalDemandDays).toBeCloseTo(40 / HPD, 6)
+  })
+
+  it('intersects named availability with a wider legacy allocation window during materialization', () => {
+    const namedResource = {
+      id: 'nr-fractional-window',
+      name: 'Developer 50% window',
+      startWeek: 2,
+      endWeek: 4,
+      allocationPct: 50,
+      allocationMode: 'TIMELINE',
+      allocationPercent: 50,
+      allocationStartWeek: 0,
+      allocationEndWeek: 6,
+    }
+    const base = makeResourceType('rt-dev', 'Developer', 1, 8, { namedResources: [namedResource] })
+    const periods: CapacityPlanPeriodResult[] = [{
+      periodIndex: 0,
+      periodLabel: 'W0-7',
+      startWeek: 0,
+      endWeek: 7,
+      resources: [{
+        resourceTypeId: 'rt-dev',
+        resourceTypeName: 'Developer',
+        headcount: 1,
+        avgDemandFTE: 1,
+        peakDemandFTE: 1,
+        utilisationPct: 100,
+        costForPeriod: 0,
+      }],
+    }]
+
+    const materialized = materializeEnvelopeToResourceTypes([base], periods, 7)[0]!
+    expect(materialized.roleSegments).toBeUndefined()
+    expect(materialized.count).toBeCloseTo(1, 6)
+    expect(materialized.namedResources?.find(resource => resource.id === namedResource.id)).toBe(namedResource)
+    expect(materialized.namedResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'nr-fractional-window',
+        allocationPct: 50,
+        allocationPercent: 50,
+        startWeek: 2,
+        endWeek: 4,
+        allocationStartWeek: 0,
+        allocationEndWeek: 6,
+      }),
+    ]))
+
+    // The physical availability window is authoritative: the wider legacy
+    // allocation window cannot create capacity in weeks 0-1 or 5-6.
+    for (let week = 0; week <= 7; week++) {
+      const expectedCapacityHours = week >= 2 && week <= 4 ? 40 : 0
+      expect(getWeeklyCapacity(materialized, week, HPD)).toBeCloseTo(expectedCapacityHours, 6)
+    }
+  })
+
 
   it('replays parallel same-role periods exactly and conserves effort', () => {
     const input = makeInput([

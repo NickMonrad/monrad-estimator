@@ -468,13 +468,24 @@ export function materializeEnvelopeToResourceTypes(
         windows.push(...nr.capacitySegments.map(seg => ({ startWeek: seg.startWeek, endWeek: seg.endWeek })))
         continue
       }
-      const mode = nr.allocationMode
-      const start = nr.allocationStartWeek ?? nr.startWeek
-      const end = nr.allocationEndWeek ?? nr.endWeek
-      // EFFORT and other unbounded legacy resources are available throughout
-      // the envelope. A TIMELINE resource with a finite window is not.
-      if (mode !== 'TIMELINE' || (start == null && end == null)) return null
-      windows.push({ startWeek: start ?? 0, endWeek: end ?? Infinity })
+
+      // Match getWeeklyCapacity: legacy availability bounds always apply.
+      // TIMELINE allocation bounds further restrict that physical window;
+      // unbounded legacy resources remain available throughout the envelope.
+      const availabilityStart = nr.startWeek ?? 0
+      const availabilityEnd = nr.endWeek ?? Infinity
+      if (nr.allocationMode === 'TIMELINE') {
+        const allocationStart = nr.allocationStartWeek ?? nr.startWeek ?? 0
+        const allocationEnd = nr.allocationEndWeek ?? nr.endWeek ?? Infinity
+        windows.push({
+          startWeek: Math.max(availabilityStart, allocationStart),
+          endWeek: Math.min(availabilityEnd, allocationEnd),
+        })
+      } else if (nr.startWeek != null || nr.endWeek != null) {
+        windows.push({ startWeek: availabilityStart, endWeek: availabilityEnd })
+      } else {
+        return null
+      }
     }
     return windows
   }
@@ -511,6 +522,13 @@ export function materializeEnvelopeToResourceTypes(
 
         let preservedFte = 0
         for (const nr of preservedNamedResources) {
+          // capacitySegments are authoritative; otherwise mirror the
+          // scheduler's physical start/end guard before legacy allocation.
+          if (!nr.capacitySegments || nr.capacitySegments.length === 0) {
+            const start = nr.startWeek ?? 0
+            const end = nr.endWeek ?? Infinity
+            if (week < start || week > end) continue
+          }
           preservedFte += effectiveAllocationPct(nr, week) / 100
         }
         const remaining = Math.max(0, ep.headcount - preservedFte)
@@ -1058,6 +1076,14 @@ export function computeJointPlan(
         for (let week = period.startWeek; week < period.endWeek; week++) {
           let weeklyFloor = 0
           for (const namedResource of rt.namedResources ?? []) {
+            // capacitySegments are authoritative; otherwise match
+            // getWeeklyCapacity's physical availability guard before applying
+            // legacy allocation fields.
+            if (!namedResource.capacitySegments || namedResource.capacitySegments.length === 0) {
+              const start = namedResource.startWeek ?? 0
+              const end = namedResource.endWeek ?? Infinity
+              if (week < start || week > end) continue
+            }
             weeklyFloor += effectiveAllocationPct(namedResource, week) / 100
           }
           if (weeklyFloor > periodFloor) periodFloor = weeklyFloor
