@@ -8,7 +8,7 @@ import {
   type CapacityPlanPeriodResult,
   type JointPlanResult,
 } from '../lib/capacity-planner.js'
-import { runSAPlanner, type SAPlannerConfig } from '../lib/sa-planner.js'
+import { runSAPlanner, SAPlannerInfeasibleError, type SAPlannerConfig } from '../lib/sa-planner.js'
 import { getWeeklyCapacity, type SchedulerInput, type SchedulerResourceType } from '../lib/scheduler.js'
 import {
   parallelSameRole,
@@ -163,7 +163,8 @@ describe('reconciliation — returned capacity is authoritative', () => {
     expect(result.targetAchieved).toBe(true)
 
     const replaySchedule = replayReturnedCapacity(input, result, config)
-    expect(replaySchedule.totalDeliveryWeeks).toBeLessThanOrEqual(config.targetDurationWeeks + 1)
+    expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 4)
+    expect(replaySchedule.totalDeliveryWeeks).toBeLessThanOrEqual(config.targetDurationWeeks)
 
     expectCapacityIsAuthoritative(input, result, config)
   })
@@ -224,10 +225,10 @@ describe('reconciliation — returned capacity is authoritative', () => {
   })
 
   it('reconciliation failure cannot produce targetAchieved: true', () => {
-    // Create a resource type with an impossible profile window (too narrow)
+    // Create a resource type with an impossible profile window (too narrow).
     const dev = makeResourceType('rt-dev', 'Developer', 1)
     dev.roleSegments = [{ startWeek: 0, endWeek: 1, allocationPercent: 100 }]
-    // 800h effort, but only 1 week of availability at 1 FTE = 40h capacity
+    // 800h effort, but only 1 week of availability at 1 FTE = 40h capacity.
     const input = makeInput([
       makeEpic('fail-epic', [
         makeFeature('fail-f0', [makeStory('fail-s0', [makeTask(800, 'rt-dev', 'Developer', 8)])], 0),
@@ -237,14 +238,11 @@ describe('reconciliation — returned capacity is authoritative', () => {
     const config = makeConfig(4)
     const result = computeJointPlan(input, config)
 
-    // Target cannot be met — either targetAchieved is false or diagnostics explain
-    if (result.targetAchieved) {
-      // If somehow achieved, delivery must be within target
-      expect(result.deliveryWeeks).toBeLessThanOrEqual(config.targetDurationWeeks + 1)
-    } else {
-      // Not achieved — diagnostics should explain why
-      expect(result.loopDiagnostics.length).toBeGreaterThan(0)
-    }
+    expect(result.targetAchieved).toBe(false)
+    expect(result.deliveryWeeks).toBe(Infinity)
+    expect(result.periods).toEqual([])
+    expect(result.loopDiagnostics.length).toBeGreaterThan(0)
+    expect(result.diagnostics?.length).toBeGreaterThan(0)
   })
 })
 
@@ -447,4 +445,263 @@ describe('iteration count', () => {
     expect(result.iterations).toBeGreaterThan(0)
     expect(result.iterations).toBeLessThanOrEqual(200)
   })
+})
+// ═══════════════════════════════════════════════════════════════════════════════
+// Real-planner regressions for named windows, final-period replay, profile growth,
+// and quantum-level minimisation.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('real planner regressions for #481 review findings', () => {
+  it('starts a named TIMELINE-locked task inside its availability window', () => {
+    const namedResource = {
+      id: 'nr-timeline',
+      name: 'Developer 1',
+      startWeek: 2,
+      endWeek: 4,
+      allocationPct: 100,
+      allocationMode: 'TIMELINE',
+      allocationPercent: 100,
+      allocationStartWeek: 2,
+      allocationEndWeek: 4,
+    }
+    const input = makeInput([
+      makeEpic('timeline-epic', [
+        makeFeature('timeline-feature', [
+          makeStory('timeline-story', [makeTask(40, 'rt-dev', 'Developer', 8)]),
+        ]),
+      ]),
+    ], [makeResourceType('rt-dev', 'Developer', 1, 8, { namedResources: [namedResource] })])
+    const config = makeConfig(5)
+    config.maxCap = new Map([['rt-dev', 1]])
+
+    const result = computeJointPlan(input, config)
+    expect(result.targetAchieved).toBe(true)
+    expect(result.levellingResult.featureStartWeeks.get('timeline-feature')).toBeGreaterThanOrEqual(2)
+
+    const replayed = materializeEnvelopeToResourceTypes(input.resourceTypes, result.periods, config.periodWeeks)
+    const replayedDev = replayed.find(rt => rt.id === 'rt-dev')!
+    expect(replayedDev.namedResources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'nr-timeline',
+        startWeek: 2,
+        endWeek: 4,
+        allocationMode: 'TIMELINE',
+        allocationStartWeek: 2,
+        allocationEndWeek: 4,
+      }),
+    ]))
+    expect(getWeeklyCapacity(replayedDev, 0, HPD)).toBeCloseTo(0, 6)
+    expect(getWeeklyCapacity(replayedDev, 1, HPD)).toBeCloseTo(0, 6)
+
+    const replaySchedule = runSAPlanner({ ...input, resourceTypes: replayed }, makeSaConfig(config))
+    expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 6)
+    expect(replaySchedule.featureStartWeeks).toEqual(result.levellingResult.featureStartWeeks)
+  })
+
+  it('replays parallel same-role periods exactly and conserves effort', () => {
+    const input = makeInput([
+      makeEpic('parallel-replay-epic', [
+        makeFeature('parallel-200h', [makeStory('parallel-200h-story', [makeTask(200, 'rt-dev', 'Developer', 8)])], 0),
+        makeFeature('parallel-320h', [makeStory('parallel-320h-story', [makeTask(320, 'rt-dev', 'Developer', 8)])], 1),
+      ], 0, { featureMode: 'parallel' }),
+    ], [makeResourceType('rt-dev', 'Developer', 1)])
+    const config = makeConfig(10)
+    config.periodWeeks = 4
+    config.maxDeltaPerPeriod = 1
+    config.minFloor = new Map()
+    config.dayRates = new Map()
+    config.maxParallelismPerFeature = 2
+
+    const result = computeJointPlan(input, config)
+    expect(result.targetAchieved).toBe(true)
+
+    const replayed = materializeEnvelopeToResourceTypes(input.resourceTypes, result.periods, config.periodWeeks)
+    const replaySchedule = runSAPlanner({ ...input, resourceTypes: replayed }, makeSaConfig(config))
+    expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 6)
+    expect(replaySchedule.featureStartWeeks).toEqual(result.levellingResult.featureStartWeeks)
+
+    for (const feature of input.epics.flatMap(epic => epic.features)) {
+      expect(replaySchedule.featureStartWeeks.has(feature.id)).toBe(true)
+      expect(replaySchedule.weeklyAllocationsByFeature.has(feature.id)).toBe(true)
+    }
+
+    const effortByRole = [...replaySchedule.weeklyDemandByResourceType.get('rt-dev') ?? []]
+      .reduce((total, days) => total + (days ?? 0), 0)
+    expect(effortByRole).toBeCloseTo((200 + 320) / HPD, 6)
+    expectCapacityIsAuthoritative(input, result, config)
+  })
+
+  function profileParallelInput(allocationPercent: number) {
+    const dev = makeResourceType('rt-dev', 'Developer', 2, 8, {
+      roleSegments: [{ startWeek: 0, endWeek: 1, allocationPercent }],
+    })
+    return makeInput([
+      makeEpic('profile-growth-epic', [0, 1, 2].map(index => makeFeature(
+        `profile-feature-${index}`,
+        [makeStory(`profile-story-${index}`, [makeTask(80, 'rt-dev', 'Developer', 8)])],
+        index,
+      )), 0, { featureMode: 'parallel' }),
+    ], [dev])
+  }
+
+  it('grows a two-week profile without broadening its windows', () => {
+    const input = profileParallelInput(200)
+    const config = makeConfig(6)
+    const result = computeJointPlan(input, config)
+    expect(result.targetAchieved).toBe(true)
+
+    const replayed = materializeEnvelopeToResourceTypes(input.resourceTypes, result.periods, config.periodWeeks)
+    const replayedDev = replayed.find(rt => rt.id === 'rt-dev')!
+    expect(replayedDev.namedResources.length).toBeGreaterThan(0)
+    for (const nr of replayedDev.namedResources) {
+      expect(nr.startWeek).toBe(0)
+      expect(nr.endWeek).toBe(1)
+    }
+    expect(getWeeklyCapacity(replayedDev, 2, HPD)).toBeCloseTo(0, 6)
+    const replaySchedule = runSAPlanner({ ...input, resourceTypes: replayed }, makeSaConfig(config))
+    expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 6)
+    expect(replaySchedule.totalDeliveryWeeks).toBeLessThanOrEqual(config.targetDurationWeeks)
+  })
+
+  it('completes the same profile workload in two weeks at 300% capacity', () => {
+    const input = profileParallelInput(300)
+    const config = makeConfig(6)
+    const schedule = runSAPlanner(input, makeSaConfig(config))
+    expect(schedule.totalDeliveryWeeks).toBeCloseTo(2, 6)
+    expect(schedule.weeklyDemandByResourceType.get('rt-dev')?.reduce((sum, days) => sum + days, 0)).toBeCloseTo(30, 6)
+  })
+
+  it('fails truthfully when the same profile is hard-capped at 200%', () => {
+    const input = profileParallelInput(200)
+    const config = makeConfig(6)
+    config.maxCap = new Map([['rt-dev', 2]])
+    const result = computeJointPlan(input, config)
+
+    expect(result.targetAchieved).toBe(false)
+    expect(result.deliveryWeeks).toBe(Infinity)
+    expect(result.periods).toEqual([])
+    expect(result.diagnostics?.length).toBeGreaterThan(0)
+    expect(result.diagnostics?.some(d => d.blocker === 'PROFILE_WINDOW' || d.blocker === 'ROLE_MAX_CAP')).toBe(true)
+  })
+
+  it('removes every 0.25 FTE period quantum that is still removable', () => {
+    const input = makeInput([
+      makeEpic('quantum-epic', [
+        makeFeature('quantum-feature', [makeStory('quantum-story', [makeTask(200, 'rt-dev', 'Developer', 8)])]),
+      ]),
+    ], [makeResourceType('rt-dev', 'Developer', 10)])
+    const config = makeConfig(12)
+    const result = computeJointPlan(input, config)
+    expect(result.targetAchieved).toBe(true)
+
+    const replaySchedule = replayReturnedCapacity(input, result, config)
+    expect(replaySchedule.totalDeliveryWeeks).toBeCloseTo(result.deliveryWeeks, 6)
+
+    for (const period of result.periods) {
+      for (const resource of period.resources) {
+        if (resource.resourceTypeId !== 'rt-dev' || resource.headcount < 0.25 - EPS) continue
+        const candidatePeriods = result.periods.map(candidatePeriod => ({
+          ...candidatePeriod,
+          resources: candidatePeriod.resources.map(candidateResource => (
+            candidatePeriod.periodIndex === period.periodIndex && candidateResource.resourceTypeId === 'rt-dev'
+              ? { ...candidateResource, headcount: Math.max(0, candidateResource.headcount - 0.25) }
+              : candidateResource
+          )),
+        }))
+        let candidateSchedule
+        try {
+          const candidateRts = materializeEnvelopeToResourceTypes(input.resourceTypes, candidatePeriods, config.periodWeeks)
+          candidateSchedule = runSAPlanner({ ...input, resourceTypes: candidateRts }, makeSaConfig(config))
+        } catch (error) {
+          if (error instanceof SAPlannerInfeasibleError) continue
+          throw error
+        }
+        if (candidateSchedule.totalDeliveryWeeks <= config.targetDurationWeeks + EPS) {
+          throw new Error(`returned plan retained removable 0.25 FTE in period ${period.periodIndex}`)
+        }
+      }
+    }
+  })
+  it('does not restore original profile capacity for an explicit zero envelope', () => {
+    const specialist = makeResourceType('rt-specialist', 'Specialist', 3)
+    specialist.roleSegments = [{ startWeek: 0, endWeek: 1, allocationPercent: 100 }]
+    const periods: CapacityPlanPeriodResult[] = [{
+      periodIndex: 0,
+      periodLabel: 'W0-4',
+      startWeek: 0,
+      endWeek: 4,
+      resources: [{
+        resourceTypeId: 'rt-specialist',
+        resourceTypeName: 'Specialist',
+        headcount: 0,
+        avgDemandFTE: 0,
+        peakDemandFTE: 0,
+        utilisationPct: 0,
+        costForPeriod: 0,
+      }],
+    }]
+
+    const materialized = materializeEnvelopeToResourceTypes([specialist], periods, 4)
+    const materializedSpecialist = materialized.find(rt => rt.id === 'rt-specialist')!
+    expect(materializedSpecialist.count).toBe(0)
+    expect(materializedSpecialist.namedResources).toHaveLength(0)
+    expect(getWeeklyCapacity(materializedSpecialist, 0, HPD)).toBeCloseTo(0, 6)
+    expect(getWeeklyCapacity(materializedSpecialist, 1, HPD)).toBeCloseTo(0, 6)
+
+    const input = makeInput([
+      makeEpic('zero-envelope-epic', [
+        makeFeature('zero-envelope-feature', [
+          makeStory('zero-envelope-story', [makeTask(8, 'rt-specialist', 'Specialist', 8)]),
+        ]),
+      ]),
+    ], [specialist])
+    expect(() => runSAPlanner({ ...input, resourceTypes: materialized }, makeSaConfig(makeConfig(1))))
+      .toThrow(SAPlannerInfeasibleError)
+  })
+  it('recomputes cost and budget from the reduced single-feature envelope', () => {
+    const input = makeInput([
+      makeEpic('single200h-epic', [
+        makeFeature('single200h-feature', [
+          makeStory('single200h-story', [makeTask(200, 'rt-dev', 'Developer', 8)]),
+        ]),
+      ]),
+    ], [makeResourceType('rt-dev', 'Developer', 10)])
+    const config = makeConfig(12)
+    config.periodWeeks = 4
+    config.maxDeltaPerPeriod = 1
+    config.minFloor = new Map()
+    config.dayRates = new Map([['rt-dev', 1000]])
+    config.maxBudget = 30000
+    config.maxParallelismPerFeature = 2
+
+    const result = computeJointPlan(input, config)
+
+    expect(result.targetAchieved).toBe(true)
+    expect(result.periods.length).toBeGreaterThan(0)
+
+    const replayed = materializeEnvelopeToResourceTypes(input.resourceTypes, result.periods, config.periodWeeks)
+    const replaySchedule = runSAPlanner({ ...input, resourceTypes: replayed }, makeSaConfig(config))
+    const weeklyDemand = replaySchedule.weeklyDemandByResourceType.get('rt-dev') ?? []
+    const periodCosts: number[] = []
+
+    for (const period of result.periods) {
+      const periodWidth = period.endWeek - period.startWeek
+      for (const resource of period.resources) {
+        const expectedCost = Math.round(resource.headcount * periodWidth * 5 * 1000)
+        expect(resource.costForPeriod).toBe(expectedCost)
+        periodCosts.push(resource.costForPeriod)
+
+        const replayDemandDays = weeklyDemand
+          .slice(period.startWeek, period.endWeek)
+          .reduce((sum, days) => sum + (days ?? 0), 0)
+        const replayAvgDemandFTE = periodWidth > 0 ? replayDemandDays / (periodWidth * 5) : 0
+        expect(resource.avgDemandFTE).toBe(Math.round(replayAvgDemandFTE * 100) / 100)
+      }
+    }
+
+    expect(periodCosts.length).toBeGreaterThan(0)
+    expect(result.totalCost).toBe(periodCosts.reduce((sum, cost) => sum + cost, 0))
+    expect(result.budgetExceeded).toBe(false)
+  })
+
 })
