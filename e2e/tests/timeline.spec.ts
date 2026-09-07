@@ -1661,9 +1661,27 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
       if (row.resourceTypeName !== generatedResource!.resourceTypeName) continue
       actualCapacityByWeek.set(row.week, (actualCapacityByWeek.get(row.week) ?? 0) + row.capacityDays)
     }
+    // Timeline weeklyCapacity is a transport DTO rounded to one decimal day.
+    // Compare staffed weeks at that DTO precision, but keep zero/gap weeks exact.
+    const capacityDtoDecimalPlaces = 1
+    const capacityDtoRoundingHalfUnit = 0.5 * 10 ** -capacityDtoDecimalPlaces
     const allCapacityWeeks = new Set([...expectedCapacityByWeek.keys(), ...actualCapacityByWeek.keys()])
     for (const week of allCapacityWeeks) {
-      expect(actualCapacityByWeek.get(week) ?? 0).toBeCloseTo(expectedCapacityByWeek.get(week) ?? 0, 6)
+      const expectedCapacity = expectedCapacityByWeek.get(week) ?? 0
+      const actualCapacity = actualCapacityByWeek.get(week) ?? 0
+      if (expectedCapacity === 0) {
+        expect(actualCapacity, `Unexpected capacity in gap week ${week}`).toBe(0)
+        continue
+      }
+      const floatingPointEpsilon = Number.EPSILON * Math.max(
+        1,
+        Math.abs(expectedCapacity),
+        Math.abs(actualCapacity),
+      )
+      expect(
+        Math.abs(actualCapacity - expectedCapacity),
+        `Capacity mismatch in week ${week}: expected ${expectedCapacity}, received ${actualCapacity}`,
+      ).toBeLessThanOrEqual(capacityDtoRoundingHalfUnit + floatingPointEpsilon)
     }
 
     /*
