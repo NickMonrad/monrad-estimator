@@ -65,3 +65,34 @@ The source planning outputs provide a useful qualified comparison: the accepted 
 - #480 must distinguish an unrestricted role maximum from an explicit/profile-backed availability window; blank `maxCap` cannot erase a deliberate profile window, and diagnostics should identify the constrained role and window.
 - #481 must plan around explicit/manual profile windows and reconcile reported delivery with the same final capacity-aware schedule; the benchmark's 53-week control is the current evidence baseline, not a production target.
 - Both follow-on issues should retain the effort, dependency, capacity and deterministic invariants established here. No production planner behaviour is changed by this benchmark work.
+
+## Joint-planner regression contract (#481)
+
+The #481 joint planner adds a separate reconciliation contract; it does not
+change the deterministic #479 scheduler or capacity-plan baseline values above.
+The returned period envelope is authoritative and must be replayable through
+the production materializer: replay must preserve delivery duration and feature
+starts, conserve scheduled effort by role, complete dependencies, and keep
+weekly demand at or below effective committed capacity. Explicit named-resource
+locks and profile windows remain hard (including zero-capacity gaps), while
+growth and reduction operate in deterministic 0.25-FTE quanta. A target failure
+must return the best truthful result or structured diagnostics rather than a
+vacuous successful claim.
+
+The generated envelope is normalised to the same week-level authority used by
+replay. Periods use an inclusive `startWeek` and exclusive `endWeek`; zero
+periods are retained so unavailable weeks and profile gaps cannot be inferred
+away. A role-level `roleSegments` profile constrains only aggregate role
+capacity, while named-person windows remain independent. When a role has both
+named and unnamed slots, unrestricted unnamed capacity remains available
+outside a named person's window. A named-only role does not gain synthetic
+out-of-window capacity. Protected named allocations are floors of the reported
+envelope and therefore remain included in cost, peak, and utilisation metrics.
+
+Manual feature windows, including fractional-week starts, and individual story
+pins are enforced during planning and replay. A story pin does not delay its
+automatic siblings, and applying a plan preserves manual timeline rows. When
+an immutable pin prevents the target, the completed plan retains its achieved
+duration and reports a `SCHEDULE_LOCK` diagnostic. Generated periods can split
+at availability or protected-allocation boundaries within the requested planning
+period; the apply path must reproduce their weekly capacity and feature starts.

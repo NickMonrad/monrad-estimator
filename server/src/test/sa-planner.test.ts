@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { runSAPlanner, analyzeTargetMiss, type SAPlannerConfig } from '../lib/sa-planner.js'
+import { runSAPlanner, analyzeTargetMiss, SAPlannerInfeasibleError, type SAPlannerConfig } from '../lib/sa-planner.js'
 import type { SchedulerInput } from '../lib/scheduler.js'
 
 function makeInput(): SchedulerInput {
@@ -640,6 +640,69 @@ describe('#480 post-completion diagnostics (analyzeTargetMiss)', () => {
     expect(parallelDiag?.featureId).toBe('feat-1')
   })
 
+  it('reports a completed feature pin that fixes completion after the target', () => {
+    const input = makeInput()
+    input.epics[0].features = [makeFeature('pinned-target-miss', 0, 5)]
+    input.manualFeatureEntries = [{ featureId: 'pinned-target-miss', startWeek: 5, durationWeeks: 1 }]
+    const config = makeConfig({ targetDurationWeeks: 4 })
+    const result = runSAPlanner(input, config)
+    expect(result.totalDeliveryWeeks).toBe(6)
+
+    const diagnostics = analyzeTargetMiss(result, input, config)
+    const lock = diagnostics.find(d =>
+      d.blocker === 'SCHEDULE_LOCK' && d.featureId === 'pinned-target-miss')
+    expect(lock).toBeDefined()
+    expect(lock?.explanation).toContain('fixed completion')
+    expect(lock?.explanation).toContain('4-week target')
+  })
+
+  it('reports a completed story pin whose canonical interval ends after the target', () => {
+    const input = makeInput()
+    input.epics[0].features = [makeFeature('story-target-miss', 0, 5)]
+    input.manualStoryEntries = [{ storyId: 'story-target-miss-story', startWeek: 5 }]
+    const config = makeConfig({ targetDurationWeeks: 4 })
+
+    const result = runSAPlanner(input, config)
+    expect(result.totalDeliveryWeeks).toBe(6)
+
+    const diagnostics = analyzeTargetMiss(result, input, config)
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        blocker: 'SCHEDULE_LOCK',
+        featureId: 'story-target-miss',
+        explanation: expect.stringContaining('story-target-miss-story'),
+      }),
+    ]))
+  })
+
+  it('does not blame feasible, inactive, or missing manual pins', () => {
+    const input = makeInput()
+    const feasible = makeFeature('feasible-story-pin', 0, 5)
+    const inactive = { ...makeFeature('inactive-feature-pin', 1, 5), isActive: false as const }
+    input.epics[0].features = [feasible, inactive, makeFeature('slow-work', 2, 40)]
+    input.manualStoryEntries = [
+      { storyId: 'feasible-story-pin-story', startWeek: 3 },
+      { storyId: 'inactive-feature-pin-story', startWeek: 5 },
+      { storyId: 'missing-story', startWeek: 5 },
+    ]
+    input.manualFeatureEntries = [
+      { featureId: 'inactive-feature-pin', startWeek: 5, durationWeeks: 1 },
+      { featureId: 'missing-feature', startWeek: 5, durationWeeks: 1 },
+    ]
+    const config = makeConfig({ targetDurationWeeks: 4 })
+
+    const result = runSAPlanner(input, config)
+    expect(result.totalDeliveryWeeks).toBeGreaterThan(config.targetDurationWeeks)
+
+    const diagnostics = analyzeTargetMiss(result, input, config)
+    expect(diagnostics.some(d =>
+      d.blocker === 'SCHEDULE_LOCK' && d.featureId === 'feasible-story-pin')).toBe(false)
+    expect(diagnostics.some(d =>
+      d.blocker === 'SCHEDULE_LOCK' && d.featureId === 'inactive-feature-pin')).toBe(false)
+    expect(diagnostics.some(d =>
+      d.blocker === 'SCHEDULE_LOCK' && d.featureId === 'missing-feature')).toBe(false)
+  })
+
   it('returns empty diagnostics when target is met', () => {
     const input = makeInput()
     input.resourceTypes = [{
@@ -714,5 +777,173 @@ describe('#480 Starting Team Finder hand-off (route-level count boost)', () => {
     expect(result.totalDeliveryWeeks).toBeLessThanOrEqual(10)
     // Proves capacity above 12 is actually used
     expect(result.totalDeliveryWeeks).toBeLessThan(20)
+  })
+})
+
+
+describe('manual schedule locks', () => {
+  it('keeps a manually pinned feature inside its exact start and duration window', () => {
+    const input = makeInput()
+    input.epics[0].features = [makeFeature('pinned-feature', 0, 5)]
+    input.manualFeatureEntries = [{ featureId: 'pinned-feature', startWeek: 5, durationWeeks: 1 }]
+
+    const result = runSAPlanner(input, { targetDurationWeeks: 6 })
+
+    expect(result.featureStartWeeks.get('pinned-feature')).toBe(5)
+    expect(getFeatureWeeks(result, 'pinned-feature')).toEqual([5])
+    expect(result.totalDeliveryWeeks).toBe(6)
+    expect(result.weeklyDemandByResourceType.get('rt-1')?.[5]).toBeCloseTo(5, 6)
+  })
+
+  it('allocates a manually pinned story at its pinned week and preserves its demand', () => {
+    const input = makeInput()
+    input.epics[0].features = [makeFeature('story-pinned-feature', 0, 5)]
+    input.manualStoryEntries = [{ storyId: 'story-pinned-feature-story', startWeek: 5 }]
+
+    const result = runSAPlanner(input, { targetDurationWeeks: 6 })
+
+    expect(result.featureStartWeeks.get('story-pinned-feature')).toBe(5)
+    expect(getFeatureWeeks(result, 'story-pinned-feature')).toEqual([5])
+    expect(result.weeklyDemandByResourceType.get('rt-1')?.[5]).toBeCloseTo(5, 6)
+    expect(result.weeklyAllocationsByFeature.get('story-pinned-feature')?.get(5)?.get('rt-1')).toBeCloseTo(5, 6)
+  })
+
+  it('respects pinned demand when sharing finite weekly capacity', () => {
+    const input = makeInput()
+    input.epics[0].features = [makeFeature('locked', 0, 5), makeFeature('other', 1, 5, 'locked')]
+    input.manualStoryEntries = [{ storyId: 'locked-story', startWeek: 5 }]
+
+    const result = runSAPlanner(input, { targetDurationWeeks: 8 })
+    const demand = result.weeklyDemandByResourceType.get('rt-1') ?? []
+
+    expect(demand[5]).toBeLessThanOrEqual(5.000001)
+    expect(getFeatureWeeks(result, 'locked')).toEqual([5])
+    expect(Math.min(...getFeatureWeeks(result, 'other'))).toBeGreaterThan(5)
+  })
+
+  it('fails with SCHEDULE_LOCK when a pinned feature conflicts with dependencies', () => {
+    const input = makeInput()
+    input.epics[0].features = [makeFeature('predecessor', 0, 5), makeFeature('locked-dependent', 1, 5, 'predecessor')]
+    input.manualFeatureEntries = [{ featureId: 'locked-dependent', startWeek: 0, durationWeeks: 1 }]
+
+    try {
+      runSAPlanner(input, { targetDurationWeeks: 6 })
+      expect.fail('expected the conflicting feature lock to be infeasible')
+    } catch (error) {
+      expect(error).toBeInstanceOf(SAPlannerInfeasibleError)
+      expect((error as SAPlannerInfeasibleError).diagnostics.some(d => d.blocker === 'SCHEDULE_LOCK')).toBe(true)
+    }
+  })
+
+  it('fails with SCHEDULE_LOCK when pinned work exceeds capacity', () => {
+    const input = makeInput()
+    input.resourceTypes = [{ id: 'rt-1', name: 'Dev', count: 0, hoursPerDay: 8, namedResources: [] }]
+    input.epics[0].features = [makeFeature('capacity-locked', 0, 5)]
+    input.manualStoryEntries = [{ storyId: 'capacity-locked-story', startWeek: 5 }]
+
+    try {
+      runSAPlanner(input, { targetDurationWeeks: 6 })
+      expect.fail('expected the pinned story capacity lock to be infeasible')
+    } catch (error) {
+      expect(error).toBeInstanceOf(SAPlannerInfeasibleError)
+      expect((error as SAPlannerInfeasibleError).diagnostics.some(d => d.blocker === 'SCHEDULE_LOCK')).toBe(true)
+    }
+  })
+  it('lets automatic sibling work run before a later pinned story', () => {
+    const input = makeInput()
+    const feature = makeFeature('mixed-story-lock', 0, 5)
+    feature.userStories.push({
+      id: 'mixed-story-lock-pinned-story',
+      order: 1,
+      isActive: true as const,
+      tasks: [{
+        resourceTypeId: 'rt-1',
+        hoursEffort: 40,
+        durationDays: null,
+        resourceType: { id: 'rt-1', name: 'Dev', hoursPerDay: 8 },
+      }],
+    })
+    input.epics[0].features = [feature]
+    input.manualStoryEntries = [{ storyId: 'mixed-story-lock-pinned-story', startWeek: 3 }]
+
+    const result = runSAPlanner(input, { targetDurationWeeks: 4 })
+    const demand = result.weeklyDemandByResourceType.get('rt-1') ?? []
+
+    expect(result.featureStartWeeks.get('mixed-story-lock')).toBe(0)
+    expect(getFeatureWeeks(result, 'mixed-story-lock')).toEqual([0, 3])
+    expect(demand[0]).toBeCloseTo(5, 6)
+    expect(demand[3]).toBeCloseTo(5, 6)
+    expect(result.totalDeliveryWeeks).toBe(4)
+  })
+
+  it('prorates a fractional manual feature window without leaking work outside it', () => {
+    const input = makeInput()
+    input.epics[0].features = [makeFeature('fractional-feature-lock', 0, 5)]
+    input.manualFeatureEntries = [{ featureId: 'fractional-feature-lock', startWeek: 1.5, durationWeeks: 1 }]
+
+    const result = runSAPlanner(input, { targetDurationWeeks: 4 })
+    const allocations = getFeatureRtAllocations(result, 'fractional-feature-lock', 'rt-1')
+    const demand = result.weeklyDemandByResourceType.get('rt-1') ?? []
+    expect(result.featureStartWeeks.get('fractional-feature-lock')).toBe(1.5)
+    expect(allocations).toHaveLength(2)
+    expect(allocations[0]?.week).toBe(1)
+    expect(allocations[0]?.days).toBeCloseTo(2.5, 6)
+    expect(allocations[1]?.week).toBe(2)
+    expect(allocations[1]?.days).toBeCloseTo(2.5, 6)
+    expect(demand[0] ?? 0).toBe(0)
+    expect(demand[1]).toBeCloseTo(2.5, 6)
+    expect(demand[2]).toBeCloseTo(2.5, 6)
+    expect(demand.slice(3).every(days => (days ?? 0) === 0)).toBe(true)
+  })
+
+  it('uses explicit story duration when spreading pinned effort', () => {
+    const input = makeInput()
+    const feature = {
+      id: 'duration-pinned-story',
+      order: 0,
+      isActive: true as const,
+      timelineStartWeek: null,
+      userStories: [{
+        id: 'duration-pinned-story-story',
+        order: 0,
+        isActive: true as const,
+        tasks: [{
+          resourceTypeId: 'rt-1',
+          hoursEffort: 8,
+          durationDays: 10,
+          resourceType: { id: 'rt-1', name: 'Dev', hoursPerDay: 8 },
+        }],
+      }],
+      dependencies: [],
+    }
+    input.epics[0].features = [feature]
+    input.manualStoryEntries = [{ storyId: 'duration-pinned-story-story', startWeek: 1.5 }]
+
+    const result = runSAPlanner(input, { targetDurationWeeks: 4 })
+    const allocations = getFeatureRtAllocations(result, 'duration-pinned-story', 'rt-1')
+
+    expect(result.featureStartWeeks.get('duration-pinned-story')).toBe(1.5)
+    expect(allocations).toEqual([
+      { week: 1, days: 0.25 },
+      { week: 2, days: 0.5 },
+      { week: 3, days: 0.25 },
+    ])
+    expect(allocations.reduce((sum, allocation) => sum + allocation.days, 0)).toBeCloseTo(1, 6)
+  })
+  it('fails when a pinned story precedes its owning feature dependencies', () => {
+    const input = makeInput()
+    input.epics[0].features = [
+      makeFeature('predecessor-for-story-lock', 0, 5),
+      makeFeature('story-lock-before-dependency', 1, 5, 'predecessor-for-story-lock'),
+    ]
+    input.manualStoryEntries = [{ storyId: 'story-lock-before-dependency-story', startWeek: 0 }]
+
+    try {
+      runSAPlanner(input, { targetDurationWeeks: 4 })
+      expect.fail('expected the pinned story dependency lock to be infeasible')
+    } catch (error) {
+      expect(error).toBeInstanceOf(SAPlannerInfeasibleError)
+      expect((error as SAPlannerInfeasibleError).diagnostics.some(d => d.blocker === 'SCHEDULE_LOCK')).toBe(true)
+    }
   })
 })

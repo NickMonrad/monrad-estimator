@@ -60,12 +60,71 @@ async function setupTimeline(
     timeout: 8_000,
   })
 
-  // Set start date, then Update timeline
+  // Set the start date and persist it before scheduling.  The date input saves
+  // on blur, so letting the schedule click blur it would race PATCH
+  // /timeline/start-date against POST /timeline/schedule.
+  const projectId = new URL(page.url()).pathname.split('/')[2]
   const dateInput = page.locator('input[type="date"]')
   await expect(dateInput).toBeVisible({ timeout: 8_000 })
+  await expect(page.getByText('No timeline generated yet')).toBeVisible({ timeout: 8_000 })
+  const startDateResponse = page.waitForResponse(
+    response =>
+      new URL(response.url()).pathname === `/api/projects/${projectId}/timeline/start-date` &&
+      response.request().method() === 'PATCH',
+    { timeout: 10_000 },
+  )
+  const projectRefreshResponse = page.waitForResponse(
+    async response => {
+      if (new URL(response.url()).pathname !== `/api/projects/${projectId}` || response.request().method() !== 'GET') return false
+      if (response.status() !== 200) return true
+      return String((await response.json()).startDate ?? '').startsWith('2026-06-01')
+    },
+    { timeout: 10_000 },
+  )
+  const timelineRefreshResponse = page.waitForResponse(
+    async response => {
+      if (new URL(response.url()).pathname !== `/api/projects/${projectId}/timeline` || response.request().method() !== 'GET') return false
+      if (response.status() !== 200) return true
+      return String((await response.json()).startDate ?? '').startsWith('2026-06-01')
+    },
+    { timeout: 10_000 },
+  )
   await dateInput.fill('2026-06-01')
   await expect(dateInput).toHaveValue('2026-06-01')
+  await dateInput.blur()
+  const [savedDate, refreshedProject, refreshedTimeline] = await Promise.all([
+    startDateResponse,
+    projectRefreshResponse,
+    timelineRefreshResponse,
+  ])
+  expect(savedDate.status()).toBe(200)
+  expect(refreshedProject.status()).toBe(200)
+  expect(refreshedTimeline.status()).toBe(200)
+  expect((await refreshedProject.json()).startDate).toContain('2026-06-01')
+  expect((await refreshedTimeline.json()).startDate).toContain('2026-06-01')
+
+  const scheduleResponse = page.waitForResponse(
+    response =>
+      new URL(response.url()).pathname === `/api/projects/${projectId}/timeline/schedule` &&
+      response.request().method() === 'POST',
+    { timeout: 15_000 },
+  )
+  const scheduledTimelineResponse = page.waitForResponse(
+    async response => {
+      if (new URL(response.url()).pathname !== `/api/projects/${projectId}/timeline` || response.request().method() !== 'GET') return false
+      if (response.status() !== 200) return true
+      return (await response.json()).entries?.length === featureCount
+    },
+    { timeout: 15_000 },
+  )
   await quickSchedule(page)
+  const [scheduled, scheduledTimeline] = await Promise.all([
+    scheduleResponse,
+    scheduledTimelineResponse,
+  ])
+  expect(scheduled.status()).toBe(200)
+  expect((await scheduled.json()).entries).toHaveLength(featureCount)
+  expect((await scheduledTimeline.json()).entries).toHaveLength(featureCount)
 
   // Wait until the Gantt footer appears — it is only rendered once
   // timeline.entries.length > 0, so it's the earliest reliable signal
@@ -158,11 +217,40 @@ test.describe('Gantt Chart', () => {
     const startWeekInput = page.locator('input[min="0"]:not([id])').first()
     await startWeekInput.fill('2')
 
-    // Save — triggers PUT /timeline/:featureId with isManual: true
-    await page.getByRole('button', { name: /^save$/i }).click()
+    // Register both completion signals before saving.  The PUT response is
+    // the persistence contract; the subsequent Timeline GET proves the
+    // invalidated query has completed before asserting the re-rendered panel.
+    const projectId = new URL(page.url()).pathname.split('/')[2]
+    const saveResponse = page.waitForResponse(
+      response => {
+        const path = new URL(response.url()).pathname
+        return response.request().method() === 'PUT'
+          && /^\/api\/projects\/[^/]+\/timeline\/[^/]+$/.test(path)
+      },
+      { timeout: 10_000 },
+    )
+    const timelineRefreshResponse = page.waitForResponse(
+      async response => {
+        if (new URL(response.url()).pathname !== `/api/projects/${projectId}/timeline` || response.request().method() !== 'GET') return false
+        if (response.status() !== 200) return true
+        const timeline = await response.json() as { entries: Array<{ startWeek: number; isManual: boolean }> }
+        return timeline.entries.some(entry => entry.startWeek === 2 && entry.isManual)
+      },
+      { timeout: 10_000 },
+    )
 
-    // After the server persists isManual=true the Gantt re-renders and the
-    // edit panel shows the "↺ Reset to auto" button (only visible when isManual=true)
+    // Save — this sends PUT /timeline/:featureId with isManual: true.
+    await page.getByRole('button', { name: /^save$/i }).click()
+    const [saved, refreshed] = await Promise.all([saveResponse, timelineRefreshResponse])
+    expect(saved.status()).toBe(200)
+    expect(await saved.json()).toMatchObject({
+      startWeek: 2,
+      isManual: true,
+    })
+    expect(refreshed.status()).toBe(200)
+
+    // The edit panel reads the refreshed entry, so Reset to auto is the
+    // user-visible confirmation that the manual override survived re-render.
     await expect(page.getByRole('button', { name: /reset to auto/i })).toBeVisible({ timeout: 10_000 })
   })
   test('searches and creates a feature dependency in Timeline order', async ({ page }) => {
