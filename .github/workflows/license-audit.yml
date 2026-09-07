@@ -17,12 +17,17 @@ jobs:
         run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
       - name: Collect package licence evidence
         run: |
-          mkdir -p .license-audit
-          npm exec --yes --package=license-checker-rseidelsohn@5.0.1 -- license-checker-rseidelsohn --production --json --out .license-audit/packages.json --files .license-audit/license-files
+          mkdir -p license-audit
+          npm exec --yes --package=license-checker-rseidelsohn@5.0.1 -- license-checker-rseidelsohn --start "$PWD" --production --json --out "$PWD/license-audit/packages.json" --files "$PWD/license-audit/license-files"
           node --input-type=module <<'NODE'
           import fs from 'node:fs'
           import path from 'node:path'
-          const data = JSON.parse(fs.readFileSync('.license-audit/packages.json', 'utf8'))
+          const data = JSON.parse(fs.readFileSync('license-audit/packages.json', 'utf8'))
+          const names = Object.keys(data)
+          for (const expected of ['react', 'express', 'bcryptjs', 'dompurify', 'jszip']) {
+            if (!names.some(name => name === expected || name.startsWith(expected + '@'))) throw new Error(`Missing runtime dependency: ${expected}`)
+          }
+          if (names.length < 50) throw new Error(`Incomplete dependency inventory: ${names.length} packages`)
           const output = ['# Third-party licence evidence', '', 'Generated from the production npm installation for the PR #491 review. This is an audit artefact, not an approved release notice.', '']
           const unresolved = []
           for (const [name, info] of Object.entries(data).sort(([a], [b]) => a.localeCompare(b))) {
@@ -38,13 +43,13 @@ jobs:
               output.push('Original licence file not located; manual review required.', '')
             }
           }
-          fs.writeFileSync('.license-audit/THIRD_PARTY_NOTICES.md', output.join('\n'))
-          fs.writeFileSync('.license-audit/unresolved.txt', [...new Set(unresolved)].join('\n') + '\n')
-          console.log(`Collected ${Object.keys(data).length} packages; ${new Set(unresolved).size} require manual review.`)
+          fs.writeFileSync('license-audit/THIRD_PARTY_NOTICES.md', output.join('\n'))
+          fs.writeFileSync('license-audit/unresolved.txt', [...new Set(unresolved)].join('\n') + '\n')
+          console.log(`Collected ${names.length} packages; ${new Set(unresolved).size} require manual review.`)
           NODE
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: licence-audit
-          path: .license-audit/
-          if-no-files-found: warn
+          path: license-audit/
+          if-no-files-found: error
