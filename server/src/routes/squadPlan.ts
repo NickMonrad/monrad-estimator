@@ -311,7 +311,7 @@ function proofPeriodShape(periods: Array<Record<string, unknown>>): ApplyPeriod[
       return {
         resourceTypeId: String(value.resourceTypeId),
         headcount: Number(value.headcount),
-        demandFTE: Number(value.demandFTE ?? value.peakDemandFTE ?? value.avgDemandFTE ?? 0),
+        demandFTE: Number(value.demandFTE ?? value.avgDemandFTE ?? 0),
         utilisationPct: Number(value.utilisationPct ?? 0),
       }
     }),
