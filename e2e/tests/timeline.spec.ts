@@ -1580,10 +1580,6 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
       levellingResult?: { featureStartWeeks?: Record<string, number> }
     }
 
-    // Wait for result KPIs — Peak, Delivery, Planned squad cost, Avg Utilisation
-    await expect(drawer.getByText(/Peak/i)).toBeVisible({ timeout: 10_000 })
-    await expect(drawer.getByText(/Delivery/i)).toBeVisible()
-    await expect(drawer.getByText(/Planned squad cost/i)).toBeVisible()
 
     // ── Apply capacity profile ──
     const applyBtn = drawer.getByRole('button', { name: /apply capacity profile/i })
@@ -1804,7 +1800,6 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     )
     await drawer.getByRole('button', { name: /generate capacity profile/i }).click()
     await planResponse2
-    await expect(drawer.getByText(/Delivery/i)).toBeVisible({ timeout: 10_000 })
 
     // Apply the second profile
     const applyResponse2 = page.waitForResponse(

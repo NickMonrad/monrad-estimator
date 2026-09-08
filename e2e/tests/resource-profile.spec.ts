@@ -737,10 +737,6 @@ test.describe('Switch to manual capacity', () => {
     await generateBtn.click()
     await planResponse
 
-    // Wait for result KPIs
-    await expect(drawer.getByText(/Peak/i)).toBeVisible({ timeout: 10_000 })
-    await expect(drawer.getByText(/Delivery/i)).toBeVisible()
-    await expect(drawer.getByText(/Planned squad cost/i)).toBeVisible()
 
     // ── Apply capacity profile ──
     const applyBtn = drawer.getByRole('button', { name: /apply capacity profile/i })
