@@ -177,7 +177,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 | Test | Description |
 |------|-------------|
-| edits, locks, replans, unlocks, and applies a reviewed draft | Seeds Developer + Tech Lead tasks and schedules them, generates a draft, edits a period capacity value, confirms Apply is disabled while the result is stale, locks the edited capacity, awaits the replan response and verifies the locked value and updated consequence metrics, unlocks and awaits a second replan, applies, then reloads Timeline and compares persisted feature schedule values with the reviewed response through the Timeline API. |
+| edits, locks, replans, unlocks, and applies a reviewed draft | Seeds Developer + Tech Lead tasks and schedules them, generates a draft, changes period frequency and replans, then edits a returned capacity window. Confirms Apply is disabled before locking, checks the returned locked Developer capacity and consequence displays, verifies disjoint per-role request ranges and lock/unlock flags, then applies and reloads Timeline to compare persisted feature/story placements with the reviewed response. |
 
 #### `Snapshot History — retired pre-V4 display` describe block (2 tests — issue #444)
 

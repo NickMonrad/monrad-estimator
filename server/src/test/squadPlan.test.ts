@@ -990,6 +990,58 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       projectId: 'proj-1',
     } as never)
   })
+  const validLegacyApplyPayload = (schedule: unknown) => ({
+    name: 'Unsigned schedule',
+    targetWeeks: 10,
+    periodWeeks: 4,
+    maxDelta: 1,
+    periods: [{
+      periodIndex: 0,
+      startWeek: 0,
+      endWeek: 4,
+      entries: [{
+        resourceTypeId: 'rt-dev',
+        headcount: 1,
+        demandFTE: 0.8,
+        utilisationPct: 80,
+      }],
+    }],
+    schedule,
+  })
+
+  it('rejects an empty unsigned reviewed schedule before snapshot or transaction writes', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send(validLegacyApplyPayload({ features: [], stories: [] }))
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toContain('draft, draftToken, config, and schedule')
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('rejects a nonempty unsigned reviewed schedule before snapshot or transaction writes', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send(validLegacyApplyPayload({
+        features: [{ featureId: 'feature-1', name: 'Feature 1', startWeek: 0, durationWeeks: 1 }],
+        stories: [],
+      }))
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toContain('draft, draftToken, config, and schedule')
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
   it('returns 400 when plan periods include resource types outside the project', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)

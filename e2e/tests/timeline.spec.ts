@@ -1948,14 +1948,33 @@ test.describe('Squad Planner — editable draft review loop', () => {
     await expect(drawer.getByText(/achieved duration/i)).toBeVisible()
     await expect(drawer.getByText(/staffed fte-weeks/i)).toBeVisible()
 
+    // Changing frequency exercises the returned range adaptation before editing.
+    await drawer.getByRole('button', { name: 'Monthly', exact: true }).click()
+    const frequencyReplanResponse = page.waitForResponse(
+      response =>
+        response.url().includes(`/api/projects/${projectId}/squad-plan`) &&
+        !response.url().endsWith('/apply') &&
+        response.request().method() === 'POST' &&
+        response.status() === 200,
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /replan unlocked work/i }).click()
+    await frequencyReplanResponse
+    await expect(drawer.getByRole('button', { name: /replan unlocked work/i })).toBeEnabled()
+
     // Editing a period makes the previous reviewed result stale immediately.
     const capacityTable = drawer.locator('table').filter({ hasText: /Developer/i }).last()
-    const periodValue = capacityTable.getByRole('spinbutton', { name: /capacity for developer/i }).first()
-    await expect(periodValue).toBeVisible()
+    const developerCells = capacityTable.getByRole('spinbutton', { name: /^Capacity for Developer / })
+    await expect(developerCells).not.toHaveCount(0)
+    const periodValue = developerCells.first()
+    const periodName = await periodValue.getAttribute('aria-label')
+    if (!periodName) throw new Error('Developer capacity cell is missing its accessible range label')
+    const lockName = periodName.replace(/^Capacity for /, 'Lock capacity for ')
+    const unlockName = periodName.replace(/^Capacity for /, 'Unlock capacity for ')
     await periodValue.fill('1.25')
     await expect(drawer.getByRole('button', { name: /apply capacity profile/i })).toBeDisabled()
 
-    await capacityTable.getByRole('button', { name: /^lock capacity for developer/i }).first().click()
+    await capacityTable.getByRole('button', { name: lockName, exact: true }).click()
     const lockedReplanResponse = page.waitForResponse(
       response =>
         response.url().includes(`/api/projects/${projectId}/squad-plan`) &&
@@ -1965,21 +1984,33 @@ test.describe('Squad Planner — editable draft review loop', () => {
       { timeout: 30_000 },
     )
     await drawer.getByRole('button', { name: /replan unlocked work/i }).click()
-    const lockedReview = await (await lockedReplanResponse).json() as {
+    const lockedReviewResponse = await lockedReplanResponse
+    await expect(drawer.getByRole('button', { name: /replan unlocked work/i })).toBeEnabled()
+    const lockedReview = await lockedReviewResponse.json() as {
       periods: Array<{ resources: Array<{ resourceTypeName: string; headcount: number }> }>
       schedule?: { features: Array<{ featureId: string; startWeek: number; durationWeeks: number }> }
     }
     expect(lockedReview.periods.some(period =>
       period.resources.some(resource => resource.resourceTypeName === 'Developer' && resource.headcount === 1.25),
     )).toBe(true)
-    await expect(
-      capacityTable.getByRole('spinbutton', { name: /capacity for developer/i }).first(),
-    ).toHaveValue('1.25')
+    const lockedRequestBody = lockedReviewResponse.request().postDataJSON()
+    const lockedEdits = lockedRequestBody.draft.capacityEdits
+    expect(lockedEdits.some((edit: { headcount: number; locked: boolean }) => (
+      edit.headcount === 1.25 && edit.locked
+    ))).toBe(true)
+    for (const resourceTypeId of new Set(lockedEdits.map((edit: { resourceTypeId: string }) => edit.resourceTypeId))) {
+      const edits = lockedEdits
+        .filter((edit: { resourceTypeId: string }) => edit.resourceTypeId === resourceTypeId)
+        .sort((left: { startWeek: number }, right: { startWeek: number }) => left.startWeek - right.startWeek)
+      for (let index = 1; index < edits.length; index += 1) {
+        expect(edits[index - 1].endWeek).toBeLessThanOrEqual(edits[index].startWeek)
+      }
+    }
+    await expect(periodValue).toHaveValue('1.25')
     await expect(drawer.getByText(/peak staffing/i)).toBeVisible()
     await expect(drawer.getByText('Utilisation', { exact: true })).toBeVisible()
 
-    // Removing the lock allows that period to be optimised again on replan.
-    await capacityTable.getByRole('button', { name: /^unlock capacity for developer/i }).first().click()
+    await capacityTable.getByRole('button', { name: unlockName, exact: true }).click()
     await expect(drawer.getByRole('button', { name: /apply capacity profile/i })).toBeDisabled()
     const finalReplanResponse = page.waitForResponse(
       response =>
@@ -1990,12 +2021,26 @@ test.describe('Squad Planner — editable draft review loop', () => {
       { timeout: 30_000 },
     )
     await drawer.getByRole('button', { name: /replan unlocked work/i }).click()
-    const finalReview = await (await finalReplanResponse).json() as {
+    const finalReviewResponse = await finalReplanResponse
+    const finalReview = await finalReviewResponse.json() as {
       schedule?: {
         features: Array<{ featureId: string; name: string; startWeek: number; durationWeeks: number }>
         stories: Array<{ storyId: string; name: string; startWeek: number; durationWeeks: number }>
       }
       periods: Array<{ resources: Array<{ resourceTypeName: string; headcount: number }> }>
+    }
+    const finalRequestBody = finalReviewResponse.request().postDataJSON()
+    const finalEdits = finalRequestBody.draft.capacityEdits
+    expect(finalEdits.some((edit: { headcount: number; locked: boolean }) => (
+      edit.headcount === 1.25 && !edit.locked
+    ))).toBe(true)
+    for (const resourceTypeId of new Set(finalEdits.map((edit: { resourceTypeId: string }) => edit.resourceTypeId))) {
+      const edits = finalEdits
+        .filter((edit: { resourceTypeId: string }) => edit.resourceTypeId === resourceTypeId)
+        .sort((left: { startWeek: number }, right: { startWeek: number }) => left.startWeek - right.startWeek)
+      for (let index = 1; index < edits.length; index += 1) {
+        expect(edits[index - 1].endWeek).toBeLessThanOrEqual(edits[index].startWeek)
+      }
     }
     expect(finalReview.schedule?.features).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'Opt Feature' }),
