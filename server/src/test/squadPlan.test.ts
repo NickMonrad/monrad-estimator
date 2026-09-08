@@ -901,7 +901,7 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
       entries: period.resources.map(resource => ({
         resourceTypeId: resource.resourceTypeId,
         headcount: resource.headcount,
-        demandFTE: resource.peakDemandFTE ?? resource.avgDemandFTE ?? 0,
+        demandFTE: resource.avgDemandFTE,
         utilisationPct: resource.utilisationPct,
       })),
     }))
