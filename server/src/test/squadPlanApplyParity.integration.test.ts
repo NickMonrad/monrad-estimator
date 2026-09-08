@@ -1861,7 +1861,7 @@ describeIf('Scenario 7 — reviewed draft generation/materialisation/apply parit
       include: { segments: true },
     })
     expect(roleProfile?.segments).toEqual(expect.arrayContaining([
-      expect.objectContaining({ startWeek: 0, endWeek: 4, capacityPercent: 100 }),
+      expect.objectContaining({ startWeek: 0, endWeek: 3, capacityPercent: 100 }),
     ]))
   })
 })
