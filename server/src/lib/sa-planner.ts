@@ -129,16 +129,13 @@ export function analyzeTargetMiss(
     if (!rt.roleSegments || rt.roleSegments.length === 0) continue
 
     const weeklyDemand = result.weeklyDemandByResourceType.get(rt.id) ?? []
-    const capAvailable = new Set<number>()
-    for (const seg of rt.roleSegments) {
-      for (let w = seg.startWeek; w <= seg.endWeek; w++) capAvailable.add(w)
-    }
 
     // Find demand weeks beyond the profile window
     let demandBeyondWindow = 0
     let firstDemandBeyondWeek = -1
     for (let w = 0; w < weeklyDemand.length; w++) {
-      if ((weeklyDemand[w] ?? 0) > EPSILON && !capAvailable.has(w)) {
+      if ((weeklyDemand[w] ?? 0) > EPSILON &&
+        !rt.roleSegments.some(segment => w >= segment.startWeek && w <= segment.endWeek)) {
         demandBeyondWindow += weeklyDemand[w]
         if (firstDemandBeyondWeek < 0) firstDemandBeyondWeek = w
       }

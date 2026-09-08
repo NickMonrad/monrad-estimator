@@ -12,6 +12,7 @@
  */
 
 import { effectiveAllocationPct, type SchedulerInput, type SchedulerResourceType } from './scheduler.js'
+import { scheduleDurationDays } from '../utils/round.js'
 import { type LevellingResult } from './leveller.js'
 import {
   runSAPlanner,
@@ -21,6 +22,55 @@ import {
   type SAPlannerResult,
   type PlannerDiagnostic,
 } from './sa-planner.js'
+
+// ─── Public types ────────────────────────────────────────────────────────────
+
+export interface DraftPlanCapacityEdit {
+  resourceTypeId: string
+  startWeek: number
+  endWeek: number
+  headcount: number
+  locked: boolean
+}
+
+export interface DraftPlanConstraints {
+  capacityEdits: DraftPlanCapacityEdit[]
+  manualFeatureEntries: Array<{ featureId: string; startWeek: number; durationWeeks: number }>
+  manualStoryEntries: Array<{ storyId: string; startWeek: number }>
+}
+
+function acceptedDraftConstraints(
+  draft: DraftPlanConstraints | undefined,
+  input: SchedulerInput,
+): DraftPlanConstraints {
+  const source = draft ?? {
+    capacityEdits: [],
+    manualFeatureEntries: input.manualFeatureEntries,
+    manualStoryEntries: input.manualStoryEntries,
+  }
+  return {
+    capacityEdits: [...source.capacityEdits]
+      .filter(edit =>
+        Number.isFinite(edit.startWeek) &&
+        Number.isFinite(edit.endWeek) &&
+        edit.endWeek > edit.startWeek &&
+        Number.isFinite(edit.headcount) &&
+        edit.headcount >= 0)
+      .sort((a, b) =>
+        a.resourceTypeId.localeCompare(b.resourceTypeId) ||
+        a.startWeek - b.startWeek ||
+        a.endWeek - b.endWeek),
+    manualFeatureEntries: [...source.manualFeatureEntries]
+      .filter(entry =>
+        Number.isFinite(entry.startWeek) &&
+        Number.isFinite(entry.durationWeeks) &&
+        entry.durationWeeks >= 0)
+      .sort((a, b) => a.featureId.localeCompare(b.featureId)),
+    manualStoryEntries: [...source.manualStoryEntries]
+      .filter(entry => Number.isFinite(entry.startWeek))
+      .sort((a, b) => a.storyId.localeCompare(b.storyId)),
+  }
+}
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -45,8 +95,10 @@ export interface CapacityPlanConfig {
   maxParallelismPerFeature?: number
   /** Maximum number of epics active simultaneously. Default: all (no limit). */
   maxConcurrentEpics?: number
-  /** Optional maximum budget — if exceeded, result includes overflow flag */
+  /** Optional maximum budget — if exceeded, result includes overflow flag. */
   maxBudget?: number
+  /** Optional editable draft constraints; absent preserves legacy planning. */
+  draft?: DraftPlanConstraints
 }
 
 export interface CapacityPlanPeriodResult {
@@ -114,12 +166,263 @@ function canMaterializeSyntheticCapacity(
   return baseUnnamedSlots > FLOAT_EPSILON || envelopeHeadcount > rt.count + FLOAT_EPSILON
 }
 
+function baseSyntheticCapacity(rt: SchedulerResourceType, week: number): number {
+  if (rt.roleSegments !== undefined) {
+    const segment = rt.roleSegments.find(candidate =>
+      week >= candidate.startWeek && week <= candidate.endWeek)
+    return segment ? segment.allocationPercent / 100 : 0
+  }
+  return Math.max(0, rt.count - (rt.namedResources ?? []).length)
+}
+
+function draftCapacityBoundaries(
+  rt: SchedulerResourceType,
+  edits: DraftPlanCapacityEdit[],
+): number[] {
+  // Scheduler capacity segments use inclusive ends, while draft edits use
+  // half-open [startWeek, endWeek) windows. Convert every source boundary to
+  // the same half-open representation and evaluate only the resulting pieces.
+  const boundaries = new Set<number>([0, Infinity])
+  const addBoundary = (value: number | null | undefined) => {
+    if (value == null || !Number.isFinite(value)) return
+    boundaries.add(value)
+  }
+  const addInclusiveWindow = (startWeek: number, endWeek: number) => {
+    addBoundary(startWeek)
+    if (Number.isFinite(endWeek)) addBoundary(endWeek + 1)
+  }
+
+  for (const segment of rt.roleSegments ?? []) {
+    addInclusiveWindow(segment.startWeek, segment.endWeek)
+  }
+  for (const resource of rt.namedResources ?? []) {
+    addInclusiveWindow(resource.startWeek ?? 0, resource.endWeek ?? Infinity)
+    addInclusiveWindow(resource.allocationStartWeek ?? 0, resource.allocationEndWeek ?? Infinity)
+    for (const segment of resource.capacitySegments ?? []) {
+      addInclusiveWindow(segment.startWeek, segment.endWeek)
+    }
+  }
+  for (const edit of edits) {
+    addBoundary(edit.startWeek)
+    addBoundary(edit.endWeek)
+  }
+
+  return [...boundaries].sort((a, b) => a - b)
+}
+
+function appendDraftCapacitySegment(
+  segments: Array<{ startWeek: number; endWeek: number; allocationPercent: number }>,
+  startWeek: number,
+  endWeek: number,
+  syntheticFte: number,
+): void {
+  const allocationPercent = syntheticFte * 100
+  const previous = segments[segments.length - 1]
+  const previousIsAdjacent = previous != null &&
+    previous.endWeek !== Infinity &&
+    previous.endWeek + 1 === startWeek
+  if (previous && previousIsAdjacent &&
+    Math.abs(previous.allocationPercent - allocationPercent) <= FLOAT_EPSILON) {
+    previous.endWeek = Number.isFinite(endWeek) ? endWeek - 1 : Infinity
+  } else if (allocationPercent > FLOAT_EPSILON) {
+    segments.push({
+      startWeek,
+      endWeek: Number.isFinite(endWeek) ? endWeek - 1 : Infinity,
+      allocationPercent,
+    })
+  }
+}
+
+/**
+ * Adapt role capacity around draft edits without materialising a week-by-week
+ * horizon. The number of pieces is bounded by persisted profile/named-resource
+ * boundaries plus draft edit boundaries, and open-ended profiles remain open.
+ */
+function adaptDraftCapacitySegments(
+  rt: SchedulerResourceType,
+  edits: DraftPlanCapacityEdit[],
+  diagnostics?: PlannerDiagnostic[],
+  maxCap?: Map<string, number>,
+): Array<{ startWeek: number; endWeek: number; allocationPercent: number }> {
+  if (diagnostics) {
+    for (const edit of edits) {
+      const configuredLimit = maxCap?.get(rt.id)
+      if (edit.locked && configuredLimit != null &&
+        edit.headcount > configuredLimit + FLOAT_EPSILON) {
+        diagnostics.push({
+          blocker: 'ROLE_MAX_CAP',
+          resourceTypeId: rt.id,
+          resourceTypeName: rt.name,
+          configuredLimit: `${configuredLimit}`,
+          requested: `${edit.headcount} FTE in weeks ${edit.startWeek}-${edit.endWeek}`,
+          achieved: `${configuredLimit} FTE maximum`,
+          explanation: `${rt.name} draft lock exceeds the configured maximum and is retained as an infeasible constraint.`,
+        })
+      }
+    }
+  }
+
+  const segments: Array<{ startWeek: number; endWeek: number; allocationPercent: number }> = []
+  const boundaries = draftCapacityBoundaries(rt, edits)
+  for (let index = 0; index < boundaries.length - 1; index++) {
+    const startWeek = boundaries[index]
+    const endWeek = boundaries[index + 1]
+    if (endWeek <= startWeek) continue
+
+    const edit = edits.find(candidate =>
+      startWeek >= candidate.startWeek && startWeek < candidate.endWeek)
+    const named = namedCapacityFte(rt, startWeek)
+    const available = isWithinRoleWindow(rt, startWeek)
+    let synthetic = baseSyntheticCapacity(rt, startWeek)
+    if (edit) {
+      if (diagnostics && edit.locked && edit.headcount + FLOAT_EPSILON < named) {
+        diagnostics.push({
+          blocker: 'CONSTRAINT',
+          resourceTypeId: rt.id,
+          resourceTypeName: rt.name,
+          configuredLimit: `${edit.headcount} FTE`,
+          requested: `${edit.headcount} FTE in week ${startWeek}`,
+          achieved: `${named} FTE protected named capacity`,
+          explanation: `${rt.name} draft lock is below protected named capacity; the lock is retained but cannot be represented truthfully.`,
+        })
+      }
+      if (diagnostics && edit.locked && !available && edit.headcount > named + FLOAT_EPSILON) {
+        diagnostics.push({
+          blocker: 'PROFILE_WINDOW',
+          resourceTypeId: rt.id,
+          resourceTypeName: rt.name,
+          configuredLimit: `${edit.startWeek}-${edit.endWeek}`,
+          requested: `${edit.headcount} FTE in week ${startWeek}`,
+          achieved: `${named} FTE`,
+          explanation: `${rt.name} draft lock falls inside an unavailable role window and is retained as an infeasible constraint.`,
+        })
+      }
+      const requested = maxCap?.get(rt.id) == null
+        ? edit.headcount
+        : Math.min(edit.headcount, maxCap.get(rt.id) as number)
+      synthetic = edit.locked
+        ? Math.max(0, edit.headcount - named)
+        : Math.max(synthetic, requested - named)
+      if (!available && edit.locked) synthetic = 0
+    }
+    appendDraftCapacitySegment(segments, startWeek, endWeek, synthetic)
+  }
+  return segments
+}
+
+function applyDraftCapacitySeeds(
+  resourceTypes: SchedulerResourceType[],
+  draft: DraftPlanConstraints,
+  diagnostics: PlannerDiagnostic[],
+  maxCap?: Map<string, number>,
+): SchedulerResourceType[] {
+  if (draft.capacityEdits.length === 0) return resourceTypes
+  return resourceTypes.map(rt => {
+    const edits = draft.capacityEdits.filter(edit => edit.resourceTypeId === rt.id)
+    if (edits.length === 0) return rt
+    const hasLocked = edits.some(edit => edit.locked)
+    if (!hasLocked && rt.roleSegments === undefined) {
+      const configuredMax = maxCap?.get(rt.id) ?? Infinity
+      const seed = edits.reduce((max, edit) => Math.max(max, Math.min(edit.headcount, configuredMax)), rt.count)
+      return { ...rt, count: Math.max(rt.count, seed) }
+    }
+    return {
+      ...rt,
+      roleSegments: adaptDraftCapacitySegments(rt, edits, diagnostics, maxCap),
+    }
+  })
+}
+
+function restoreDraftLockedCapacity(
+  resourceTypes: SchedulerResourceType[],
+  draft: DraftPlanConstraints,
+): SchedulerResourceType[] {
+  const locked = draft.capacityEdits.filter(edit => edit.locked)
+  if (locked.length === 0) return resourceTypes
+  return resourceTypes.map(rt => {
+    const edits = locked.filter(edit => edit.resourceTypeId === rt.id)
+    if (edits.length === 0) return rt
+    return {
+      ...rt,
+      roleSegments: adaptDraftCapacitySegments(rt, edits),
+    }
+  })
+}
+
+function splitAndApplyDraftLocks(
+  periods: CapacityPlanPeriodResult[],
+  draft: DraftPlanConstraints,
+  dayRates?: Map<string, number>,
+  resourceTypes?: SchedulerResourceType[],
+): CapacityPlanPeriodResult[] {
+  const locked = draft.capacityEdits.filter(edit => edit.locked)
+  if (locked.length === 0) return periods
+
+  const boundaries = new Set<number>()
+  for (const period of periods) {
+    boundaries.add(period.startWeek)
+    boundaries.add(period.endWeek)
+  }
+  for (const edit of locked) {
+    boundaries.add(edit.startWeek)
+    boundaries.add(edit.endWeek)
+  }
+  const sorted = [...boundaries].filter(Number.isFinite).sort((a, b) => a - b)
+  if (sorted.length < 2) return periods
+
+  const result: CapacityPlanPeriodResult[] = []
+  for (let index = 0; index < sorted.length - 1; index++) {
+    const startWeek = sorted[index]
+    const endWeek = sorted[index + 1]
+    if (endWeek <= startWeek) continue
+    const source = periods.find(period => startWeek >= period.startWeek && startWeek < period.endWeek)
+    const activeLocks = locked.filter(edit => startWeek >= edit.startWeek && startWeek < edit.endWeek)
+    if (!source && activeLocks.length === 0) continue
+
+    const resourceIds = new Set(source?.resources.map(resource => resource.resourceTypeId) ?? [])
+    for (const edit of activeLocks) resourceIds.add(edit.resourceTypeId)
+    const resources = [...resourceIds].map(resourceTypeId => {
+      const sourceResource = source?.resources.find(resource => resource.resourceTypeId === resourceTypeId)
+      const edit = activeLocks.find(candidate => candidate.resourceTypeId === resourceTypeId)
+      const headcount = edit?.headcount ?? sourceResource?.headcount ?? 0
+      const dayRate = dayRates?.get(resourceTypeId) ?? 0
+      const resourceType = resourceTypes?.find(rt => rt.id === resourceTypeId)
+      const width = endWeek - startWeek
+      const weeklyDemand = sourceResource?.avgDemandFTE ?? 0
+      return {
+        resourceTypeId,
+        resourceTypeName: sourceResource?.resourceTypeName ?? resourceType?.name ?? resourceTypeId,
+        headcount,
+        peakDemandFTE: sourceResource?.peakDemandFTE ?? 0,
+        avgDemandFTE: weeklyDemand,
+        utilisationPct: headcount > 0 ? Math.round((weeklyDemand / headcount) * 1000) / 10 : 0,
+        costForPeriod: Math.round(headcount * dayRate * width * 5),
+      }
+    })
+    result.push({
+      ...(source ?? {
+        periodIndex: result.length,
+        periodLabel: `W${startWeek}-${endWeek}`,
+        startWeek,
+        endWeek,
+        resources: [],
+      }),
+      periodIndex: result.length,
+      startWeek,
+      endWeek,
+      resources,
+    })
+  }
+  return result
+}
+
 export interface CapacityPlanResult {
   periods: CapacityPlanPeriodResult[]
   totalCost: number
   deliveryWeeks: number
   peakHeadcount: number     // max sum of all RT headcounts in any period
   avgUtilisationPct: number // weighted average utilisation across all periods/RTs
+  staffedFteWeeks: number
   budgetExceeded: boolean
   /** The levelling result that produced this plan */
   levellingResult: LevellingResult
@@ -136,6 +439,13 @@ export interface JointPlanResult extends CapacityPlanResult {
   loopDiagnostics: PlannerDiagnostic[]
   /** Whether the target was achieved. */
   targetAchieved: boolean
+  /** Accepted draft constraints, including the complete canonical pin set. */
+  draft: DraftPlanConstraints
+  /** Production schedule preview corresponding to the returned capacity. */
+  schedule: {
+    features: Array<{ featureId: string; name: string; startWeek: number; durationWeeks: number }>
+    stories: Array<{ storyId: string; featureId: string; name: string; startWeek: number; durationWeeks: number }>
+  }
 }
 
 // ─── Capacity envelope derivation (shared by computeCapacityPlan and loop) ──
@@ -322,13 +632,32 @@ function buildEnvelopeOutput(
   weeklyDemandByResourceType?: Map<string, number[]>,
 ): CapacityPlanResult {
   const { dayRates, maxBudget } = config
-  const plannedRtIds = [...capacity.keys()]
+  const draftLocks = (config.draft?.capacityEdits ?? []).filter(edit => edit.locked)
+  const draftLockEnd = draftLocks.reduce((max, edit) => Math.max(max, edit.endWeek), 0)
+  const outputTotalWeeks = Math.max(totalWeeks, draftLockEnd)
+  const numOutputPeriods = Math.max(1, Math.ceil(outputTotalWeeks / periodWeeks))
+  const plannedRtIds = [...new Set([
+    ...capacity.keys(),
+    ...draftLocks.map(edit => edit.resourceTypeId),
+  ])]
+  for (const edit of draftLocks) {
+    const envelope = capacity.get(edit.resourceTypeId) ?? new Array<number>(numOutputPeriods).fill(0)
+    while (envelope.length < numOutputPeriods) envelope.push(0)
+    for (let period = 0; period < numOutputPeriods; period++) {
+      const startWeek = period * periodWeeks
+      const endWeek = Math.min((period + 1) * periodWeeks, outputTotalWeeks)
+      if (edit.startWeek < endWeek && edit.endWeek > startWeek) {
+        envelope[period] = Math.max(envelope[period] ?? 0, edit.headcount)
+      }
+    }
+    capacity.set(edit.resourceTypeId, envelope)
+  }
   const rtById = new Map(resourceTypes.map(rt => [rt.id, rt]))
   const weeklyCapacity = new Map<string, number[]>()
   // Preserve named-resource allocations beyond demand's horizon when they
   // are explicitly represented/protected. Role-profile availability alone is
   // not staffing and must not extend the priced envelope.
-  let horizonEnd = totalWeeks + 1
+  let horizonEnd = outputTotalWeeks + 1
   for (const rtId of plannedRtIds) {
     const rt = rtById.get(rtId)
     if (!rt) continue
@@ -404,7 +733,7 @@ function buildEnvelopeOutput(
       const costForPeriod = headcount * dayRate * width * 5
       resources.push({
         resourceTypeId: rtId, resourceTypeName: rt.name,
-        headcount: round2(headcount), peakDemandFTE: Math.round(peak * 100) / 100,
+        headcount, peakDemandFTE: Math.round(peak * 100) / 100,
         avgDemandFTE: Math.round(avg * 100) / 100, utilisationPct: Math.round(util * 10) / 10,
         costForPeriod: Math.round(costForPeriod),
       })
@@ -426,9 +755,12 @@ function buildEnvelopeOutput(
   const avgUtilisationPct = totalUtilWeight > 0
     ? Math.round((totalUtilWeighted / totalUtilWeight) * 10) / 10
     : 0
+  const staffedFteWeeks = periods.reduce((sum, period) =>
+    sum + period.resources.reduce((periodSum, resource) =>
+      periodSum + resource.headcount * (period.endWeek - period.startWeek), 0), 0)
   return {
     periods, totalCost: Math.round(totalCost), deliveryWeeks: levelResult.totalDeliveryWeeks,
-    peakHeadcount, avgUtilisationPct,
+    peakHeadcount, avgUtilisationPct, staffedFteWeeks,
     budgetExceeded: maxBudget != null ? totalCost > maxBudget : false,
     levellingResult: levelResult, plannedResourceTypeIds: plannedRtIds,
   }
@@ -635,11 +967,6 @@ export function materializeEnvelopeToResourceTypes(
 
     let maxEnvelopeHeadcount = 0
     for (const ep of envelopeByPeriod) maxEnvelopeHeadcount = Math.max(maxEnvelopeHeadcount, ep.headcount)
-    maxEnvelopeHeadcount = round2(maxEnvelopeHeadcount)
-
-    // Role-level profile windows are authoritative for aggregate capacity.
-    // Named-person availability is independent: when roleSegments is absent,
-    // preserve unrestricted phantom slots while retaining named windows.
     const preservedNamedResources = [...(rt.namedResources ?? [])]
     const addedWindows: SlotWindow[][] = []
 
@@ -674,18 +1001,17 @@ export function materializeEnvelopeToResourceTypes(
         const fractional = remaining - fullSlots
         const slotCount = fullSlots + (fractional > FLOAT_EPSILON ? 1 : 0)
         for (let slot = 0; slot < slotCount; slot++) {
-          const allocationPercent = slot < fullSlots ? 100 : Math.round(fractional * 100)
-          if (allocationPercent <= 0) continue
-          if (!addedWindows[slot]) addedWindows[slot] = []
-          const slotRanges = addedWindows[slot]
+          const allocationPercent = slot < fullSlots ? 100 : fractional * 100
+          const slotRanges = addedWindows[slot] ?? (addedWindows[slot] = [])
           const last = slotRanges[slotRanges.length - 1]
-          if (last && last.endWeek + 1 === week && last.allocationPercent === allocationPercent) {
+          if (last && last.endWeek + 1 === week &&
+            Math.abs(last.allocationPercent - allocationPercent) <= FLOAT_EPSILON) {
             last.endWeek = week
           } else {
             slotRanges.push({ startWeek: week, endWeek: week, allocationPercent })
           }
         }
-      }
+    }
     }
 
     const addedNamedResources = addedWindows.flatMap((ranges, slot) => ranges.map((range, index) => ({
@@ -725,18 +1051,25 @@ export function computeCapacityPlan(
     maxParallelismPerFeature,
     maxConcurrentEpics,
   } = config
-
   const saConfig: SAPlannerConfig = {
     targetDurationWeeks,
     maxParallelismPerFeature,
     maxCap,
     maxConcurrentEpics,
-    iterations: 10000,
-    initialTemp: 100,
-    coolingRate: 0.995,
   }
+  const draft = acceptedDraftConstraints(config.draft, input)
+  const hasDraft = config.draft !== undefined
+  const plannerInput: SchedulerInput = {
+    ...input,
+    manualFeatureEntries: hasDraft ? draft.manualFeatureEntries : input.manualFeatureEntries,
+    manualStoryEntries: hasDraft ? draft.manualStoryEntries : input.manualStoryEntries,
+  }
+  const draftDiagnostics: PlannerDiagnostic[] = []
+  plannerInput.resourceTypes = hasDraft
+    ? applyDraftCapacitySeeds(plannerInput.resourceTypes, draft, draftDiagnostics, maxCap)
+    : plannerInput.resourceTypes
 
-  const saResult = runSAPlanner(input, saConfig)
+  const saResult = runSAPlanner(plannerInput, saConfig)
   const levelResult: LevellingResult = {
     epicStartWeeks: saResult.epicStartWeeks,
     featureStartWeeks: saResult.featureStartWeeks,
@@ -745,13 +1078,12 @@ export function computeCapacityPlan(
   }
 
   const totalWeeks = Math.ceil(levelResult.totalDeliveryWeeks)
-  const resourceTypes = input.resourceTypes
+  const resourceTypes = plannerInput.resourceTypes
 
   const demandDays = new Map<string, Float64Array>()
   for (const rt of resourceTypes) {
     demandDays.set(rt.id, new Float64Array(totalWeeks + 1))
   }
-
   for (const [rtId, weeklyDemand] of saResult.weeklyDemandByResourceType) {
     const arr = demandDays.get(rtId)
     if (!arr) continue
@@ -800,14 +1132,94 @@ export function computeCapacityPlan(
   const capacity = deriveCapacityEnvelope(resourceTypes, totalWeeks, periodWeeks, peakFTE, avgFTE, config)
 
   const diagnostics = saResult.totalDeliveryWeeks > targetDurationWeeks
-    ? analyzeTargetMiss(saResult, input, saConfig)
+    ? analyzeTargetMiss(saResult, plannerInput, saConfig)
     : undefined
-
+  const baseResult = buildEnvelopeOutput(resourceTypes, totalWeeks, periodWeeks, capacity, avgFTE, levelResult, config,
+    saResult.weeklyDemandByResourceType)
   return {
-    ...buildEnvelopeOutput(resourceTypes, totalWeeks, periodWeeks, capacity, avgFTE, levelResult, config,
-      saResult.weeklyDemandByResourceType),
-    diagnostics,
+    ...baseResult,
+    periods: hasDraft
+      ? splitAndApplyDraftLocks(baseResult.periods, draft, config.dayRates, plannerInput.resourceTypes)
+      : baseResult.periods,
+    diagnostics: draftDiagnostics.length > 0
+      ? [...draftDiagnostics, ...(diagnostics ?? [])]
+      : diagnostics,
   }
+}
+
+function buildSchedulePreview(
+  input: SchedulerInput,
+  plannerResult: SAPlannerResult | undefined,
+): JointPlanResult['schedule'] {
+  if (!plannerResult) return { features: [], stories: [] }
+  const manualFeatures = new Map(input.manualFeatureEntries.map(entry => [entry.featureId, entry]))
+  const manualStories = new Map(input.manualStoryEntries.map(entry => [entry.storyId, entry]))
+  const features: JointPlanResult['schedule']['features'] = []
+  const stories: JointPlanResult['schedule']['stories'] = []
+
+  for (const epic of input.epics) {
+    if (epic.isActive === false) continue
+    for (const feature of epic.features) {
+      if (feature.isActive === false) continue
+      const featureName = (feature as { name?: string }).name ?? feature.id
+      const manualFeature = manualFeatures.get(feature.id)
+      const allocations = plannerResult.weeklyAllocationsByFeature.get(feature.id)
+      const allocatedWeeks: number[] = []
+      for (const [week, byRole] of allocations ?? []) {
+        let total = 0
+        for (const amount of byRole.values()) if (Number.isFinite(amount)) total += amount
+        if (total > 0) allocatedWeeks.push(week)
+      }
+      const fallbackStart = plannerResult.featureStartWeeks.get(feature.id)
+        ?? manualFeature?.startWeek
+        ?? 0
+      const startWeek = manualFeature?.startWeek
+        ?? (allocatedWeeks.length > 0 ? Math.min(...allocatedWeeks) : fallbackStart)
+      const durationWeeks = manualFeature
+        ? manualFeature.durationWeeks
+        : (allocatedWeeks.length > 0
+          ? Math.max(1, Math.max(...allocatedWeeks) - Math.min(...allocatedWeeks) + 1)
+          : 1)
+      features.push({ featureId: feature.id, name: featureName, startWeek, durationWeeks })
+
+      const activeStories = feature.userStories.filter(story => story.isActive !== false)
+      const storyDays = new Map<string, number>()
+      const storyHours = new Map<string, number>()
+      for (const story of activeStories) {
+        let days = 0
+        let hours = 0
+        for (const task of story.tasks) {
+          const hoursPerDay = task.resourceType?.hoursPerDay ?? input.project.hoursPerDay
+          const taskDays = scheduleDurationDays(task.durationDays, task.hoursEffort, hoursPerDay)
+          days += taskDays
+          hours += taskDays * hoursPerDay
+        }
+        storyDays.set(story.id, days)
+        storyHours.set(story.id, hours)
+      }
+      const totalStoryDays = [...storyDays.values()].reduce((sum, days) => sum + days, 0)
+      for (const story of activeStories) {
+        const manualStory = manualStories.get(story.id)
+        const storyName = (story as { name?: string }).name ?? story.id
+        const duration = Math.max(
+          0.2,
+          (storyHours.get(story.id) ?? 0) / input.project.hoursPerDay / 5,
+        )
+        stories.push({
+          storyId: story.id,
+          featureId: feature.id,
+          name: storyName,
+          startWeek: manualStory?.startWeek ?? startWeek,
+          durationWeeks: manualStory
+            ? duration
+            : Math.max(1, Math.ceil(durationWeeks * (
+              totalStoryDays > 0 ? (storyDays.get(story.id) ?? 0) / totalStoryDays : 0
+            ))),
+        })
+      }
+    }
+  }
+  return { features, stories }
 }
 
 // ─── Main entry: computeJointPlan (#481 iterative feedback loop) ─────────────
@@ -839,6 +1251,18 @@ export function computeJointPlan(
     maxParallelismPerFeature,
     maxConcurrentEpics,
   } = config
+  const draft = acceptedDraftConstraints(config.draft, input)
+  const hasDraft = config.draft !== undefined
+  const planningInput: SchedulerInput = {
+    ...input,
+    manualFeatureEntries: hasDraft ? draft.manualFeatureEntries : input.manualFeatureEntries,
+    manualStoryEntries: hasDraft ? draft.manualStoryEntries : input.manualStoryEntries,
+  }
+  const draftDiagnostics: PlannerDiagnostic[] = []
+  const seededRts = hasDraft
+    ? applyDraftCapacitySeeds(planningInput.resourceTypes, draft, draftDiagnostics, maxCap)
+    : planningInput.resourceTypes
+  planningInput.resourceTypes = seededRts
 
   const saConfig: SAPlannerConfig = {
     targetDurationWeeks,
@@ -850,9 +1274,9 @@ export function computeJointPlan(
     coolingRate: 0.995,
   }
 
-  const maxIterations = computeMaxIterations(input.resourceTypes, maxCap)
-  let currentRts = [...input.resourceTypes]
-  const allDiagnostics: PlannerDiagnostic[] = []
+  const maxIterations = computeMaxIterations(planningInput.resourceTypes, maxCap)
+  let currentRts = [...planningInput.resourceTypes]
+  const allDiagnostics: PlannerDiagnostic[] = [...draftDiagnostics]
   let totalIterations = 0
   // A protected named allocation above an explicit role cap cannot be
   // represented truthfully: lowering the envelope would erase the named
@@ -860,10 +1284,10 @@ export function computeJointPlan(
   // only demanded roles, since undemanded resource types are not part of
   // this plan.
   if (maxCap) {
-    for (const rt of input.resourceTypes) {
+    for (const rt of planningInput.resourceTypes) {
       const cap = maxCap.get(rt.id)
       if (cap == null) continue
-      const hasDemand = input.epics.some(epic => epic.isActive !== false &&
+      const hasDemand = planningInput.epics.some(epic => epic.isActive !== false &&
         epic.features.some(feature => feature.isActive !== false &&
           feature.userStories.some(story => story.isActive !== false &&
             story.tasks.some(task => task.resourceTypeId === rt.id && task.hoursEffort > EPSILON))))
@@ -899,12 +1323,8 @@ export function computeJointPlan(
         explanation: `${rt.name} has ${protectedFte} FTE of protected named capacity in week ${conflictWeek}, above the configured ${cap} FTE maximum.`,
       }
       return {
-        periods: [],
-        totalCost: 0,
-        deliveryWeeks: Infinity,
-        peakHeadcount: 0,
-        avgUtilisationPct: 0,
-        budgetExceeded: false,
+        periods: [], totalCost: 0, deliveryWeeks: Infinity, peakHeadcount: 0,
+        avgUtilisationPct: 0, staffedFteWeeks: 0, budgetExceeded: false,
         levellingResult: {
           epicStartWeeks: new Map(),
           featureStartWeeks: new Map(),
@@ -916,6 +1336,8 @@ export function computeJointPlan(
         iterations: 0,
         loopDiagnostics: [diagnostic],
         targetAchieved: false,
+        draft,
+        schedule: { features: [], stories: [] },
       }
     }
   }
@@ -926,7 +1348,7 @@ export function computeJointPlan(
   let initialSchedule: SAPlannerResult | undefined
   let initialFailure: SAPlannerInfeasibleError | undefined
   try {
-    initialSchedule = runSAPlanner({ ...input, resourceTypes: currentRts }, saConfig)
+    initialSchedule = runSAPlanner({ ...planningInput, resourceTypes: currentRts }, saConfig)
   } catch (error) {
     if (!(error instanceof SAPlannerInfeasibleError)) throw error
     initialFailure = error
@@ -939,7 +1361,7 @@ export function computeJointPlan(
   const maxUsefulParallelism = saConfig.maxParallelismPerFeature ?? 2
   function usefulCapacityFor(rtId: string): { capacity: number; activeFeatures: number } | undefined {
     let activeFeatures = 0
-    for (const epic of input.epics) {
+    for (const epic of planningInput.epics) {
       for (const feature of epic.features) {
         if (feature.isActive === false) continue
         let featureHasDemand = false
@@ -947,7 +1369,7 @@ export function computeJointPlan(
           if (story.isActive === false) continue
           for (const task of story.tasks) {
             if (task.resourceTypeId !== rtId) continue
-            const hoursPerDay = task.resourceType?.hoursPerDay ?? input.project.hoursPerDay
+            const hoursPerDay = task.resourceType?.hoursPerDay ?? planningInput.project.hoursPerDay
             if (hoursPerDay <= 0) continue
             featureHasDemand = true
           }
@@ -1069,10 +1491,15 @@ export function computeJointPlan(
     let nextCapacity = currentCapacity
     let nextRts = currentRts
     do {
-      const augmented = augmentResourceType(nextRts, rt.id, {
-        week,
-        maxFte: maxCap?.get(rt.id),
-      })
+      const augmented = hasDraft
+        ? restoreDraftLockedCapacity(augmentResourceType(nextRts, rt.id, {
+          week,
+          maxFte: maxCap?.get(rt.id),
+        }), draft)
+        : augmentResourceType(nextRts, rt.id, {
+          week,
+          maxFte: maxCap?.get(rt.id),
+        })
       const candidate = augmented.find(candidateRt => candidateRt.id === rt.id)
       const candidateCapacity = candidate ? currentCapacityFte(candidate, week) : nextCapacity
       if (!candidate || candidateCapacity <= nextCapacity + FLOAT_EPSILON) break
@@ -1085,7 +1512,7 @@ export function computeJointPlan(
     recoveryAttempts++
 
     try {
-      initialSchedule = runSAPlanner({ ...input, resourceTypes: currentRts }, saConfig)
+      initialSchedule = runSAPlanner({ ...planningInput, resourceTypes: currentRts }, saConfig)
     } catch (error) {
       if (!(error instanceof SAPlannerInfeasibleError)) throw error
       // Replace the active failure with the latest evidence, while retaining
@@ -1099,7 +1526,7 @@ export function computeJointPlan(
   if (!initialSchedule) {
     return {
       periods: [], totalCost: 0, deliveryWeeks: Infinity, peakHeadcount: 0,
-      avgUtilisationPct: 0, budgetExceeded: false,
+      avgUtilisationPct: 0, staffedFteWeeks: 0, budgetExceeded: false,
       levellingResult: { epicStartWeeks: new Map(), featureStartWeeks: new Map(),
         totalDeliveryWeeks: Infinity, peakUtilisationPct: 0 },
       plannedResourceTypeIds: [],
@@ -1107,14 +1534,15 @@ export function computeJointPlan(
       iterations: Math.max(1, totalIterations),
       loopDiagnostics: allDiagnostics,
       targetAchieved: false,
+      draft,
+      schedule: { features: [], stories: [] },
     }
   }
-  // Use the successful post-recovery schedule and its actual resource
   // representation as the starting-state evidence. Failed-run diagnostics
   // describe infeasibility, but must not be guessed into the blocked-growth
   // set once recovery has produced a schedule.
   const initialDiags = initialSchedule.totalDeliveryWeeks > targetDurationWeeks
-    ? analyzeTargetMiss(initialSchedule, { ...input, resourceTypes: currentRts }, saConfig)
+    ? analyzeTargetMiss(initialSchedule, { ...planningInput, resourceTypes: currentRts }, saConfig)
     : []
 
 
@@ -1177,8 +1605,11 @@ export function computeJointPlan(
       totalDeliveryWeeks: sched.totalDeliveryWeeks,
       peakUtilisationPct: sched.peakUtilisationPct,
     }
-    return buildEnvelopeOutput(rts, totalWeeks, periodWeeks, capacity, avgFTE, levelResult, config,
+    const result = buildEnvelopeOutput(rts, totalWeeks, periodWeeks, capacity, avgFTE, levelResult, config,
       sched.weeklyDemandByResourceType)
+    return hasDraft
+      ? { ...result, periods: splitAndApplyDraftLocks(result.periods, draft, config.dayRates, rts) }
+      : result
   }
 
   // Keep the already-materialized envelope as the returned capacity. Refresh
@@ -1232,6 +1663,9 @@ export function computeJointPlan(
       }
       if (periodHeadcount > peakHeadcount) peakHeadcount = periodHeadcount
     }
+    const staffedFteWeeks = periods.reduce((sum, period) =>
+      sum + period.resources.reduce((periodSum, resource) =>
+        periodSum + resource.headcount * (period.endWeek - period.startWeek), 0), 0)
     return {
       ...result,
       periods,
@@ -1240,6 +1674,7 @@ export function computeJointPlan(
       avgUtilisationPct: totalUtilWeight > 0
         ? Math.round((totalUtilWeighted / totalUtilWeight) * 10) / 10
         : 0,
+      staffedFteWeeks,
       budgetExceeded: config.maxBudget != null && totalCost > config.maxBudget,
       deliveryWeeks: sched.totalDeliveryWeeks,
       levellingResult: {
@@ -1331,17 +1766,20 @@ export function computeJointPlan(
         break
       }
 
-      const nextRts = augmentResourceType(currentRts, growthRole.id, {
+      const grownRts = augmentResourceType(currentRts, growthRole.id, {
         week: growthWeek,
         maxFte: growthMax,
       })
+      const nextRts = hasDraft
+        ? restoreDraftLockedCapacity(grownRts, draft)
+        : grownRts
       const nextRole = nextRts.find(rt => rt.id === growthRole!.id)!
       if (currentCapacityFte(nextRole, growthWeek) <=
         currentCapacityFte(growthRole, growthWeek) + FLOAT_EPSILON) continue
       currentRts = nextRts
 
       try {
-        const newSchedule = runSAPlanner({ ...input, resourceTypes: currentRts }, saConfig)
+        const newSchedule = runSAPlanner({ ...planningInput, resourceTypes: currentRts }, saConfig)
         lastSchedule = newSchedule
         const newDelivery = newSchedule.totalDeliveryWeeks
         if (newDelivery < lastDelivery) {
@@ -1380,7 +1818,7 @@ export function computeJointPlan(
     // never lower an envelope period beneath their greatest locked weekly
     // capacity. The configured floor is a separate hard lower bound.
     const namedFloors = new Map<string, number>()
-    for (const rt of input.resourceTypes) {
+    for (const rt of planningInput.resourceTypes) {
       for (const period of currentResult.periods) {
         let periodFloor = 0
         for (let week = period.startWeek; week < period.endWeek; week++) {
@@ -1401,7 +1839,6 @@ export function computeJointPlan(
         namedFloors.set(`${rt.id}:${period.periodIndex}`, periodFloor)
       }
     }
-
     const minimumFor = (resourceTypeId: string, periodIndex: number) => Math.max(
       quantizeHeadcountUp(config.minFloor.get(resourceTypeId) ?? 0),
       namedFloors.get(`${resourceTypeId}:${periodIndex}`) ?? 0,
@@ -1425,6 +1862,11 @@ export function computeJointPlan(
         for (const resource of period.resources) {
           if (reductionTrials >= maxReductionTrials) break
           reductionTrials++
+          if (hasDraft && draft.capacityEdits.some(edit =>
+            edit.locked &&
+            edit.resourceTypeId === resource.resourceTypeId &&
+            edit.endWeek > period.startWeek &&
+            edit.startWeek < period.endWeek)) continue
           const minimum = minimumFor(resource.resourceTypeId, period.periodIndex)
           const candidateHeadcount = round2(resource.headcount - HEADCOUNT_QUANTUM)
           if (candidateHeadcount < minimum - FLOAT_EPSILON) continue
@@ -1438,10 +1880,10 @@ export function computeJointPlan(
                 : candidateResource
             )),
           }))
-          const candidateRts = materializeEnvelopeToResourceTypes(input.resourceTypes, candidatePeriods, periodWeeks)
+          const candidateRts = materializeEnvelopeToResourceTypes(planningInput.resourceTypes, candidatePeriods, periodWeeks)
           let candidateSchedule: SAPlannerResult
           try {
-            candidateSchedule = runSAPlanner({ ...input, resourceTypes: candidateRts }, saConfig)
+            candidateSchedule = runSAPlanner({ ...planningInput, resourceTypes: candidateRts }, saConfig)
           } catch (error) {
             if (!(error instanceof SAPlannerInfeasibleError)) throw error
             continue
@@ -1477,18 +1919,21 @@ export function computeJointPlan(
   let reconciliationSucceeded = false
 
   if (bestSchedule && bestResult && bestResult.periods.length > 0) {
-    const reconciledRts = materializeEnvelopeToResourceTypes(
-      input.resourceTypes, bestResult.periods, config.periodWeeks,
+    const replayPeriods = hasDraft
+      ? splitAndApplyDraftLocks(bestResult.periods, draft, config.dayRates, planningInput.resourceTypes)
+      : bestResult.periods
+    const reconciledRts = restoreDraftLockedCapacity(
+      materializeEnvelopeToResourceTypes(planningInput.resourceTypes, replayPeriods, config.periodWeeks),
+      draft,
     )
+    bestResult = { ...bestResult, periods: replayPeriods }
     try {
-      const reconciledSchedule = runSAPlanner({ ...input, resourceTypes: reconciledRts }, saConfig)
-      // Validate: the reconciled schedule must complete all features. When it
+      const reconciledSchedule = runSAPlanner({ ...planningInput, resourceTypes: reconciledRts }, saConfig)
       // completes, the reconciled schedule is authoritative EVEN IF it is
       // slower than the pre-reconciliation candidate: deliveryWeeks, periods
       // and demand must all describe the schedule the returned capacity can
       // actually reproduce (never keep a better-looking unreconciled result).
-      const allComplete = reconciledSchedule.totalDeliveryWeeks < Infinity &&
-        reconciledSchedule.weeklyDemandByResourceType.size > 0
+      const allComplete = Number.isFinite(reconciledSchedule.totalDeliveryWeeks)
       if (allComplete) {
         // Keep bestResult.periods: those are the exact capacity envelope used
         // to construct reconciledRts. Refreshing via buildResult would derive
@@ -1512,7 +1957,7 @@ export function computeJointPlan(
 
   // ── Phase 6: Final diagnostics from the best schedule ─────────────────────
   if (bestSchedule && bestResult && bestResult.deliveryWeeks > targetDurationWeeks) {
-    allDiagnostics.push(...analyzeTargetMiss(bestSchedule, input, saConfig))
+    allDiagnostics.push(...analyzeTargetMiss(bestSchedule, planningInput, saConfig))
     // analyzeTargetMiss intentionally uses a tolerance for noisy estimates.
     // A hard cap must still be reported for a small (even 5%) target miss.
     for (const rt of currentRts) {
@@ -1557,17 +2002,27 @@ export function computeJointPlan(
       if (!(error instanceof SAPlannerInfeasibleError)) throw error
       finalResult = {
         periods: [], totalCost: 0, deliveryWeeks: Infinity, peakHeadcount: 0,
-        avgUtilisationPct: 0, budgetExceeded: false,
+        avgUtilisationPct: 0, staffedFteWeeks: 0, budgetExceeded: false,
         levellingResult: { epicStartWeeks: new Map(), featureStartWeeks: new Map(),
           totalDeliveryWeeks: Infinity, peakUtilisationPct: 0 },
         plannedResourceTypeIds: [], diagnostics: allDiagnostics,
       }
     }
   }
+  if (draftDiagnostics.length > 0) {
+    finalResult = { ...finalResult, diagnostics: allDiagnostics, deliveryWeeks: Infinity }
+  }
+  const schedule = reconciliationSucceeded
+    ? buildSchedulePreview(planningInput, bestSchedule)
+    : { features: [], stories: [] }
   return {
     ...finalResult,
+    draft,
+    schedule,
     iterations: totalIterations,
     loopDiagnostics: allDiagnostics,
-    targetAchieved: reconciliationSucceeded && finalResult.deliveryWeeks <= targetDurationWeeks + FLOAT_EPSILON,
+    targetAchieved: draftDiagnostics.length === 0 &&
+      reconciliationSucceeded &&
+      finalResult.deliveryWeeks <= targetDurationWeeks + FLOAT_EPSILON,
   }
 }

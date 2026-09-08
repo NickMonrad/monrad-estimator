@@ -1728,3 +1728,140 @@ describeIf('Scenario 6 — Timeline parity against applied plan', () => {
 // ═════════════════════════════════════════════════════════════════════════════
 // Test coverage is skipped when INTEGRATION_TEST is not 'true'.
 // ═════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 7 — #482 reviewed draft materialisation parity
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario 7 — reviewed draft generation/materialisation/apply parity', () => {
+  it('keeps generation read-only and persists the reviewed schedule/capacity exactly', async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const projectId = await createProject()
+    const rtId = await createResourceType(projectId, `rt-draft-parity-${suffix}`, 'Draft Parity Developer', {
+      count: 2,
+    })
+    const { featureId } = await createEpicBacklog(projectId, rtId)
+    await createMapperRoleProfile(projectId, rtId, `cp-draft-parity-${suffix}`)
+
+    const before = {
+      activePlan: await fetchActivePlanId(projectId),
+      profiles: await fetchProfileCount(projectId),
+      segments: await fetchSegmentCount(projectId),
+      snapshots: await fetchPreApplySnapshotCount(projectId),
+    }
+
+    const draft = {
+      capacityEdits: [{
+        resourceTypeId: rtId,
+        startWeek: 0,
+        endWeek: 4,
+        headcount: 1,
+        locked: true,
+      }],
+      manualFeatureEntries: [{ featureId, startWeek: 2, durationWeeks: 1 }],
+      manualStoryEntries: [],
+    }
+    const generatedResponse = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan`)
+      .set('Authorization', authHeader)
+      .send({
+        targetDurationWeeks: 12,
+        periodWeeks: 4,
+        maxDeltaPerPeriod: 1,
+        maxParallelismPerFeature: 2,
+        draft,
+      })
+    expect(generatedResponse.status).toBe(200)
+    expect(await fetchActivePlanId(projectId)).toBe(before.activePlan)
+    expect(await fetchProfileCount(projectId)).toBe(before.profiles)
+    expect(await fetchSegmentCount(projectId)).toBe(before.segments)
+    expect(await fetchPreApplySnapshotCount(projectId)).toBe(before.snapshots)
+
+    const result = generatedResponse.body as {
+      periods: Array<{
+        periodIndex: number
+        startWeek: number
+        endWeek: number
+        resources: Array<{
+          resourceTypeId: string
+          headcount: number
+          demandFTE?: number
+          peakDemandFTE?: number
+          avgDemandFTE?: number
+          utilisationPct?: number
+        }>
+      }>
+      levellingResult?: {
+        epicStartWeeks: Record<string, number>
+        featureStartWeeks: Record<string, number>
+        totalDeliveryWeeks: number
+        peakUtilisationPct: number
+      }
+      schedule?: {
+        features: Array<{ featureId: string; name?: string; startWeek: number; durationWeeks: number }>
+        stories: Array<{ storyId: string; featureId: string; name?: string; startWeek: number; durationWeeks: number }>
+      }
+      draftToken?: string
+      draft?: typeof draft
+      totalCost: number
+      deliveryWeeks: number | null
+      config?: Record<string, unknown>
+    }
+    expect(result.draftToken).toEqual(expect.any(String))
+    expect(result.totalCost).toEqual(expect.any(Number))
+    expect(result.deliveryWeeks).toEqual(expect.any(Number))
+    expect(result.config).toEqual(expect.objectContaining({
+      targetDurationWeeks: 12,
+      periodWeeks: 4,
+      maxDeltaPerPeriod: 1,
+    }))
+    expect(result.draft).toEqual(draft)
+    const previewFeature = result.schedule?.features.find(feature => feature.featureId === featureId)
+    expect(previewFeature).toEqual(expect.objectContaining({ startWeek: 2, durationWeeks: 1 }))
+
+
+    const applyResponse = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send({
+        name: 'Reviewed draft parity plan',
+        targetWeeks: 12,
+        periodWeeks: 4,
+        maxDelta: 1,
+        maxParallelismPerFeature: 2,
+        config: result.config,
+        setActive: true,
+        periods: result.periods.map(period => ({
+          periodIndex: period.periodIndex,
+          startWeek: period.startWeek,
+          endWeek: period.endWeek,
+          entries: period.resources.map(resource => ({
+            resourceTypeId: resource.resourceTypeId,
+            headcount: resource.headcount,
+            demandFTE: resource.avgDemandFTE,
+            utilisationPct: resource.utilisationPct ?? 0,
+          })),
+        })),
+        levellingResult: result.levellingResult,
+        totalCost: result.totalCost,
+        deliveryWeeks: result.deliveryWeeks,
+        schedule: result.schedule,
+        draft: result.draft,
+        draftToken: result.draftToken,
+      })
+    expect(applyResponse.status).toBe(201)
+
+    const persistedFeature = await prisma.timelineEntry.findUnique({ where: { featureId } })
+    expect(persistedFeature).toMatchObject({
+      featureId,
+      startWeek: previewFeature!.startWeek,
+      durationWeeks: previewFeature!.durationWeeks,
+    })
+    const roleProfile = await prisma.capacityProfile.findFirst({
+      where: { projectId, ownerKind: 'ROLE', resourceTypeId: rtId },
+      include: { segments: true },
+    })
+    expect(roleProfile?.segments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ startWeek: 0, endWeek: 4, capacityPercent: 100 }),
+    ]))
+  })
+})

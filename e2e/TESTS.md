@@ -110,7 +110,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (21 tests)
+### `timeline.spec.ts` — Timeline (22 tests)
 
 #### `Timeline` describe block (4 tests)
 
@@ -171,7 +171,13 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 | Test | Description |
 |------|-------------|
-| generate, apply, verify planned resources, reapply, and snapshot history | Seeds Developer + Tech Lead tasks via CSV, schedules, opens Squad Planner drawer, generates a capacity profile, applies it (accepts confirm dialog), asserts exact generated-vs-persisted feature starts, delivery duration, and every staffed weekly capacity point through the Timeline API (with the documented one-decimal DTO rounding tolerance; zero/gap weeks and staffed-week coverage remain exact), navigates to Resource Profile — asserts planned resource badges, "Squad Planner" source tag, and disabled name inputs appear. Reopens Squad Planner with changed settings, reapplies, and verifies stable identity and updated capacity. Exercises Snapshot History panel — verifies `optimiser_apply` trigger snapshot visibility and rollback button click |
+| generate, apply, verify planned resources, reapply, and snapshot history | Seeds Developer + Tech Lead tasks via CSV, schedules, opens Squad Planner drawer, generates a capacity profile, applies it (accepts confirm dialog), asserts exact generated-vs-persisted feature starts, delivery duration, and every staffed weekly capacity point through the Timeline API (with the documented one-decimal DTO rounding tolerance; zero/gap weeks and staffed-week coverage remain exact), navigates to Resource Profile — asserts planned resource badges, "Squad Planner" source tag, and disabled name inputs appear. Reopens Squad Planner with changed settings, reapplies, and verifies stable identity and updated capacity. Exercises Snapshot History panel — verifies `optimiser_appl…
+
+#### `Squad Planner — editable draft review loop` describe block — issue #482
+
+| Test | Description |
+|------|-------------|
+| edits, locks, replans, unlocks, and applies a reviewed draft | Seeds Developer + Tech Lead tasks and schedules them, generates a draft, edits a period capacity value, confirms Apply is disabled while the result is stale, locks the edited capacity, awaits the replan response and verifies the locked value and updated consequence metrics, unlocks and awaits a second replan, applies, then reloads Timeline and compares persisted feature schedule values with the reviewed response through the Timeline API. |
 
 #### `Snapshot History — retired pre-V4 display` describe block (2 tests — issue #444)
 
