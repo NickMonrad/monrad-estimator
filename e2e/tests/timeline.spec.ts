@@ -1933,6 +1933,123 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     expect(segmentsRestored).toBe(true)
   })
 })
+// ─────────────────────────────────────────────────────────────────────────────
+// Squad Planner — editable draft review loop (issue #482)
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('Squad Planner — editable draft review loop', () => {
+  test('edits, locks, replans, unlocks, and applies a reviewed draft', async ({ page }) => {
+    test.setTimeout(150_000)
+    await setupOptimiserTimeline(page)
+
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+    await page.getByRole('button', { name: /open squad planner/i }).click()
+    const drawer = page.getByRole('dialog', { name: /squad planner/i })
+    await expect(drawer).toBeVisible({ timeout: 8_000 })
+
+    const generate = drawer.getByRole('button', { name: /generate capacity profile/i })
+    await generate.click()
+    await expect(drawer.getByText(/requested duration/i)).toBeVisible({ timeout: 20_000 })
+    await expect(drawer.getByText(/achieved duration/i)).toBeVisible()
+    await expect(drawer.getByText(/staffed fte-weeks/i)).toBeVisible()
+
+    // Editing a period makes the previous reviewed result stale immediately.
+    const capacityTable = drawer.locator('table').filter({ hasText: /Developer/i }).last()
+    const periodValue = capacityTable.getByRole('spinbutton', { name: /capacity for developer/i }).first()
+    await expect(periodValue).toBeVisible()
+    await periodValue.fill('1.25')
+    await expect(drawer.getByRole('button', { name: /apply capacity profile/i })).toBeDisabled()
+
+    await capacityTable.getByRole('button', { name: /^lock capacity for developer/i }).first().click()
+    const lockedReplanResponse = page.waitForResponse(
+      response =>
+        response.url().includes(`/api/projects/${projectId}/squad-plan`) &&
+        !response.url().endsWith('/apply') &&
+        response.request().method() === 'POST' &&
+        response.status() === 200,
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /replan unlocked work/i }).click()
+    const lockedReview = await (await lockedReplanResponse).json() as {
+      periods: Array<{ resources: Array<{ resourceTypeName: string; headcount: number }> }>
+      schedule?: { features: Array<{ featureId: string; startWeek: number; durationWeeks: number }> }
+    }
+    expect(lockedReview.periods.some(period =>
+      period.resources.some(resource => resource.resourceTypeName === 'Developer' && resource.headcount === 1.25),
+    )).toBe(true)
+    await expect(
+      capacityTable.getByRole('spinbutton', { name: /capacity for developer/i }).first(),
+    ).toHaveValue('1.25')
+    await expect(drawer.getByText(/peak staffing/i)).toBeVisible()
+    await expect(drawer.getByText('Utilisation', { exact: true })).toBeVisible()
+
+    // Removing the lock allows that period to be optimised again on replan.
+    await capacityTable.getByRole('button', { name: /^unlock capacity for developer/i }).first().click()
+    await expect(drawer.getByRole('button', { name: /apply capacity profile/i })).toBeDisabled()
+    const finalReplanResponse = page.waitForResponse(
+      response =>
+        response.url().includes(`/api/projects/${projectId}/squad-plan`) &&
+        !response.url().endsWith('/apply') &&
+        response.request().method() === 'POST' &&
+        response.status() === 200,
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /replan unlocked work/i }).click()
+    const finalReview = await (await finalReplanResponse).json() as {
+      schedule?: {
+        features: Array<{ featureId: string; name: string; startWeek: number; durationWeeks: number }>
+        stories: Array<{ storyId: string; name: string; startWeek: number; durationWeeks: number }>
+      }
+      periods: Array<{ resources: Array<{ resourceTypeName: string; headcount: number }> }>
+    }
+    expect(finalReview.schedule?.features).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Opt Feature' }),
+    ]))
+    expect(finalReview.schedule?.stories).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Opt Story' }),
+    ]))
+
+    page.once('dialog', dialog => dialog.accept())
+    const applyResponse = page.waitForResponse(
+      response => response.url().includes('/squad-plan/apply') && response.request().method() === 'POST',
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /apply capacity profile/i }).click()
+    expect((await applyResponse).status()).toBe(201)
+    await expect(drawer).not.toBeVisible({ timeout: 15_000 })
+
+    // Reload and compare the persisted timeline schedule against the exact
+    // reviewed response, rather than only checking generic page chrome.
+    await page.reload()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 15_000 })
+    const token = await page.evaluate(() => localStorage.getItem('token'))
+    const persistedResponse = await page.request.get(`/api/projects/${projectId}/timeline`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    expect(persistedResponse.ok()).toBeTruthy()
+    const persistedTimeline = await persistedResponse.json() as {
+      entries: Array<{ featureId: string; startWeek: number; durationWeeks: number }>
+      storyEntries: Array<{ storyId: string; startWeek: number; durationWeeks: number }>
+    }
+    for (const reviewedFeature of finalReview.schedule?.features ?? []) {
+      const persistedFeature = persistedTimeline.entries.find(entry => entry.featureId === reviewedFeature.featureId)
+      expect(persistedFeature).toMatchObject({
+        startWeek: reviewedFeature.startWeek,
+        durationWeeks: reviewedFeature.durationWeeks,
+      })
+    }
+    for (const reviewedStory of finalReview.schedule?.stories ?? []) {
+      const persistedStory = persistedTimeline.storyEntries.find(entry => entry.storyId === reviewedStory.storyId)
+      expect(persistedStory).toMatchObject({
+        startWeek: reviewedStory.startWeek,
+        durationWeeks: reviewedStory.durationWeeks,
+      })
+    }
+    await expect(page.getByText(/projected end:/i)).toBeVisible({ timeout: 15_000 })
+    expect(page.url()).toContain(`/projects/${projectId}/timeline`)
+  })
+})
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // Snapshot History — V4-minimum policy (issue #444): every pre-V4 snapshot is

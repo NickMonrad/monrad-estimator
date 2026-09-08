@@ -138,6 +138,52 @@ ownership boundary (Timeline/Planning owns both). After reset the timeline is
 intentionally empty — there is no stale schedule to misread as authoritative. A
 historical timeline viewer is out of scope for this issue.
 
+## Squad Planner draft loop (issue #482)
+
+Squad Planner generation is a draft-only operation until the user explicitly
+applies the reviewed result. The drawer keeps the original proposal separate
+from the mutable draft, which can contain period capacity edits and the
+supported feature/story placement pins:
+
+```text
+draft = {
+  capacityEdits: [{ resourceTypeId, startWeek, endWeek, headcount, locked }],
+  manualFeatureEntries: [{ featureId, startWeek, durationWeeks }],
+  manualStoryEntries: [{ storyId, startWeek }]
+}
+```
+
+Capacity ranges use an inclusive start and exclusive end. The drawer shows the
+actual week bounds for split or partial periods and preserves the exact
+non-negative finite headcount entered by the user. Locked ranges are hard
+constraints (including a deliberate zero headcount); unlocked edits are
+candidate seeds, not hidden maxima. Users can inspect the current lock state,
+unlock a range or placement, and replan unlocked work.
+
+Every capacity edit, lock change, or planner setting change marks the previous
+reviewed result as out of date and disables Apply until a response for that
+exact draft revision is accepted. The previous metrics, capacity controls,
+schedule placements, and lock actions remain visible while stale, while a
+request is pending, and after a failed or irreconcilable replan so the user can
+adjust or unlock the draft. Late responses for older revisions are ignored.
+
+Before Apply, the drawer distinguishes the original planner proposal, the
+mutable draft, and the latest accepted result. It reports requested and
+achieved duration, target attainment, staffed FTE-weeks, peak staffing,
+utilisation, cost, and structured blockers. A finite reconciled plan may remain
+applyable when it misses the requested target. An irreconcilable hard-lock
+failure remains editable but is not applyable.
+
+Apply is enabled only for a complete accepted proof bundle containing
+`draft`, `draftToken`, `schedule`, `periods`, `levellingResult`,
+`deliveryWeeks`, `totalCost`, and the normalized planner `config`. The drawer
+sends those exact accepted values to the authoritative transactional endpoint.
+If the server rejects that proof as invalid or stale, Apply remains disabled
+until the user obtains a current result by replanning. Draft edits never change
+canonical capacity ownership or timeline state by themselves. Reopening seeds
+a new draft from current canonical state without deriving a hidden maximum
+from the current count.
+
 ## UI
 
 - **Reset planning…** — Resource Profile page header, only for `CURRENT` projects.
