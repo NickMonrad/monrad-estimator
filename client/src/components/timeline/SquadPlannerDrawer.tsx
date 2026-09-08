@@ -133,9 +133,45 @@ function utilClass(pct: number) {
   return 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'
 }
 
+function formatWeekCoordinate(value: number) {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(6)))
+}
+
 function weekRangeLabel(startWeek: number, endWeek: number) {
+  const hasFractionalBoundary = !Number.isInteger(startWeek) || !Number.isInteger(endWeek)
   const firstWeek = startWeek + 1
-  return firstWeek === endWeek ? `W${firstWeek}` : `W${firstWeek}–W${endWeek}`
+  const displayedEndWeek = hasFractionalBoundary ? endWeek + 1 : endWeek
+  const firstLabel = formatWeekCoordinate(firstWeek)
+  const endLabel = formatWeekCoordinate(displayedEndWeek)
+  return firstLabel === endLabel ? `W${firstLabel}` : `W${firstLabel}–W${endLabel}`
+}
+
+function rangesOverlap(left: Pick<Period, 'startWeek' | 'endWeek'>, right: Pick<Period, 'startWeek' | 'endWeek'>) {
+  return left.startWeek < right.endWeek && right.startWeek < left.endWeek
+}
+
+function subtractRange(
+  source: Pick<Period, 'startWeek' | 'endWeek'>,
+  blockers: Array<Pick<Period, 'startWeek' | 'endWeek'>>,
+) {
+  let fragments: Array<Pick<Period, 'startWeek' | 'endWeek'>> = [source]
+  for (const blocker of blockers) {
+    const next: Array<Pick<Period, 'startWeek' | 'endWeek'>> = []
+    for (const fragment of fragments) {
+      if (!rangesOverlap(fragment, blocker)) {
+        next.push(fragment)
+        continue
+      }
+      if (fragment.startWeek < blocker.startWeek) {
+        next.push({ startWeek: fragment.startWeek, endWeek: blocker.startWeek })
+      }
+      if (blocker.endWeek < fragment.endWeek) {
+        next.push({ startWeek: blocker.endWeek, endWeek: fragment.endWeek })
+      }
+    }
+    fragments = next
+  }
+  return fragments.filter(fragment => fragment.endWeek > fragment.startWeek)
 }
 
 function periodLabel(startWeek: number, endWeek: number, periodWeeks: number) {
@@ -179,13 +215,13 @@ function hasValidReviewedDraft(draft: CapacityPlanResult['draft']): draft is Dra
     && typeof edit.locked === 'boolean'
   )) && draft.manualFeatureEntries.every(entry => (
     typeof entry.featureId === 'string'
-    && Number.isInteger(entry.startWeek)
+    && Number.isFinite(entry.startWeek)
     && entry.startWeek >= 0
-    && Number.isInteger(entry.durationWeeks)
+    && Number.isFinite(entry.durationWeeks)
     && entry.durationWeeks > 0
   )) && draft.manualStoryEntries.every(entry => (
     typeof entry.storyId === 'string'
-    && Number.isInteger(entry.startWeek)
+    && Number.isFinite(entry.startWeek)
     && entry.startWeek >= 0
   ))
 }
@@ -195,17 +231,17 @@ function hasValidReviewedSchedule(schedule: CapacityPlanResult['schedule']): sch
   return schedule.features.every(feature => (
     typeof feature.featureId === 'string'
     && typeof feature.name === 'string'
-    && Number.isInteger(feature.startWeek)
+    && Number.isFinite(feature.startWeek)
     && feature.startWeek >= 0
-    && Number.isInteger(feature.durationWeeks)
+    && Number.isFinite(feature.durationWeeks)
     && feature.durationWeeks > 0
   )) && schedule.stories.every(story => (
     typeof story.storyId === 'string'
     && typeof story.featureId === 'string'
     && typeof story.name === 'string'
-    && Number.isInteger(story.startWeek)
+    && Number.isFinite(story.startWeek)
     && story.startWeek >= 0
-    && Number.isInteger(story.durationWeeks)
+    && Number.isFinite(story.durationWeeks)
     && story.durationWeeks > 0
   ))
 }
@@ -779,13 +815,13 @@ export default function SquadPlannerDrawer({
       manualFeatureEntries: [],
       manualStoryEntries: [],
     }
-    const index = base.capacityEdits.findIndex(edit =>
+    const selectedIndex = base.capacityEdits.findIndex(edit =>
       edit.resourceTypeId === resourceTypeId
-      && edit.startWeek === period.startWeek
-      && edit.endWeek === period.endWeek,
+      && edit.startWeek <= period.startWeek
+      && period.endWeek <= edit.endWeek,
     )
-    const existing = index >= 0
-      ? base.capacityEdits[index]
+    const existing = selectedIndex >= 0
+      ? base.capacityEdits[selectedIndex]
       : {
           resourceTypeId,
           startWeek: period.startWeek,
@@ -794,10 +830,27 @@ export default function SquadPlannerDrawer({
           locked: false,
         }
     const nextEdit = { ...existing, ...changes }
-    const capacityEdits = [...base.capacityEdits]
-    if (index >= 0) capacityEdits[index] = nextEdit
-    else capacityEdits.push(nextEdit)
-    replaceDraft({ ...base, capacityEdits })
+    const protectedOverlaps = base.capacityEdits.filter((edit, index) =>
+      index !== selectedIndex
+      && edit.resourceTypeId === resourceTypeId
+      && edit.locked
+      && rangesOverlap(edit, period),
+    )
+    const adaptedTarget = subtractRange(period, protectedOverlaps).map(range => ({
+      ...nextEdit,
+      startWeek: range.startWeek,
+      endWeek: range.endWeek,
+    }))
+    const capacityEdits = base.capacityEdits.flatMap((edit, index) => {
+      if (edit.resourceTypeId !== resourceTypeId || !rangesOverlap(edit, period)) return [edit]
+      if (edit.locked && index !== selectedIndex) return [edit]
+      return subtractRange(edit, [period]).map(range => ({
+        ...edit,
+        startWeek: range.startWeek,
+        endWeek: range.endWeek,
+      }))
+    })
+    replaceDraft({ ...base, capacityEdits: [...capacityEdits, ...adaptedTarget] })
   }
 
   const toggleFeatureLock = (entry: PlanSchedule['features'][number]) => {
@@ -822,19 +875,33 @@ export default function SquadPlannerDrawer({
   }
 
   const displayRangesByKey = new Map<string, { startWeek: number; endWeek: number }>()
-  for (const period of result?.periods ?? []) {
-    displayRangesByKey.set(`${period.startWeek}:${period.endWeek}`, period)
-  }
-  for (const edit of currentDraft?.capacityEdits ?? []) {
-    displayRangesByKey.set(`${edit.startWeek}:${edit.endWeek}`, edit)
-  }
-  if (displayRangesByKey.size === 0) {
-    for (const period of proposal?.periods ?? []) {
-      displayRangesByKey.set(`${period.startWeek}:${period.endWeek}`, period)
+  const sourcePeriods = result && result.periods.length > 0
+    ? result.periods
+    : proposal?.periods ?? []
+  const sourceRanges = sourcePeriods.map(period => ({
+    startWeek: period.startWeek,
+    endWeek: period.endWeek,
+  }))
+  const editRanges = (currentDraft?.capacityEdits ?? []).map(edit => ({
+    startWeek: edit.startWeek,
+    endWeek: edit.endWeek,
+  }))
+  const displayCandidates = [...sourceRanges, ...editRanges]
+  const displayBoundaries = Array.from(new Set(
+    displayCandidates.flatMap(range => [range.startWeek, range.endWeek]),
+  )).sort((left, right) => left - right)
+  for (let index = 0; index < displayBoundaries.length - 1; index += 1) {
+    const fragment = {
+      startWeek: displayBoundaries[index],
+      endWeek: displayBoundaries[index + 1],
+    }
+    if (displayCandidates.some(range => rangesOverlap(range, fragment))) {
+      displayRangesByKey.set(`${fragment.startWeek}:${fragment.endWeek}`, fragment)
     }
   }
   const displayPeriods = Array.from(displayRangesByKey.values())
     .sort((left, right) => left.startWeek - right.startWeek || left.endWeek - right.endWeek)
+
 
   const resourceNameById = new Map(resourceTypes.map(resource => [resource.id, resource.name]))
   for (const plan of [proposal, result]) {
@@ -857,17 +924,16 @@ export default function SquadPlannerDrawer({
     }
   }
 
-  const latestCellByKey = new Map<string, PeriodResource>()
-  for (const period of result?.periods ?? []) {
-    for (const resource of period.resources) {
-      latestCellByKey.set(`${resource.resourceTypeId}:${period.startWeek}:${period.endWeek}`, resource)
-    }
-  }
-  const proposalCellByKey = new Map<string, PeriodResource>()
-  for (const period of proposal?.periods ?? []) {
-    for (const resource of period.resources) {
-      proposalCellByKey.set(`${resource.resourceTypeId}:${period.startWeek}:${period.endWeek}`, resource)
-    }
+  const findPeriodResource = (
+    periods: Period[],
+    resourceTypeId: string,
+    range: Pick<Period, 'startWeek' | 'endWeek'>,
+  ) => {
+    const period = periods.find(candidate =>
+      candidate.startWeek === range.startWeek && candidate.endWeek === range.endWeek)
+      ?? periods.find(candidate =>
+        range.startWeek >= candidate.startWeek && range.endWeek <= candidate.endWeek)
+    return period?.resources.find(resource => resource.resourceTypeId === resourceTypeId)
   }
 
   const responseSchedule = result?.schedule
@@ -1469,13 +1535,12 @@ export default function SquadPlannerDrawer({
                                 {resourceTypeName}
                               </th>
                               {displayPeriods.map((period, periodIndex) => {
-                                const cellKey = `${resourceTypeId}:${period.startWeek}:${period.endWeek}`
-                                const latestCell = latestCellByKey.get(cellKey)
-                                const proposedCell = proposalCellByKey.get(cellKey)
+                                const latestCell = findPeriodResource(result?.periods ?? [], resourceTypeId, period)
+                                const proposedCell = findPeriodResource(proposal?.periods ?? [], resourceTypeId, period)
                                 const draftEdit = currentDraft?.capacityEdits.find(edit =>
                                   edit.resourceTypeId === resourceTypeId
-                                  && edit.startWeek === period.startWeek
-                                  && edit.endWeek === period.endWeek,
+                                  && edit.startWeek <= period.startWeek
+                                  && period.endWeek <= edit.endWeek,
                                 )
                                 const fallbackHeadcount = latestCell?.headcount ?? proposedCell?.headcount
                                 if (draftEdit === undefined && fallbackHeadcount === undefined) {

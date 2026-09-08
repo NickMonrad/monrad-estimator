@@ -118,6 +118,89 @@ describe('editable draft planning', () => {
       expect(getWeeklyCapacity(replayed, week, HOURS_PER_DAY) / HOURS_PER_DAY / 5).toBeCloseTo(0.37, 8)
     }
   })
+
+  it('reports a locked draft below the declared minimum floor as a hard conflict', () => {
+    const result = computeJointPlan(serialCriticalPath(), {
+      ...makeConfig(4),
+      minFloor: new Map([['rt-dev', 1]]),
+      draft: {
+        capacityEdits: [{ resourceTypeId: 'rt-dev', startWeek: 0, endWeek: 4, headcount: 0.5, locked: true }],
+        manualFeatureEntries: [],
+        manualStoryEntries: [],
+      },
+    })
+
+    const diagnostic = result.diagnostics?.find(candidate =>
+      candidate.blocker === 'CONSTRAINT' && candidate.resourceTypeId === 'rt-dev')
+    expect(diagnostic).toMatchObject({
+      configuredLimit: '1 FTE minimum',
+      requested: '0.5 FTE in weeks 0-4',
+      achieved: '0.5 FTE locked capacity',
+    })
+    expect(diagnostic?.explanation).toContain('below the configured 1 FTE minimum')
+    expect(result.targetAchieved).toBe(false)
+    expect(result.deliveryWeeks).toBe(Infinity)
+  })
+
+  it('retains the exact below-floor lock while rejecting the draft', () => {
+    const result = computeJointPlan(serialCriticalPath(), {
+      ...makeConfig(4),
+      minFloor: new Map([['rt-dev', 1]]),
+      draft: {
+        capacityEdits: [{ resourceTypeId: 'rt-dev', startWeek: 1, endWeek: 3, headcount: 0.5, locked: true }],
+        manualFeatureEntries: [],
+        manualStoryEntries: [],
+      },
+    })
+    expect(result.draft.capacityEdits[0]).toMatchObject({
+      resourceTypeId: 'rt-dev',
+      startWeek: 1,
+      endWeek: 3,
+      headcount: 0.5,
+      locked: true,
+    })
+
+    expect(effectiveHeadcount(result, 'rt-dev', 0)).not.toBeCloseTo(0.5, 8)
+    expect(effectiveHeadcount(result, 'rt-dev', 1)).toBeCloseTo(0.5, 8)
+    expect(effectiveHeadcount(result, 'rt-dev', 2)).toBeCloseTo(0.5, 8)
+    expect(result.targetAchieved).toBe(false)
+  })
+
+  it('accepts a lock equal to a fractional declared minimum floor', () => {
+    const result = computeJointPlan(serialCriticalPath(), {
+      ...makeConfig(4),
+      minFloor: new Map([['rt-dev', 0.6]]),
+      maxCap: new Map([['rt-dev', 0.6]]),
+      draft: {
+        capacityEdits: [{ resourceTypeId: 'rt-dev', startWeek: 0, endWeek: 4, headcount: 0.6, locked: true }],
+        manualFeatureEntries: [],
+        manualStoryEntries: [],
+      },
+    })
+
+    expect(result.targetAchieved).toBe(true)
+    expect((result.diagnostics ?? []).some(diagnostic =>
+      diagnostic.blocker === 'CONSTRAINT' && diagnostic.resourceTypeId === 'rt-dev')).toBe(false)
+    expect(effectiveHeadcount(result, 'rt-dev', 0)).toBeCloseTo(0.6, 8)
+  })
+
+  it('allows an unlocked below-floor seed to recover through optimisation', () => {
+    const result = computeJointPlan(parallelSameRole(), {
+      ...makeConfig(2),
+      minFloor: new Map([['rt-dev', 1]]),
+      maxCap: new Map([['rt-dev', 2]]),
+      draft: {
+        capacityEdits: [{ resourceTypeId: 'rt-dev', startWeek: 0, endWeek: 4, headcount: 0.5, locked: false }],
+        manualFeatureEntries: [],
+        manualStoryEntries: [],
+      },
+    })
+
+    expect(result.targetAchieved).toBe(true)
+    expect(maxEffectiveHeadcount(result, 'rt-dev', 4)).toBeGreaterThan(0.5)
+    expect((result.diagnostics ?? []).some(diagnostic =>
+      diagnostic.blocker === 'CONSTRAINT' && diagnostic.resourceTypeId === 'rt-dev')).toBe(false)
+  })
   it('adapts a finite lock on an open-ended role profile without truncating its tail', () => {
     const input = parallelSameRole()
     input.resourceTypes = [makeResourceType('rt-dev', 'Developer', 1, 8, {

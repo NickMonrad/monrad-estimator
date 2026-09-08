@@ -349,12 +349,48 @@ function restoreDraftLockedCapacity(
   })
 }
 
+function appendDraftFloorDiagnostics(
+  draft: DraftPlanConstraints,
+  minFloor: Map<string, number> | undefined,
+  diagnostics: PlannerDiagnostic[] | undefined,
+  resourceTypes?: SchedulerResourceType[],
+): void {
+  if (!minFloor || !diagnostics) return
+  for (const edit of draft.capacityEdits) {
+    if (!edit.locked) continue
+    const configuredFloor = minFloor.get(edit.resourceTypeId) ?? 0
+    if (edit.headcount + FLOAT_EPSILON >= configuredFloor) continue
+    const resourceTypeName = resourceTypes?.find(rt => rt.id === edit.resourceTypeId)?.name ??
+      edit.resourceTypeId
+    const requested = `${edit.headcount} FTE in weeks ${edit.startWeek}-${edit.endWeek}`
+    const configuredLimit = `${configuredFloor} FTE minimum`
+    if (diagnostics.some(diagnostic =>
+      diagnostic.blocker === 'CONSTRAINT' &&
+      diagnostic.resourceTypeId === edit.resourceTypeId &&
+      diagnostic.requested === requested &&
+      diagnostic.configuredLimit === configuredLimit)) continue
+    diagnostics.push({
+      blocker: 'CONSTRAINT',
+      resourceTypeId: edit.resourceTypeId,
+      resourceTypeName,
+      configuredLimit,
+      requested,
+      achieved: `${edit.headcount} FTE locked capacity`,
+      explanation: `${resourceTypeName} draft lock is below the configured ${configuredFloor} FTE minimum; ` +
+        `the lock is retained but cannot produce an applyable plan.`,
+    })
+  }
+}
+
 function splitAndApplyDraftLocks(
   periods: CapacityPlanPeriodResult[],
   draft: DraftPlanConstraints,
   dayRates?: Map<string, number>,
   resourceTypes?: SchedulerResourceType[],
+  minFloor?: Map<string, number>,
+  diagnostics?: PlannerDiagnostic[],
 ): CapacityPlanPeriodResult[] {
+  appendDraftFloorDiagnostics(draft, minFloor, diagnostics, resourceTypes)
   const locked = draft.capacityEdits.filter(edit => edit.locked)
   if (locked.length === 0) return periods
 
@@ -1065,6 +1101,7 @@ export function computeCapacityPlan(
     manualStoryEntries: hasDraft ? draft.manualStoryEntries : input.manualStoryEntries,
   }
   const draftDiagnostics: PlannerDiagnostic[] = []
+  appendDraftFloorDiagnostics(draft, config.minFloor, draftDiagnostics, plannerInput.resourceTypes)
   plannerInput.resourceTypes = hasDraft
     ? applyDraftCapacitySeeds(plannerInput.resourceTypes, draft, draftDiagnostics, maxCap)
     : plannerInput.resourceTypes
@@ -1139,7 +1176,9 @@ export function computeCapacityPlan(
   return {
     ...baseResult,
     periods: hasDraft
-      ? splitAndApplyDraftLocks(baseResult.periods, draft, config.dayRates, plannerInput.resourceTypes)
+      ? splitAndApplyDraftLocks(
+        baseResult.periods, draft, config.dayRates, plannerInput.resourceTypes, config.minFloor, draftDiagnostics,
+      )
       : baseResult.periods,
     diagnostics: draftDiagnostics.length > 0
       ? [...draftDiagnostics, ...(diagnostics ?? [])]
@@ -1259,6 +1298,7 @@ export function computeJointPlan(
     manualStoryEntries: hasDraft ? draft.manualStoryEntries : input.manualStoryEntries,
   }
   const draftDiagnostics: PlannerDiagnostic[] = []
+  appendDraftFloorDiagnostics(draft, config.minFloor, draftDiagnostics, planningInput.resourceTypes)
   const seededRts = hasDraft
     ? applyDraftCapacitySeeds(planningInput.resourceTypes, draft, draftDiagnostics, maxCap)
     : planningInput.resourceTypes
@@ -1608,7 +1648,12 @@ export function computeJointPlan(
     const result = buildEnvelopeOutput(rts, totalWeeks, periodWeeks, capacity, avgFTE, levelResult, config,
       sched.weeklyDemandByResourceType)
     return hasDraft
-      ? { ...result, periods: splitAndApplyDraftLocks(result.periods, draft, config.dayRates, rts) }
+      ? {
+        ...result,
+        periods: splitAndApplyDraftLocks(
+          result.periods, draft, config.dayRates, rts, config.minFloor, draftDiagnostics,
+        ),
+      }
       : result
   }
 
@@ -1920,7 +1965,9 @@ export function computeJointPlan(
 
   if (bestSchedule && bestResult && bestResult.periods.length > 0) {
     const replayPeriods = hasDraft
-      ? splitAndApplyDraftLocks(bestResult.periods, draft, config.dayRates, planningInput.resourceTypes)
+      ? splitAndApplyDraftLocks(
+        bestResult.periods, draft, config.dayRates, planningInput.resourceTypes, config.minFloor, draftDiagnostics,
+      )
       : bestResult.periods
     const reconciledRts = restoreDraftLockedCapacity(
       materializeEnvelopeToResourceTypes(planningInput.resourceTypes, replayPeriods, config.periodWeeks),

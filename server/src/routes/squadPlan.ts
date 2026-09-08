@@ -1104,6 +1104,16 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
       res.status(409).json({ error: 'Reviewed squad-plan config does not match legacy apply fields; regenerate the draft.' }); return
     }
   }
+  // A reviewed schedule is only meaningful with the complete signed review bundle.
+  // Reject unsigned or partial submissions before loading draft entities or entering
+  // any snapshot/transaction write path; legacy applies omit all reviewed fields.
+  if (requestedSchedule !== undefined && (
+    requestedDraft === undefined
+    || typeof draftToken !== 'string'
+    || requestedConfig === undefined
+  )) {
+    res.status(409).json({ error: 'Reviewed squad-plan apply requires draft, draftToken, config, and schedule.' }); return
+  }
 
   const applyFeatureIds = new Set<string>()
   const applyStoryIds = new Set<string>()

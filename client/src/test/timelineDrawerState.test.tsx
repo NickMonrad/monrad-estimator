@@ -359,13 +359,35 @@ describe('Squad Planner editable draft workflow', () => {
     expect(screen.getByRole('button', { name: /replan unlocked work/i })).toBeInTheDocument()
   })
 
-  it('allows a signed finite plan that misses the target and applies the accepted proof-bound result', async () => {
+  it('allows a signed finite plan with fractional feature and story placement to apply', async () => {
     const mockedPost = vi.mocked(api.post)
     mockedPost.mockReset()
     const missedTargetResult = draftResult({
       deliveryWeeks: 9,
       targetAchieved: false,
       draftToken: 'missed-target-token',
+      draft: {
+        ...draftResult().draft,
+        manualFeatureEntries: [{
+          featureId: 'feature-1',
+          startWeek: 0.25,
+          durationWeeks: 0.1,
+        }],
+        manualStoryEntries: [{
+          storyId: 'story-1',
+          startWeek: 0.25,
+        }],
+      },
+      schedule: {
+        features: [{ featureId: 'feature-1', name: 'Feature one', startWeek: 0.25, durationWeeks: 0.1 }],
+        stories: [{
+          storyId: 'story-1',
+          featureId: 'feature-1',
+          name: 'Story one',
+          startWeek: 0.25,
+          durationWeeks: 0.2,
+        }],
+      },
       diagnostics: [{
         blocker: 'TARGET_DURATION',
         explanation: 'The earliest reconciled schedule takes nine weeks.',
@@ -387,6 +409,8 @@ describe('Squad Planner editable draft workflow', () => {
     fireEvent.click(screen.getByRole('button', { name: /generate capacity profile/i }))
     const applyButton = await screen.findByRole('button', { name: /apply capacity profile/i })
     expect(applyButton).toBeEnabled()
+    expect(screen.getByText(/Feature one · W1\.25–W1\.35/)).toBeInTheDocument()
+    expect(screen.getByText(/Story one · W1\.25–W1\.45/)).toBeInTheDocument()
     expect(screen.getByText(/requested target was missed.*can be applied/i)).toBeInTheDocument()
 
     vi.spyOn(window, 'confirm').mockReturnValue(true)
@@ -417,6 +441,270 @@ describe('Squad Planner editable draft workflow', () => {
     })
     vi.restoreAllMocks()
   })
+  it('adapts capacity ranges when frequency changes without dropping deliberate locks', async () => {
+    const mockedPost = vi.mocked(api.post)
+    mockedPost.mockReset()
+    const monthlyDraft = {
+      capacityEdits: [
+        { resourceTypeId: 'rt-dev', startWeek: 0, endWeek: 4, headcount: 1, locked: true },
+        { resourceTypeId: 'rt-dev', startWeek: 4, endWeek: 8, headcount: 2, locked: false },
+        { resourceTypeId: 'rt-dev', startWeek: 8, endWeek: 12, headcount: 2, locked: false },
+      ],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+    }
+    const monthlyPeriods = [0, 4, 8].map((startWeek, periodIndex) => ({
+      periodIndex,
+      startWeek,
+      endWeek: startWeek + 4,
+      resources: [{
+        resourceTypeId: 'rt-dev',
+        resourceTypeName: 'Developer',
+        headcount: 2,
+        peakDemandFTE: 1.5,
+        avgDemandFTE: 1.2,
+        utilisationPct: 80,
+        cost: 1200,
+      }],
+    }))
+    const quarterlyResult = draftResult({
+      periods: [{
+        periodIndex: 0,
+        startWeek: 0,
+        endWeek: 13,
+        resources: monthlyPeriods[0].resources,
+      }],
+      // Frequency changes preserve the existing draft ranges; only the
+      // returned display periods change.
+      draft: monthlyDraft,
+      config: { ...draftResult().config, periodWeeks: 13 },
+    })
+    mockedPost
+      .mockResolvedValueOnce({
+        data: draftResult({ periods: monthlyPeriods, draft: monthlyDraft, config: { ...draftResult().config, periodWeeks: 4 } }),
+      })
+      .mockResolvedValueOnce({ data: quarterlyResult })
+      .mockResolvedValueOnce({ data: quarterlyResult })
+
+    renderWithClient(
+      <SquadPlannerDrawer
+        projectId="proj-1"
+        open={true}
+        onClose={vi.fn()}
+        resourceTypes={[{ id: 'rt-dev', name: 'Developer', count: 2 }]}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Monthly', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: /generate capacity profile/i }))
+    await screen.findByRole('spinbutton', { name: 'Capacity for Developer M1 (W1–W4)' })
+    fireEvent.click(screen.getByRole('button', { name: 'Quarterly', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: /replan unlocked work/i }))
+    await waitFor(() => expect(mockedPost).toHaveBeenCalledTimes(2))
+    await screen.findByText(/reviewed result is current and ready to apply/i)
+
+    const returnedCapacity = screen.getByRole('spinbutton', { name: 'Capacity for Developer W5–W8' })
+    fireEvent.change(returnedCapacity, { target: { value: '1.5' } })
+    fireEvent.click(screen.getByRole('button', { name: /replan unlocked work/i }))
+    await waitFor(() => expect(mockedPost).toHaveBeenCalledTimes(3))
+    await screen.findByText(/reviewed result is current and ready to apply/i)
+
+    const submitted = mockedPost.mock.calls[2][1].draft.capacityEdits
+    const expectedSubmitted = [
+      { resourceTypeId: 'rt-dev', startWeek: 0, endWeek: 4, headcount: 1, locked: true },
+      { resourceTypeId: 'rt-dev', startWeek: 4, endWeek: 8, headcount: 1.5, locked: false },
+      { resourceTypeId: 'rt-dev', startWeek: 8, endWeek: 12, headcount: 2, locked: false },
+    ]
+    const sortedSubmitted = [...submitted].sort(
+      (left, right) => left.startWeek - right.startWeek || left.endWeek - right.endWeek,
+    )
+    const sortedExpected = [...expectedSubmitted].sort(
+      (left, right) => left.startWeek - right.startWeek || left.endWeek - right.endWeek,
+    )
+    expect(sortedSubmitted).toEqual(sortedExpected)
+  })
+  it('preserves both untouched tails when editing an interior interval of a retained quarterly seed', async () => {
+    const mockedPost = vi.mocked(api.post)
+    mockedPost.mockReset()
+
+    const monthlyPeriods = [0, 4, 8, 12].map((startWeek, periodIndex) => ({
+      periodIndex,
+      startWeek,
+      endWeek: periodIndex === 3 ? 13 : startWeek + 4,
+      resources: [{
+        resourceTypeId: 'rt-dev',
+        resourceTypeName: 'Developer',
+        headcount: 2,
+        peakDemandFTE: 1.5,
+        avgDemandFTE: 1.2,
+        utilisationPct: 80,
+        cost: 1200,
+      }],
+    }))
+    const seededDraft = {
+      capacityEdits: [{
+        resourceTypeId: 'rt-dev',
+        startWeek: 0,
+        endWeek: 13,
+        headcount: 2,
+        locked: false,
+      }],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+    }
+    const editedDraft = {
+      capacityEdits: [
+        { resourceTypeId: 'rt-dev', startWeek: 0, endWeek: 4, headcount: 2, locked: false },
+        { resourceTypeId: 'rt-dev', startWeek: 4, endWeek: 8, headcount: 1.5, locked: false },
+        { resourceTypeId: 'rt-dev', startWeek: 8, endWeek: 13, headcount: 2, locked: false },
+      ],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+    }
+    const monthlyConfig = { ...draftResult().config, periodWeeks: 4 as const }
+    mockedPost
+      .mockResolvedValueOnce({
+        data: draftResult({ periods: monthlyPeriods, draft: seededDraft, config: monthlyConfig }),
+      })
+      .mockResolvedValueOnce({
+        data: draftResult({ periods: monthlyPeriods, draft: editedDraft, config: monthlyConfig }),
+      })
+
+    renderWithClient(
+      <SquadPlannerDrawer
+        projectId="proj-1"
+        open={true}
+        onClose={vi.fn()}
+        resourceTypes={[{ id: 'rt-dev', name: 'Developer', count: 2 }]}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /generate capacity profile/i }))
+    const interior = await screen.findByRole('spinbutton', {
+      name: 'Capacity for Developer M2 (W5–W8)',
+    })
+    fireEvent.change(interior, { target: { value: '1.5' } })
+    fireEvent.click(screen.getByRole('button', { name: /replan unlocked work/i }))
+
+    await waitFor(() => expect(mockedPost).toHaveBeenCalledTimes(2))
+    await screen.findByText(/reviewed result is current and ready to apply/i)
+
+    const submitted = mockedPost.mock.calls[1][1].draft.capacityEdits
+    expect(submitted).toEqual(expect.arrayContaining(editedDraft.capacityEdits))
+    expect(submitted).toHaveLength(3)
+    expect(submitted.filter(edit => edit.resourceTypeId === 'rt-dev')).toEqual(
+      expect.arrayContaining([
+        { resourceTypeId: 'rt-dev', startWeek: 0, endWeek: 4, headcount: 2, locked: false },
+        { resourceTypeId: 'rt-dev', startWeek: 4, endWeek: 8, headcount: 1.5, locked: false },
+        { resourceTypeId: 'rt-dev', startWeek: 8, endWeek: 13, headcount: 2, locked: false },
+      ]),
+    )
+  })
+
+  it('keeps overlapping role locks on disjoint grid cells and preserves locked fragments when one is edited', async () => {
+    const mockedPost = vi.mocked(api.post)
+    mockedPost.mockReset()
+
+    const coarsePeriods = [{
+      periodIndex: 0,
+      startWeek: 0,
+      endWeek: 13,
+      resources: [
+        {
+          resourceTypeId: 'rt-dev',
+          resourceTypeName: 'Developer',
+          headcount: 1,
+          peakDemandFTE: 1.5,
+          avgDemandFTE: 1.2,
+          utilisationPct: 80,
+          cost: 1200,
+        },
+        {
+          resourceTypeId: 'rt-qa',
+          resourceTypeName: 'QA',
+          headcount: 2,
+          peakDemandFTE: 1.5,
+          avgDemandFTE: 1.2,
+          utilisationPct: 80,
+          cost: 1200,
+        },
+      ],
+    }]
+    const initialDraft = {
+      capacityEdits: [
+        { resourceTypeId: 'rt-dev', startWeek: 0, endWeek: 12, headcount: 1, locked: true },
+        { resourceTypeId: 'rt-qa', startWeek: 4, endWeek: 8, headcount: 2, locked: true },
+        { resourceTypeId: 'rt-qa', startWeek: 8, endWeek: 12, headcount: 2, locked: true },
+      ],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+    }
+    const editedDraft = {
+      capacityEdits: [
+        { resourceTypeId: 'rt-dev', startWeek: 0, endWeek: 4, headcount: 1, locked: true },
+        { resourceTypeId: 'rt-dev', startWeek: 4, endWeek: 8, headcount: 1.5, locked: false },
+        { resourceTypeId: 'rt-dev', startWeek: 8, endWeek: 12, headcount: 1, locked: true },
+        { resourceTypeId: 'rt-qa', startWeek: 4, endWeek: 8, headcount: 2, locked: true },
+        { resourceTypeId: 'rt-qa', startWeek: 8, endWeek: 12, headcount: 2, locked: true },
+      ],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+    }
+    const quarterlyConfig = { ...draftResult().config, periodWeeks: 13 as const }
+    mockedPost
+      .mockResolvedValueOnce({
+        data: draftResult({ periods: coarsePeriods, draft: initialDraft, config: quarterlyConfig }),
+      })
+      .mockResolvedValueOnce({
+        data: draftResult({ periods: coarsePeriods, draft: editedDraft, config: quarterlyConfig }),
+      })
+
+    renderWithClient(
+      <SquadPlannerDrawer
+        projectId="proj-1"
+        open={true}
+        onClose={vi.fn()}
+        resourceTypes={[
+          { id: 'rt-dev', name: 'Developer', count: 2 },
+          { id: 'rt-qa', name: 'QA', count: 1 },
+        ]}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /generate capacity profile/i }))
+    await screen.findByRole('spinbutton', { name: 'Capacity for Developer W1–W4' })
+    const expectedWindows = ['W1–W4', 'W5–W8', 'W9–W12', 'W13']
+    for (const role of ['Developer', 'QA']) {
+      const cells = screen.getAllByRole('spinbutton', { name: new RegExp(`^Capacity for ${role} `) })
+      expect(cells).toHaveLength(expectedWindows.length)
+      expect(cells.map(cell => cell.getAttribute('aria-label')?.replace(`Capacity for ${role} `, '')))
+        .toEqual(expectedWindows)
+    }
+
+    const targetName = 'Capacity for Developer W5–W8'
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock capacity for Developer W5–W8' }))
+    const target = screen.getByRole('spinbutton', { name: targetName })
+    fireEvent.change(target, { target: { value: '1.5' } })
+    fireEvent.click(screen.getByRole('button', { name: /replan unlocked work/i }))
+
+    await waitFor(() => expect(mockedPost).toHaveBeenCalledTimes(2))
+    await screen.findByText(/reviewed result is current and ready to apply/i)
+
+    const submitted = mockedPost.mock.calls[1][1].draft.capacityEdits
+    expect(submitted).toHaveLength(5)
+    expect(submitted).toEqual(expect.arrayContaining(editedDraft.capacityEdits))
+
+    for (const resourceTypeId of ['rt-dev', 'rt-qa']) {
+      const edits = submitted
+        .filter(edit => edit.resourceTypeId === resourceTypeId)
+        .sort((left, right) => left.startWeek - right.startWeek)
+      for (let index = 1; index < edits.length; index += 1) {
+        expect(edits[index - 1].endWeek).toBeLessThanOrEqual(edits[index].startWeek)
+      }
+    }
+  })
+
+
 
   it('rejects an older in-flight replan after a later draft edit', async () => {
     const mockedPost = vi.mocked(api.post)
@@ -443,7 +731,8 @@ describe('Squad Planner editable draft workflow', () => {
     fireEvent.change(capacity, { target: { value: '1.25' } })
     gate.resolve({ data: draftResult({ draftToken: 'stale-token' }) })
 
-    await waitFor(() => expect(screen.getByRole('spinbutton', { name: /capacity for developer/i })).toHaveValue(1.25))
+    await waitFor(() => expect(screen.getByRole('button', { name: /replan unlocked work/i })).toBeEnabled())
+    expect(screen.getByRole('spinbutton', { name: /capacity for developer/i })).toHaveValue(1.25)
     expect(screen.getByText(/out of date/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /apply capacity profile/i })).toBeDisabled()
   })
@@ -547,9 +836,9 @@ describe('Squad Planner editable draft workflow', () => {
     fireEvent.click(screen.getByRole('button', { name: /generate capacity profile/i }))
     expect(await screen.findByRole('button', { name: /apply capacity profile/i })).toBeDisabled()
     expect(screen.getByText(/no complete signed, finite schedule/i)).toBeInTheDocument()
-
     fireEvent.click(screen.getByRole('button', { name: /replan unlocked work/i }))
     await waitFor(() => expect(mockedPost).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByRole('button', { name: /replan unlocked work/i })).toBeEnabled())
     expect(screen.getByRole('button', { name: /apply capacity profile/i })).toBeDisabled()
     expect(screen.getByText(/no complete signed, finite schedule/i)).toBeInTheDocument()
   })
