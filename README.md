@@ -357,3 +357,11 @@ Playwright tests are documented in [`e2e/TESTS.md`](e2e/TESTS.md). See [`CONTRIB
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branching strategy, PR process, commit message format, and testing standards.
+
+---
+
+## License
+
+Monrad Estimator is open source software licensed under the [MIT License](LICENSE).
+
+Third-party dependencies retain their own licences. See [Third-party software and notices](THIRD_PARTY_NOTICES.md) for attribution and redistribution guidance.
