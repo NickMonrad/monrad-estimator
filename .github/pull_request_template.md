@@ -66,7 +66,7 @@ npm run test:e2e:local
 ## Review control
 
 - [ ] This PR is ready for human review
-- [ ] Auto-merge is not enabled
+- [ ] Auto-merge is not enabled unless explicitly authorized by the user for this PR
 - [ ] The tracked issue will be closed by `Closes #N`
 
-**Do not merge — wait for review.**
+**Do not merge unless the user explicitly authorizes this PR after review and required checks pass.**
