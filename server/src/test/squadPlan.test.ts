@@ -37,9 +37,8 @@ import {
   stripCapacityPlanMaterialization,
   buildReplayPlannerResourceTypes,
   deriveSlotWindowsByResourceType,
+  validateDraftShape,
 } from '../routes/squadPlan.js'
-import { buildSnapshot } from '../routes/snapshots.js'
-import { materializeProfilesForResourceType } from '../lib/squadPlannerProfileWriter.js'
 import type { CapacityPlanSlotWindow } from '../lib/capacityPlanMaterialisation.js'
 import type {
   SchedulerInput,
@@ -49,6 +48,8 @@ import type {
 import { getWeeklyCapacity } from '../lib/scheduler.js'
 import { runSAPlanner } from '../lib/sa-planner.js'
 import { pruneSnapshots } from '../lib/snapshotUtils.js'
+import { buildSnapshot } from '../routes/snapshots.js'
+
 
 process.env.JWT_SECRET = 'test-secret'
 
@@ -196,7 +197,7 @@ describe('deriveFeatureSpanFromWeeklyAllocations', () => {
 })
 
 describe('POST /api/projects/:projectId/squad-plan', () => {
-  it('ignores applied CAPACITY_PLAN windows when generating a fresh plan', async () => {
+  it('seeds a fresh draft from the active plan while ignoring materialized capacity windows', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
     vi.mocked(prisma.epic.findMany).mockResolvedValue([
       {
@@ -248,7 +249,14 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
       ] as never)
       .mockResolvedValueOnce([] as never)
     vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue(mockCapacityProfiles() as never)
-    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue({
+      periods: [{
+        periodIndex: 0,
+        startWeek: 0,
+        endWeek: 4,
+        entries: [{ resourceTypeId: 'rt-dev', headcount: 0.5 }],
+      }],
+    } as never)
     vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
     vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
     vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
@@ -265,6 +273,13 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
     expect(res.status).toBe(200)
     expect(res.body.error).toBeUndefined()
     expect(res.body.targetAchieved).toBe(true)
+    expect(res.body.draft.capacityEdits).toEqual([{
+      resourceTypeId: 'rt-dev',
+      startWeek: 0,
+      endWeek: 4,
+      headcount: 0.5,
+      locked: false,
+    }])
     expect(res.body.deliveryWeeks).toBe(1)
     expect(res.body.plannedResourceTypeIds).toEqual(['rt-dev'])
     expect(res.body.periods[0].resources[0]).toMatchObject({
@@ -720,6 +735,251 @@ describe('POST /api/projects/:projectId/squad-plan', () => {
     // Canonical count was NOT mutated
     expect(vi.mocked(writerModule.revalidatePlannerPlan)).not.toHaveBeenCalled()
   })
+
+
+  it('generates a signed reviewed result that applies its exact preview', async () => {
+    const resourceType = {
+      id: 'rt-dev',
+      name: 'Developer',
+      count: 1,
+      hoursPerDay: 8,
+      namedResources: [],
+    }
+    const epic = {
+      id: 'epic-1',
+      name: 'Epic 1',
+      order: 0,
+      isActive: true,
+      featureMode: 'sequential',
+      scheduleMode: 'sequential',
+      timelineStartWeek: null,
+      features: [{
+        id: 'feature-1',
+        name: 'Feature 1',
+        order: 0,
+        isActive: true,
+        timelineStartWeek: null,
+        dependencies: [],
+        userStories: [{
+          id: 'story-1',
+          name: 'Story 1',
+          order: 0,
+          isActive: true,
+          tasks: [{
+            id: 'task-1',
+            resourceTypeId: 'rt-dev',
+            hoursEffort: 8,
+            durationDays: null,
+            resourceType: { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+          }],
+          dependencies: [],
+        }],
+      }],
+      dependencies: [],
+    }
+
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockImplementation((args) => {
+      if (args?.select?.dayRate) return Promise.resolve([]) as never
+      if (args?.select?.id && args?.select?.name) {
+        return Promise.resolve([{ id: 'rt-dev', name: 'Developer' }]) as never
+      }
+      return Promise.resolve([resourceType]) as never
+    })
+    vi.mocked(prisma.resourceType.findUnique).mockResolvedValue({
+      id: 'rt-dev',
+      name: 'Developer',
+      projectId: 'proj-1',
+    } as never)
+    vi.mocked(prisma.capacityProfile.findMany).mockResolvedValue(mockCapacityProfiles('rt-dev', null) as never)
+    vi.mocked(prisma.capacityPlan.findFirst).mockResolvedValue(null as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([epic] as never)
+    vi.mocked(prisma.timelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.storyTimelineEntry.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.epicDependency.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.namedResource.findMany).mockResolvedValue([] as never)
+
+    const generated = await request(app)
+      .post('/api/projects/proj-1/squad-plan')
+      .set('Authorization', authHeader)
+      .send({ targetDurationWeeks: 4, periodWeeks: 4, maxDeltaPerPeriod: 1 })
+
+    expect(generated.status, JSON.stringify(generated.body)).toBe(200)
+    expect(generated.body.draftToken).toEqual(expect.any(String))
+    expect(generated.body.schedule.features).toEqual([
+      expect.objectContaining({ featureId: 'feature-1' }),
+    ])
+    expect(generated.body.schedule.stories).toEqual([
+      expect.objectContaining({ storyId: 'story-1', featureId: 'feature-1' }),
+    ])
+
+    const impossibleDraft = {
+      capacityEdits: [],
+      manualFeatureEntries: [{ featureId: 'feature-1', startWeek: 0, durationWeeks: 0.01 }],
+      manualStoryEntries: [],
+    }
+    const impossible = await request(app)
+      .post('/api/projects/proj-1/squad-plan')
+      .set('Authorization', authHeader)
+      .send({ targetDurationWeeks: 4, periodWeeks: 4, maxParallelismPerFeature: 2, draft: impossibleDraft })
+    expect(impossible.status, JSON.stringify(impossible.body)).toBe(200)
+    expect(impossible.body.draft).toEqual(impossibleDraft)
+    expect(impossible.body.draftToken).toBeUndefined()
+    expect(impossible.body.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ blocker: 'SCHEDULE_LOCK' }),
+    ]))
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+
+    vi.mocked(prisma.backlogSnapshot.create).mockResolvedValue({ id: 'snapshot-1' } as never)
+    vi.mocked(prisma.backlogSnapshot.delete).mockResolvedValue({ id: 'snapshot-1' } as never)
+    let capturedTx!: Record<string, any>
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: any) => {
+      capturedTx = {
+        capacityPlan: {
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+          create: vi.fn().mockResolvedValue({ id: 'plan-1', projectId: 'proj-1', isActive: true, periods: [] }),
+        },
+        resourceType: {
+          update: vi.fn().mockResolvedValue({}),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+          findMany: vi.fn().mockResolvedValue([]),
+          findUnique: vi.fn().mockResolvedValue({ id: 'rt-dev', name: 'Developer', projectId: 'proj-1' }),
+        },
+        namedResource: {
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+          findMany: vi.fn().mockResolvedValue([{
+            id: 'nr-dev',
+            name: 'Developer 1',
+            createdAt: new Date('2026-01-01'),
+          }]),
+          createMany: vi.fn().mockResolvedValue({ count: 0 }),
+          update: vi.fn().mockResolvedValue({}),
+          delete: vi.fn(),
+          count: vi.fn().mockResolvedValue(0),
+        },
+        capacityProfile: {
+          findMany: vi.fn().mockResolvedValue([]),
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockResolvedValue({ id: 'cp-1' }),
+          update: vi.fn().mockResolvedValue({}),
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+        capacitySegment: {
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+          create: vi.fn().mockResolvedValue({}),
+          createMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+        project: {
+          findFirst: vi.fn().mockResolvedValue({ id: 'proj-1', resourceTypes: [], capacityPlans: [] }),
+          update: vi.fn().mockResolvedValue({}),
+        },
+        timelineEntry: {
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+          createMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        storyTimelineEntry: {
+          deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+          createMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        epic: { update: vi.fn().mockResolvedValue({}), findMany: vi.fn().mockResolvedValue([]) },
+        epicDependency: { findMany: vi.fn().mockResolvedValue([]) },
+        storyDependency: { findMany: vi.fn().mockResolvedValue([]) },
+      }
+      return fn(capturedTx)
+    })
+
+    const applyPeriods = generated.body.periods.map((period: {
+      periodIndex: number
+      startWeek: number
+      endWeek: number
+      resources: Array<Record<string, number | string>>
+    }) => ({
+      periodIndex: period.periodIndex,
+      startWeek: period.startWeek,
+      endWeek: period.endWeek,
+      entries: period.resources.map(resource => ({
+        resourceTypeId: resource.resourceTypeId,
+        headcount: resource.headcount,
+        demandFTE: resource.avgDemandFTE,
+        utilisationPct: resource.utilisationPct,
+      })),
+    }))
+
+    const reviewedPayload = {
+      name: 'Reviewed plan',
+      targetWeeks: generated.body.targetWeeks,
+      periodWeeks: generated.body.periodWeeks,
+      maxDelta: generated.body.maxDelta,
+      periods: applyPeriods,
+      totalCost: generated.body.totalCost,
+      deliveryWeeks: generated.body.deliveryWeeks,
+      levellingResult: generated.body.levellingResult,
+      config: generated.body.config,
+      draft: generated.body.draft,
+      draftToken: generated.body.draftToken,
+      schedule: generated.body.schedule,
+    }
+    const tampered = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send({
+        ...reviewedPayload,
+        periods: applyPeriods.map((period: {
+          periodIndex: number
+          startWeek: number
+          endWeek: number
+          entries: Array<Record<string, number | string>>
+        }, index: number) => index === 0
+          ? {
+              ...period,
+              entries: period.entries.map(entry => ({ ...entry, headcount: Number(entry.headcount) + 0.25 })),
+            }
+          : period),
+      })
+    expect(tampered.status).toBe(409)
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+
+    vi.mocked(buildSnapshot).mockResolvedValueOnce({ changed: true } as never)
+    const stale = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send(reviewedPayload)
+    expect(stale.status).toBe(409)
+    vi.mocked(buildSnapshot).mockResolvedValue({} as never)
+
+    const applied = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send(reviewedPayload)
+
+    expect(applied.status).toBe(201)
+    const persistedPeriods = capturedTx.capacityPlan.create.mock.calls[0][0].data.periods.create
+    expect(persistedPeriods).toEqual(applyPeriods.map((period: { entries: unknown[] }) => ({
+      ...period,
+      entries: { create: period.entries },
+    })))
+    expect(capturedTx.timelineEntry.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({
+          featureId: 'feature-1',
+          startWeek: generated.body.schedule.features[0].startWeek,
+          durationWeeks: generated.body.schedule.features[0].durationWeeks,
+        }),
+      ]),
+      skipDuplicates: true,
+    })
+    expect(capturedTx.storyTimelineEntry.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({
+          storyId: 'story-1',
+          startWeek: generated.body.schedule.stories[0].startWeek,
+          durationWeeks: generated.body.schedule.stories[0].durationWeeks,
+        }),
+      ]),
+      skipDuplicates: true,
+    })
+  })
 })
 
 describe('POST /api/projects/:projectId/squad-plan/apply', () => {
@@ -730,6 +990,58 @@ describe('POST /api/projects/:projectId/squad-plan/apply', () => {
       projectId: 'proj-1',
     } as never)
   })
+  const validLegacyApplyPayload = (schedule: unknown) => ({
+    name: 'Unsigned schedule',
+    targetWeeks: 10,
+    periodWeeks: 4,
+    maxDelta: 1,
+    periods: [{
+      periodIndex: 0,
+      startWeek: 0,
+      endWeek: 4,
+      entries: [{
+        resourceTypeId: 'rt-dev',
+        headcount: 1,
+        demandFTE: 0.8,
+        utilisationPct: 80,
+      }],
+    }],
+    schedule,
+  })
+
+  it('rejects an empty unsigned reviewed schedule before snapshot or transaction writes', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send(validLegacyApplyPayload({ features: [], stories: [] }))
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toContain('draft, draftToken, config, and schedule')
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('rejects a nonempty unsigned reviewed schedule before snapshot or transaction writes', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send(validLegacyApplyPayload({
+        features: [{ featureId: 'feature-1', name: 'Feature 1', startWeek: 0, durationWeeks: 1 }],
+        stories: [],
+      }))
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toContain('draft, draftToken, config, and schedule')
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
   it('returns 400 when plan periods include resource types outside the project', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
@@ -1263,6 +1575,60 @@ function mockCapacityProfilesForApply(rtId = 'rt-dev', namedResourceIds: string[
     expect(prisma.$transaction).not.toHaveBeenCalled()
   })
 
+  it('rejects a tampered reviewed draft token before any apply writes', async () => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([{
+      features: [{ id: 'feature-1', userStories: [{ id: 'story-1' }] }],
+    }] as never)
+
+    const res = await request(app)
+      .post('/api/projects/proj-1/squad-plan/apply')
+      .set('Authorization', authHeader)
+      .send({
+        name: 'Tampered reviewed plan',
+        targetWeeks: 10,
+        periodWeeks: 4,
+        maxDelta: 1,
+        config: {
+          targetDurationWeeks: 10,
+          periodWeeks: 4,
+          maxDeltaPerPeriod: 1,
+          smoothingMode: 'smooth',
+          minFloor: {},
+          maxCap: null,
+          maxBudget: null,
+          maxAllocationBufferPct: null,
+          maxParallelismPerFeature: null,
+          maxConcurrentEpics: null,
+        },
+        draft: { capacityEdits: [], manualFeatureEntries: [], manualStoryEntries: [] },
+        draftToken: 'tampered-token',
+        schedule: {
+          features: [{ featureId: 'feature-1', name: 'Feature 1', startWeek: 0, durationWeeks: 2 }],
+          stories: [{ storyId: 'story-1', featureId: 'feature-1', name: 'Story 1', startWeek: 0, durationWeeks: 2 }],
+        },
+        periods: [{
+          periodIndex: 0,
+          startWeek: 0,
+          endWeek: 4,
+          entries: [{ resourceTypeId: 'rt-dev', headcount: 1, demandFTE: 1, utilisationPct: 100 }],
+        }],
+        levellingResult: {
+          epicStartWeeks: {},
+          featureStartWeeks: { 'feature-1': 0 },
+          totalDeliveryWeeks: 2,
+          peakUtilisationPct: 100,
+        },
+        totalCost: 100,
+        deliveryWeeks: 2,
+      })
+
+    expect(res.status).toBe(409)
+    expect(prisma.backlogSnapshot.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
   it('does not create snapshot or prune when setActive is false', async () => {
     vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
     vi.mocked(prisma.resourceType.findMany).mockResolvedValue([{ id: 'rt-dev' }] as never)
@@ -1679,7 +2045,7 @@ describe('apply replay preserves generated windows', () => {
     expect([0, 1, 2, 3, 4, 5].map(week => getWeeklyCapacity(replayed[0], week, 8)))
       .toEqual(expectedWeeklyCapacity)
 
-    const persisted = materializeProfilesForResourceType(
+    const persisted = writerModule.materializeProfilesForResourceType(
       'rt-dev',
       'Developer',
       periods,
@@ -1783,5 +2149,50 @@ describe('generation roleSegments empty-array conversion (fix #362 regression)',
     ])
     // 50% × 40h = 20h (NOT 3 × 40h = 120h count-based phantom)
     expect(getWeeklyCapacity(rts[0], 0, 8)).toBe(20)
+  })
+})
+
+describe('draft constraint validation', () => {
+  const resourceTypeIds = new Set(['rt-dev'])
+  const featureIds = new Set(['feature-1'])
+  const storyIds = new Set(['story-1'])
+
+  it('accepts exact fractional capacity and canonicalises ordering', () => {
+    const result = validateDraftShape({
+      capacityEdits: [{
+        resourceTypeId: 'rt-dev',
+        startWeek: 4,
+        endWeek: 8,
+        headcount: 0.6,
+        locked: true,
+      }],
+      manualFeatureEntries: [{ featureId: 'feature-1', startWeek: 1.5, durationWeeks: 2.25 }],
+      manualStoryEntries: [{ storyId: 'story-1', startWeek: 2.75 }],
+    }, resourceTypeIds, featureIds, storyIds)
+
+    expect(result.error).toBeUndefined()
+    expect(result.draft?.capacityEdits[0].headcount).toBe(0.6)
+    expect(result.draft?.manualFeatureEntries[0]).toEqual({
+      featureId: 'feature-1',
+      startWeek: 1.5,
+      durationWeeks: 2.25,
+    })
+  })
+
+  it('rejects overlapping role ranges and non-owned pins', () => {
+    expect(validateDraftShape({
+      capacityEdits: [
+        { resourceTypeId: 'rt-dev', startWeek: 0, endWeek: 4, headcount: 1, locked: true },
+        { resourceTypeId: 'rt-dev', startWeek: 3, endWeek: 5, headcount: 0, locked: false },
+      ],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+    }, resourceTypeIds, featureIds, storyIds).error).toContain('overlap')
+
+    expect(validateDraftShape({
+      capacityEdits: [],
+      manualFeatureEntries: [{ featureId: 'foreign-feature', startWeek: 0, durationWeeks: 1 }],
+      manualStoryEntries: [],
+    }, resourceTypeIds, featureIds, storyIds).error).toContain('non-owned')
   })
 })

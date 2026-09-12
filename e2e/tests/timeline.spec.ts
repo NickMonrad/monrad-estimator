@@ -1580,10 +1580,6 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
       levellingResult?: { featureStartWeeks?: Record<string, number> }
     }
 
-    // Wait for result KPIs — Peak, Delivery, Planned squad cost, Avg Utilisation
-    await expect(drawer.getByText(/Peak/i)).toBeVisible({ timeout: 10_000 })
-    await expect(drawer.getByText(/Delivery/i)).toBeVisible()
-    await expect(drawer.getByText(/Planned squad cost/i)).toBeVisible()
 
     // ── Apply capacity profile ──
     const applyBtn = drawer.getByRole('button', { name: /apply capacity profile/i })
@@ -1804,7 +1800,6 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     )
     await drawer.getByRole('button', { name: /generate capacity profile/i }).click()
     await planResponse2
-    await expect(drawer.getByText(/Delivery/i)).toBeVisible({ timeout: 10_000 })
 
     // Apply the second profile
     const applyResponse2 = page.waitForResponse(
@@ -1933,6 +1928,168 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     expect(segmentsRestored).toBe(true)
   })
 })
+// ─────────────────────────────────────────────────────────────────────────────
+// Squad Planner — editable draft review loop (issue #482)
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('Squad Planner — editable draft review loop', () => {
+  test('edits, locks, replans, unlocks, and applies a reviewed draft', async ({ page }) => {
+    test.setTimeout(150_000)
+    await setupOptimiserTimeline(page)
+
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+    await page.getByRole('button', { name: /open squad planner/i }).click()
+    const drawer = page.getByRole('dialog', { name: /squad planner/i })
+    await expect(drawer).toBeVisible({ timeout: 8_000 })
+
+    const generate = drawer.getByRole('button', { name: /generate capacity profile/i })
+    await generate.click()
+    await expect(drawer.getByText(/requested duration/i)).toBeVisible({ timeout: 20_000 })
+    await expect(drawer.getByText(/achieved duration/i)).toBeVisible()
+    await expect(drawer.getByText(/staffed fte-weeks/i)).toBeVisible()
+
+    // Changing frequency exercises the returned range adaptation before editing.
+    await drawer.getByRole('button', { name: 'Monthly', exact: true }).click()
+    const frequencyReplanResponse = page.waitForResponse(
+      response =>
+        response.url().includes(`/api/projects/${projectId}/squad-plan`) &&
+        !response.url().endsWith('/apply') &&
+        response.request().method() === 'POST' &&
+        response.status() === 200,
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /replan unlocked work/i }).click()
+    await frequencyReplanResponse
+    await expect(drawer.getByRole('button', { name: /replan unlocked work/i })).toBeEnabled()
+
+    // Editing a period makes the previous reviewed result stale immediately.
+    const capacityTable = drawer.locator('table').filter({ hasText: /Developer/i }).last()
+    const developerCells = capacityTable.getByRole('spinbutton', { name: /^Capacity for Developer / })
+    await expect(developerCells).not.toHaveCount(0)
+    const periodValue = developerCells.first()
+    const periodName = await periodValue.getAttribute('aria-label')
+    if (!periodName) throw new Error('Developer capacity cell is missing its accessible range label')
+    const lockName = periodName.replace(/^Capacity for /, 'Lock capacity for ')
+    const unlockName = periodName.replace(/^Capacity for /, 'Unlock capacity for ')
+    await periodValue.fill('1.25')
+    await expect(drawer.getByRole('button', { name: /apply capacity profile/i })).toBeDisabled()
+
+    await capacityTable.getByRole('button', { name: lockName, exact: true }).click()
+    const lockedReplanResponse = page.waitForResponse(
+      response =>
+        response.url().includes(`/api/projects/${projectId}/squad-plan`) &&
+        !response.url().endsWith('/apply') &&
+        response.request().method() === 'POST' &&
+        response.status() === 200,
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /replan unlocked work/i }).click()
+    const lockedReviewResponse = await lockedReplanResponse
+    await expect(drawer.getByRole('button', { name: /replan unlocked work/i })).toBeEnabled()
+    const lockedReview = await lockedReviewResponse.json() as {
+      periods: Array<{ resources: Array<{ resourceTypeName: string; headcount: number }> }>
+      schedule?: { features: Array<{ featureId: string; startWeek: number; durationWeeks: number }> }
+    }
+    expect(lockedReview.periods.some(period =>
+      period.resources.some(resource => resource.resourceTypeName === 'Developer' && resource.headcount === 1.25),
+    )).toBe(true)
+    const lockedRequestBody = lockedReviewResponse.request().postDataJSON()
+    const lockedEdits = lockedRequestBody.draft.capacityEdits
+    expect(lockedEdits.some((edit: { headcount: number; locked: boolean }) => (
+      edit.headcount === 1.25 && edit.locked
+    ))).toBe(true)
+    for (const resourceTypeId of new Set(lockedEdits.map((edit: { resourceTypeId: string }) => edit.resourceTypeId))) {
+      const edits = lockedEdits
+        .filter((edit: { resourceTypeId: string }) => edit.resourceTypeId === resourceTypeId)
+        .sort((left: { startWeek: number }, right: { startWeek: number }) => left.startWeek - right.startWeek)
+      for (let index = 1; index < edits.length; index += 1) {
+        expect(edits[index - 1].endWeek).toBeLessThanOrEqual(edits[index].startWeek)
+      }
+    }
+    await expect(periodValue).toHaveValue('1.25')
+    await expect(drawer.getByText(/peak staffing/i)).toBeVisible()
+    await expect(drawer.getByText('Utilisation', { exact: true })).toBeVisible()
+
+    await capacityTable.getByRole('button', { name: unlockName, exact: true }).click()
+    await expect(drawer.getByRole('button', { name: /apply capacity profile/i })).toBeDisabled()
+    const finalReplanResponse = page.waitForResponse(
+      response =>
+        response.url().includes(`/api/projects/${projectId}/squad-plan`) &&
+        !response.url().endsWith('/apply') &&
+        response.request().method() === 'POST' &&
+        response.status() === 200,
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /replan unlocked work/i }).click()
+    const finalReviewResponse = await finalReplanResponse
+    const finalReview = await finalReviewResponse.json() as {
+      schedule?: {
+        features: Array<{ featureId: string; name: string; startWeek: number; durationWeeks: number }>
+        stories: Array<{ storyId: string; name: string; startWeek: number; durationWeeks: number }>
+      }
+      periods: Array<{ resources: Array<{ resourceTypeName: string; headcount: number }> }>
+    }
+    const finalRequestBody = finalReviewResponse.request().postDataJSON()
+    const finalEdits = finalRequestBody.draft.capacityEdits
+    expect(finalEdits.some((edit: { headcount: number; locked: boolean }) => (
+      edit.headcount === 1.25 && !edit.locked
+    ))).toBe(true)
+    for (const resourceTypeId of new Set(finalEdits.map((edit: { resourceTypeId: string }) => edit.resourceTypeId))) {
+      const edits = finalEdits
+        .filter((edit: { resourceTypeId: string }) => edit.resourceTypeId === resourceTypeId)
+        .sort((left: { startWeek: number }, right: { startWeek: number }) => left.startWeek - right.startWeek)
+      for (let index = 1; index < edits.length; index += 1) {
+        expect(edits[index - 1].endWeek).toBeLessThanOrEqual(edits[index].startWeek)
+      }
+    }
+    expect(finalReview.schedule?.features).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Opt Feature' }),
+    ]))
+    expect(finalReview.schedule?.stories).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Opt Story' }),
+    ]))
+
+    page.once('dialog', dialog => dialog.accept())
+    const applyResponse = page.waitForResponse(
+      response => response.url().includes('/squad-plan/apply') && response.request().method() === 'POST',
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /apply capacity profile/i }).click()
+    expect((await applyResponse).status()).toBe(201)
+    await expect(drawer).not.toBeVisible({ timeout: 15_000 })
+
+    // Reload and compare the persisted timeline schedule against the exact
+    // reviewed response, rather than only checking generic page chrome.
+    await page.reload()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 15_000 })
+    const token = await page.evaluate(() => localStorage.getItem('token'))
+    const persistedResponse = await page.request.get(`/api/projects/${projectId}/timeline`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    expect(persistedResponse.ok()).toBeTruthy()
+    const persistedTimeline = await persistedResponse.json() as {
+      entries: Array<{ featureId: string; startWeek: number; durationWeeks: number }>
+      storyEntries: Array<{ storyId: string; startWeek: number; durationWeeks: number }>
+    }
+    for (const reviewedFeature of finalReview.schedule?.features ?? []) {
+      const persistedFeature = persistedTimeline.entries.find(entry => entry.featureId === reviewedFeature.featureId)
+      expect(persistedFeature).toMatchObject({
+        startWeek: reviewedFeature.startWeek,
+        durationWeeks: reviewedFeature.durationWeeks,
+      })
+    }
+    for (const reviewedStory of finalReview.schedule?.stories ?? []) {
+      const persistedStory = persistedTimeline.storyEntries.find(entry => entry.storyId === reviewedStory.storyId)
+      expect(persistedStory).toMatchObject({
+        startWeek: reviewedStory.startWeek,
+        durationWeeks: reviewedStory.durationWeeks,
+      })
+    }
+    await expect(page.getByText(/projected end:/i)).toBeVisible({ timeout: 15_000 })
+    expect(page.url()).toContain(`/projects/${projectId}/timeline`)
+  })
+})
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // Snapshot History — V4-minimum policy (issue #444): every pre-V4 snapshot is
