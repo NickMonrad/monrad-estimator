@@ -24,4 +24,4 @@ The canonical repository instructions remain authoritative.
 - Do not nest subagents by default.
 - The active agent owns scope, design, the integrated diff, validation, final review, and PR handoff.
 
-Do not merge — wait for review.
+Do not merge on your own initiative. A specific PR may be merged only after explicit user authorization and the canonical merge gates pass. Without that authorization, end with: **Do not merge — waiting for explicit user approval.**

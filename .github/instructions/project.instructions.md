@@ -80,7 +80,7 @@ A complete implementation brief should contain:
 - focused automated tests and realistic manual validation
 - an instruction to inspect repository conventions rather than assume them
 - a requirement to report deviations and genuine blockers
-- **Do not merge — wait for review.**
+- the merge authorization state: default to stopping for review; merge only when the user has explicitly authorized that specific PR after review
 
 A task brief should not:
 
@@ -100,14 +100,25 @@ The brief must be concrete about scope, behaviour, validation, and non-goals whi
 Agents must never:
 
 - push directly to `main`
-- merge a pull request
-- enable auto-merge
-- approve their own pull request
+- merge a pull request, enable auto-merge, or approve their own pull request on their own initiative
 - close the tracked issue manually when the PR should close it
 - force-push or rewrite shared history without explicit user approval
 - discard unrelated worktree changes
 - modify, clean, reset, delete, or otherwise disturb another agent's worktree
-- bypass failing required checks
+- bypass failing required checks or branch protections
+
+The default implementation and review workflow stops before merge. An agent may merge a specific pull request only when the user explicitly authorizes merging that PR after review and all of the following are true:
+
+- the review verdict is merge-ready, including `Ready to merge once CI passes` only after the required CI has passed
+- required CI and branch-protection checks are green
+- the PR head matches the reviewed and validated head, or any later changes have themselves been reviewed and validated
+- there are no outstanding blocking findings or required unresolved review threads
+- GitHub reports the PR mergeable
+- the merge does not bypass required checks, branch protections, or required review policy
+
+Authorization to implement, remediate, review, or prepare a PR does not imply authorization to merge it. Auto-merge requires separate explicit user authorization for that specific PR. Self-approval remains prohibited even when merge is authorized.
+
+After an authorized merge, an agent may update the existing local `main` worktree by fetching `origin` and using a fast-forward-only update to `origin/main`. Preserve all unrelated local state. Untracked files do not by themselves block a fast-forward: do not delete, move, clean, reset, or stash them merely to update `main`. Stop and report the blocker only if Git reports an overwrite or conflict risk, or if tracked local changes make the fast-forward unsafe.
 
 Implementation and PR remediation must use a dedicated Git worktree. Before editing, verify the worktree path, current branch, tracked issue, and whether the task is new work or existing-PR remediation. Reuse an existing dedicated worktree when it already owns the branch and leave it clean after intended changes are committed and pushed.
 
@@ -127,7 +138,7 @@ type(#issue): short description
 
 Valid types include `feat`, `fix`, `refactor`, `docs`, `test`, and `chore`. Do not add a hard-coded Copilot co-author trailer.
 
-Every implementation PR must include `Closes #N`, use the PR template, and end in a reviewable state. Work is incomplete while intended changes are incomplete, uncommitted, or unpushed. The final handoff must report the pushed commit SHA, PR URL, worktree and branch, validation and CI state, and confirmation that the worktree is clean. It must say: **Do not merge — wait for review.**
+Every implementation PR must include `Closes #N`, use the PR template, and end in a reviewable state. Work is incomplete while intended changes are incomplete, uncommitted, or unpushed. The final handoff must report the pushed commit SHA, PR URL, worktree and branch, validation and CI state, and confirmation that the worktree is clean. Unless the user has already explicitly authorized merge for that PR, it must say: **Do not merge — waiting for explicit user approval.**
 
 ## Simplicity and review discipline
 
@@ -226,7 +237,7 @@ The PR description must explain:
 - risks, limitations, and optional follow-ups separated from required work
 - the final pushed commit SHA
 
-After every push, confirm the remote branch contains the intended commit and check required CI. Before reporting completion, verify the worktree is clean. If intended work remains incomplete, uncommitted, or unpushed, report the task as incomplete. Do not merge even when all checks pass.
+After every push, confirm the remote branch contains the intended commit and check required CI. Before reporting completion, verify the worktree is clean. If intended work remains incomplete, uncommitted, or unpushed, report the task as incomplete. Unless the user has explicitly authorized merge for that specific PR, stop after review and wait for explicit merge approval. If merge is authorized, re-check the merge gates above immediately before merging and report the merge result plus any safe local `main` fast-forward performed afterward.
 
 ## Optional local accelerators
 

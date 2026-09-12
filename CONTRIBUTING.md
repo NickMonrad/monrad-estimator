@@ -38,9 +38,11 @@ Implementation and pull-request remediation must use a dedicated Git worktree so
 7. Commit and push only intended changes.
 8. Raise or update the PR against `main` using `.github/pull_request_template.md`.
 9. Include `Closes #N` for new issue work.
-10. Confirm the remote commit, report the SHA and PR URL, leave the worktree clean, and wait for human review.
+10. Confirm the remote commit, report the SHA and PR URL, leave the worktree clean, and wait for review. Agents must also wait for explicit user authorization before merging that specific PR.
 
-Incomplete, uncommitted, or unpushed work must be reported as incomplete. Contributors and agents must not push directly to `main`, merge their own PR, enable auto-merge, approve their own PR, force-push shared history without explicit approval, or bypass required checks.
+Incomplete, uncommitted, or unpushed work must be reported as incomplete. Contributors and agents must not push directly to `main`, approve their own PR, force-push shared history without explicit approval, or bypass required checks. Agents must not merge or enable auto-merge on their own initiative; an agent may merge a specific PR only after explicit user authorization and only when the canonical review, CI, head, and mergeability gates pass.
+
+After an authorized merge, an agent may fetch and fast-forward the existing local `main` worktree to `origin/main`. Unrelated untracked files must be preserved and do not automatically block that update; stop only if Git reports an overwrite/conflict risk or tracked local changes make the fast-forward unsafe. Do not clean, reset, stash, move, or delete unrelated local state merely to update `main`.
 
 ## Commit messages
 
