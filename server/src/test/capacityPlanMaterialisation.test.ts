@@ -212,6 +212,26 @@ describe('materializeResourceTrajectories with gap', () => {
 })
 
 describe('materializeRoleCapacitySegments', () => {
+  it('preserves the same precise fractional capacity in role and resource profiles', () => {
+    const headcount = 0.12345678
+    const weekly = new Map([[0, headcount], [1, headcount], [2, 0], [3, headcount]])
+    const role = materializeRoleCapacitySegments(weekly)
+    const resources = materializeResourceTrajectories([
+      { periodIndex: 0, startWeek: 0, endWeek: 2, headcount },
+      { periodIndex: 1, startWeek: 2, endWeek: 3, headcount: 0 },
+      { periodIndex: 2, startWeek: 3, endWeek: 4, headcount },
+    ])
+    for (const [week, expected] of weekly) {
+      const roleCapacity = role.filter(segment => week >= segment.startWeek && week <= segment.endWeek)
+        .reduce((sum, segment) => sum + segment.allocationPercent / 100, 0)
+      const resourceCapacity = resources.flatMap(resource => resource.segments)
+        .filter(segment => week >= segment.startWeek && week <= segment.endWeek)
+        .reduce((sum, segment) => sum + segment.allocationPercent / 100, 0)
+      expect(roleCapacity).toBeCloseTo(expected, 10)
+      expect(resourceCapacity).toBeCloseTo(expected, 10)
+    }
+  })
+
   it('constant 50%', () => {
     const wh = new Map([[0, 0.5], [1, 0.5], [2, 0.5], [3, 0.5], [4, 0.5], [5, 0.5], [6, 0.5], [7, 0.5]])
     const segs = materializeRoleCapacitySegments(wh)

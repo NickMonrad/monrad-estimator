@@ -48,9 +48,53 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+function isQuarterAligned(
+  periods: Array<{ headcount: number }>,
+): boolean {
+  return periods.every(period =>
+    Math.abs(period.headcount / HEADCOUNT_QUANTUM -
+      Math.round(period.headcount / HEADCOUNT_QUANTUM)) <= FLOAT_EPSILON)
+}
+
+function deriveExactSlotWindows(
+  periods: Array<{ periodIndex: number; startWeek: number; endWeek: number; headcount: number }>,
+): CapacityPlanSlotWindow[] {
+  const sortedPeriods = [...periods].sort((a, b) => a.periodIndex - b.periodIndex)
+  const maxSlots = Math.ceil(Math.max(0, ...sortedPeriods.map(period => period.headcount)))
+  const windows: CapacityPlanSlotWindow[] = []
+  for (let slot = 0; slot < maxSlots; slot++) {
+    let current: CapacityPlanSlotWindow | null = null
+    for (const period of sortedPeriods) {
+      const allocationPercent = Math.max(0, Math.min(100, (period.headcount - slot) * 100))
+      const inclusiveEndWeek = period.endWeek - 1
+      if (allocationPercent <= FLOAT_EPSILON || inclusiveEndWeek < period.startWeek) {
+        if (current) { windows.push(current); current = null }
+        continue
+      }
+      if (!current) {
+        current = { startWeek: period.startWeek, endWeek: inclusiveEndWeek, allocationPercent }
+      } else if (
+        Math.abs(current.allocationPercent - allocationPercent) <= FLOAT_EPSILON &&
+        period.startWeek <= current.endWeek + 1
+      ) {
+        current.endWeek = inclusiveEndWeek
+      } else {
+        windows.push(current)
+        current = { startWeek: period.startWeek, endWeek: inclusiveEndWeek, allocationPercent }
+      }
+    }
+    if (current) windows.push(current)
+  }
+  return windows.sort((a, b) =>
+    a.startWeek - b.startWeek ||
+    a.endWeek - b.endWeek ||
+    b.allocationPercent - a.allocationPercent)
+}
+
 function deriveSlotWindows(
   periods: Array<{ periodIndex: number; startWeek: number; endWeek: number; headcount: number }>,
 ): CapacityPlanSlotWindow[] {
+  if (!isQuarterAligned(periods)) return deriveExactSlotWindows(periods)
   const sortedPeriods = [...periods].sort((a, b) => a.periodIndex - b.periodIndex)
   const maxUnits = Math.max(0, ...sortedPeriods.map(period => quantizeUnits(period.headcount)))
   const quantumWindows: CapacityPlanSlotWindow[] = []
@@ -178,33 +222,59 @@ export function materializeResourceTrajectories(
   periods: Array<{ periodIndex: number; startWeek: number; endWeek: number; headcount: number }>,
 ): CapacityPlanResourceTrajectory[] {
   const sortedPeriods = [...periods].sort((a, b) => a.periodIndex - b.periodIndex)
+  if (!isQuarterAligned(sortedPeriods)) {
+    const maxSlots = Math.ceil(Math.max(0, ...sortedPeriods.map(period => period.headcount)))
+    const trajectories: CapacityPlanResourceTrajectory[] = []
+    for (let trajectoryIndex = 0; trajectoryIndex < maxSlots; trajectoryIndex++) {
+      const segments: CapacityPlanSlotWindow[] = []
+      let current: CapacityPlanSlotWindow | null = null
+      for (const period of sortedPeriods) {
+        const allocationPercent = Math.max(
+          0,
+          Math.min(100, (period.headcount - trajectoryIndex) * 100),
+        )
+        const inclusiveEndWeek = period.endWeek - 1
+        if (allocationPercent <= FLOAT_EPSILON || inclusiveEndWeek < period.startWeek) {
+          if (current) { segments.push(current); current = null }
+          continue
+        }
+        if (!current) {
+          current = { startWeek: period.startWeek, endWeek: inclusiveEndWeek, allocationPercent }
+        } else if (
+          Math.abs(current.allocationPercent - allocationPercent) <= FLOAT_EPSILON &&
+          period.startWeek <= current.endWeek + 1
+        ) {
+          current.endWeek = inclusiveEndWeek
+        } else {
+          segments.push(current)
+          current = { startWeek: period.startWeek, endWeek: inclusiveEndWeek, allocationPercent }
+        }
+      }
+      if (current) segments.push(current)
+      if (segments.length > 0) trajectories.push({ trajectoryIndex, segments })
+    }
+    return trajectories
+  }
   const maxUnits = Math.max(0, ...sortedPeriods.map(p => quantizeUnits(p.headcount)))
   const TRAJECTORY_UNITS = 4
   const trajectoryCount = Math.ceil(maxUnits / TRAJECTORY_UNITS)
-
   if (trajectoryCount === 0) return []
-
   const trajectories: CapacityPlanResourceTrajectory[] = []
-
   for (let t = 0; t < trajectoryCount; t++) {
     const firstUnit = t * TRAJECTORY_UNITS
     const unitsInTrajectory = Math.min(TRAJECTORY_UNITS, maxUnits - firstUnit)
     if (firstUnit >= maxUnits) continue
-
     const segments: CapacityPlanSlotWindow[] = []
     let current: CapacityPlanSlotWindow | null = null
-
     for (const period of sortedPeriods) {
       const periodUnits = quantizeUnits(period.headcount)
       const activeUnits = Math.max(0, Math.min(unitsInTrajectory, periodUnits - firstUnit))
       const activePercent = round2((activeUnits / TRAJECTORY_UNITS) * 100)
       const inclusiveEndWeek = period.endWeek - 1
-
       if (activePercent <= FLOAT_EPSILON || inclusiveEndWeek < period.startWeek) {
         if (current) { segments.push(current); current = null }
         continue
       }
-
       if (!current) {
         current = { startWeek: period.startWeek, endWeek: inclusiveEndWeek, allocationPercent: round2(activePercent) }
       } else if (
@@ -217,11 +287,9 @@ export function materializeResourceTrajectories(
         current = { startWeek: period.startWeek, endWeek: inclusiveEndWeek, allocationPercent: round2(activePercent) }
       }
     }
-
     if (current) segments.push(current)
     if (segments.length > 0) trajectories.push({ trajectoryIndex: t, segments })
   }
-
   return trajectories
 }
 
@@ -251,7 +319,7 @@ export function materializeRoleCapacitySegments(
 
   while (i < sortedWeeks.length) {
     const startWeek = sortedWeeks[i]
-    const pct = round2((weeklyHeadcount.get(startWeek) ?? 0) * 100)
+    const pct = (weeklyHeadcount.get(startWeek) ?? 0) * 100
 
     if (pct <= FLOAT_EPSILON) { i++; continue }
 
@@ -259,7 +327,7 @@ export function materializeRoleCapacitySegments(
     i++
     while (i < sortedWeeks.length) {
       const nextWeek = sortedWeeks[i]
-      const nextPct = round2((weeklyHeadcount.get(nextWeek) ?? 0) * 100)
+      const nextPct = (weeklyHeadcount.get(nextWeek) ?? 0) * 100
 
       // Gap in week numbers → segment ends
       if (nextWeek > endWeek + 1) break

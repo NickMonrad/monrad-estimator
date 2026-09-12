@@ -157,6 +157,7 @@ async function createResourceType(
 async function createEpicBacklog(
   projectId: string,
   rtId: string,
+  taskHours = 8,
 ): Promise<{ epicId: string; featureId: string; storyId: string }> {
   const epic = await prisma.epic.create({
     data: { name: 'Profile First Test Epic', projectId, order: 0 },
@@ -172,7 +173,7 @@ async function createEpicBacklog(
       name: 'Profile First Test Task',
       userStoryId: story.id,
       order: 0,
-      hoursEffort: 8,
+      hoursEffort: taskHours,
       resourceTypeId: rtId,
     },
   })
@@ -2993,3 +2994,456 @@ describeIf('Scenario 18 — LEGACY/DEMAND_FOLLOWING ROLE adoption with prior pla
 // ═════════════════════════════════════════════════════════════════════════════
 // Test coverage is skipped when INTEGRATION_TEST is not 'true'.
 // ═════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
+// Issue #482 — editable draft planning regressions
+// ═════════════════════════════════════════════════════════════════════════════
+
+type DraftCapacityEdit = {
+  resourceTypeId: string
+  startWeek: number
+  endWeek: number
+  headcount: number
+  locked: boolean
+}
+type DraftPlanResponse = {
+  periods: Array<{
+    periodIndex: number
+    startWeek: number
+    endWeek: number
+    resources: Array<{
+      resourceTypeId: string
+      headcount: number
+      peakDemandFTE?: number
+      avgDemandFTE?: number
+      demandFTE?: number
+      utilisationPct?: number
+    }>
+  }>
+  levellingResult?: {
+    epicStartWeeks: Record<string, number>
+    featureStartWeeks: Record<string, number>
+    totalDeliveryWeeks: number
+    peakUtilisationPct: number
+  }
+  schedule?: {
+    features: Array<{ featureId: string; name: string; startWeek: number; durationWeeks: number }>
+    stories: Array<{ storyId: string; featureId: string; name: string; startWeek: number; durationWeeks: number }>
+  }
+  draft?: {
+    capacityEdits: DraftCapacityEdit[]
+    manualFeatureEntries: Array<{ featureId: string; startWeek: number; durationWeeks: number }>
+    manualStoryEntries: Array<{ storyId: string; startWeek: number }>
+  }
+  draftToken?: string
+  targetAchieved: boolean
+  deliveryWeeks: number | null
+  totalCost: number
+  staffedFteWeeks?: number
+  config?: Record<string, unknown>
+}
+
+async function createDraftFixture(taskHours = 8): Promise<{
+  projectId: string
+  rtId: string
+  featureId: string
+  storyId: string
+}> {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const projectId = await createProject()
+  const rtId = await createResourceType(projectId, `rt-draft-${suffix}`, 'Draft Developer', { count: 2 })
+  await prisma.capacityProfile.create({
+    data: {
+      projectId, resourceTypeId: rtId, ownerKind: 'ROLE',
+      planningBasis: 'AVAILABILITY_WINDOW', source: 'AVAILABILITY_WINDOW',
+      defaultPercent: 100, provenance: 'LEGACY_MAPPER',
+    },
+  })
+  const backlog = await createEpicBacklog(projectId, rtId, taskHours)
+  return { projectId, rtId, featureId: backlog.featureId, storyId: backlog.storyId }
+}
+
+async function generateDraftPlan(
+  projectId: string,
+  draft?: {
+    capacityEdits: DraftCapacityEdit[]
+    manualFeatureEntries: Array<{ featureId: string; startWeek: number; durationWeeks: number }>
+    manualStoryEntries: Array<{ storyId: string; startWeek: number }>
+  },
+  options: { targetDurationWeeks?: number; maxCap?: Record<string, number> } = {},
+) {
+  const body = {
+    targetDurationWeeks: options.targetDurationWeeks ?? 12,
+    periodWeeks: 4,
+    maxDeltaPerPeriod: 1,
+    maxParallelismPerFeature: 2,
+    maxConcurrentEpics: 1,
+    ...(options.maxCap ? { maxCap: options.maxCap } : {}),
+    ...(draft ? { draft } : {}),
+  }
+  return request(app)
+    .post(`/api/projects/${projectId}/squad-plan`)
+    .set('Authorization', authHeader)
+    .send(body)
+}
+function buildDraftApplyBody(
+  result: DraftPlanResponse,
+  draft: DraftPlanResponse['draft'],
+): Record<string, unknown> {
+  const config = result.config ?? {
+    targetDurationWeeks: 12,
+    periodWeeks: 4,
+    maxDeltaPerPeriod: 1,
+    smoothingMode: 'smooth',
+    minFloor: {},
+    maxCap: null,
+    maxBudget: null,
+    maxAllocationBufferPct: null,
+    maxParallelismPerFeature: 2,
+    maxConcurrentEpics: 1,
+  }
+  return {
+    name: 'Reviewed editable draft',
+    targetWeeks: typeof config.targetDurationWeeks === 'number' ? config.targetDurationWeeks : 12,
+    periodWeeks: config.periodWeeks === 13 ? 13 : 4,
+    maxDelta: typeof config.maxDeltaPerPeriod === 'number' ? config.maxDeltaPerPeriod : 1,
+    maxParallelismPerFeature: typeof config.maxParallelismPerFeature === 'number'
+      ? config.maxParallelismPerFeature
+      : 2,
+    maxConcurrentEpics: typeof config.maxConcurrentEpics === 'number'
+      ? config.maxConcurrentEpics
+      : 1,
+    config,
+    setActive: true,
+    periods: result.periods.map(period => ({
+      periodIndex: period.periodIndex,
+      startWeek: period.startWeek,
+      endWeek: period.endWeek,
+      entries: period.resources.map(resource => ({
+        resourceTypeId: resource.resourceTypeId,
+        headcount: resource.headcount,
+        demandFTE: resource.avgDemandFTE,
+        utilisationPct: resource.utilisationPct ?? 0,
+      })),
+    })),
+    levellingResult: result.levellingResult,
+    totalCost: result.totalCost,
+    deliveryWeeks: result.deliveryWeeks,
+    schedule: result.schedule,
+    draft,
+    draftToken: result.draftToken,
+  }
+}
+
+describeIf('Issue #482 — draft generation/edit/review/apply parity', () => {
+  it('replaces unlocked canonical feature and story pins with the reviewed automatic schedule', async () => {
+    const { projectId, featureId, storyId } = await createDraftFixture()
+    await prisma.timelineEntry.create({
+      data: { projectId, featureId, startWeek: 4, durationWeeks: 2, isManual: true },
+    })
+    await prisma.storyTimelineEntry.create({
+      data: { projectId, storyId, startWeek: 4, durationWeeks: 1, isManual: true },
+    })
+    const response = await generateDraftPlan(projectId, {
+      capacityEdits: [], manualFeatureEntries: [], manualStoryEntries: [],
+    })
+    expect(response.status, JSON.stringify(response.body)).toBe(200)
+    const reviewed = response.body as DraftPlanResponse
+    const feature = reviewed.schedule!.features.find(entry => entry.featureId === featureId)!
+    const story = reviewed.schedule!.stories.find(entry => entry.storyId === storyId)!
+    expect(feature.startWeek).toBeLessThan(4)
+    expect(story.startWeek).toBeLessThan(4)
+    const applied = await request(app).post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader).send(buildDraftApplyBody(reviewed, reviewed.draft))
+    expect(applied.status, JSON.stringify(applied.body)).toBe(201)
+    expect(await prisma.timelineEntry.findUnique({ where: { featureId } })).toMatchObject({
+      startWeek: feature.startWeek, durationWeeks: feature.durationWeeks, isManual: false,
+    })
+    expect(await prisma.storyTimelineEntry.findUnique({ where: { storyId } })).toMatchObject({
+      startWeek: story.startWeek, durationWeeks: story.durationWeeks, isManual: false,
+    })
+  })
+
+  it('generates a draft without mutating canonical project planning state', async () => {
+    const { projectId } = await createDraftFixture()
+    const before = await captureCanonicalState(projectId)
+
+    const response = await generateDraftPlan(projectId)
+    expect(response.status).toBe(200)
+    const result = response.body as DraftPlanResponse
+    expect(result.draftToken).toEqual(expect.any(String))
+    expect(result.totalCost).toEqual(expect.any(Number))
+    expect(result.deliveryWeeks).toEqual(expect.any(Number))
+    expect(result.config).toEqual(expect.objectContaining({
+      targetDurationWeeks: 12,
+      periodWeeks: 4,
+      maxDeltaPerPeriod: 1,
+    }))
+    expect(result.draft).toEqual(expect.objectContaining({
+      capacityEdits: expect.any(Array),
+      manualFeatureEntries: expect.any(Array),
+      manualStoryEntries: expect.any(Array),
+    }))
+    expect(result.schedule?.features).toEqual(expect.any(Array))
+
+    const after = await captureCanonicalState(projectId)
+    expect(after).toEqual(before)
+  })
+
+  it('persists a manual story lock longer than one week and the auto feature schedule exactly through apply', async () => {
+    const { projectId, rtId, featureId, storyId } = await createDraftFixture(80)
+    const draft = {
+      capacityEdits: [{ resourceTypeId: rtId, startWeek: 0, endWeek: 4, headcount: 1, locked: true }],
+      manualFeatureEntries: [],
+      manualStoryEntries: [{ storyId, startWeek: 3 }],
+    }
+    const generatedResponse = await generateDraftPlan(projectId, draft)
+    expect(generatedResponse.status).toBe(200)
+    const result = generatedResponse.body as DraftPlanResponse
+    expect(result.draft).toEqual(draft)
+    const previewFeature = result.schedule!.features.find(feature => feature.featureId === featureId)!
+    const previewStory = result.schedule!.stories.find(story => story.storyId === storyId)!
+    expect(previewStory).toMatchObject({ startWeek: 3 })
+    expect(previewStory.durationWeeks).toBeGreaterThan(1)
+    expect(previewFeature.durationWeeks).toBeGreaterThan(1)
+
+    const appliedResponse = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildDraftApplyBody(result, draft))
+    expect(appliedResponse.status).toBe(201)
+
+    const persistedFeature = await prisma.timelineEntry.findUnique({ where: { featureId } })
+    const persistedStory = await prisma.storyTimelineEntry.findUnique({ where: { storyId } })
+    expect(persistedFeature).toMatchObject({
+      featureId,
+      startWeek: previewFeature.startWeek,
+      durationWeeks: previewFeature.durationWeeks,
+    })
+    expect(persistedStory).toMatchObject({
+      storyId,
+      startWeek: previewStory.startWeek,
+      durationWeeks: previewStory.durationWeeks,
+    })
+  })
+
+  it('persists the exact auto feature and story preview when no manual pins are supplied', async () => {
+    const { projectId, featureId, storyId } = await createDraftFixture(80)
+    const generatedResponse = await generateDraftPlan(projectId)
+    expect(generatedResponse.status).toBe(200)
+    const result = generatedResponse.body as DraftPlanResponse
+    const previewFeature = result.schedule!.features.find(feature => feature.featureId === featureId)!
+    const previewStory = result.schedule!.stories.find(story => story.storyId === storyId)!
+    expect(Number.isFinite(previewFeature.startWeek)).toBe(true)
+    expect(Number.isFinite(previewFeature.durationWeeks)).toBe(true)
+    expect(Number.isFinite(previewStory.startWeek)).toBe(true)
+    expect(Number.isFinite(previewStory.durationWeeks)).toBe(true)
+
+    const appliedResponse = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildDraftApplyBody(result, result.draft))
+    expect(appliedResponse.status).toBe(201)
+
+    const persistedFeature = await prisma.timelineEntry.findUnique({ where: { featureId } })
+    const persistedStory = await prisma.storyTimelineEntry.findUnique({ where: { storyId } })
+    expect(persistedFeature).toMatchObject({
+      featureId,
+      startWeek: previewFeature.startWeek,
+      durationWeeks: previewFeature.durationWeeks,
+    })
+    expect(persistedStory).toMatchObject({
+      storyId,
+      startWeek: previewStory.startWeek,
+      durationWeeks: previewStory.durationWeeks,
+    })
+  })
+  it('rejects tampered signed result fields without mutating canonical state', async () => {
+    const { projectId } = await createDraftFixture()
+    const generatedResponse = await generateDraftPlan(projectId)
+    expect(generatedResponse.status).toBe(200)
+    const result = generatedResponse.body as DraftPlanResponse
+    const before = await captureCanonicalState(projectId)
+    const tamperedBody = buildDraftApplyBody(result, result.draft)
+    tamperedBody.totalCost = result.totalCost + 1
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(tamperedBody)
+    expect(response.status).toBe(409)
+    expect(response.body.error).toEqual(expect.any(String))
+    expect(await captureCanonicalState(projectId)).toEqual(before)
+  })
+
+  it('rejects a stale reviewed draft after a concurrent canonical input race', async () => {
+    const { projectId, rtId } = await createDraftFixture()
+    const generatedResponse = await generateDraftPlan(projectId)
+    expect(generatedResponse.status).toBe(200)
+    const result = generatedResponse.body as DraftPlanResponse
+    const draft = result.draft!
+    const before = await captureCanonicalState(projectId)
+
+    const resourceType = await prisma.resourceType.findUniqueOrThrow({ where: { id: rtId } })
+    await prisma.resourceType.update({
+      where: { id: rtId },
+      data: { count: resourceType.count + 1 },
+    })
+
+    const staleResponse = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildDraftApplyBody(result, draft))
+    expect(staleResponse.status).toBe(409)
+    expect(staleResponse.body.error).toEqual(expect.any(String))
+
+    const after = await captureCanonicalState(projectId)
+    expect(after.plans).toEqual(before.plans)
+    expect(after.profiles).toEqual(before.profiles)
+    expect(after.snapshots).toEqual(before.snapshots)
+    expect(after.timelineEntries).toEqual(before.timelineEntries)
+  })
+
+  it('rolls back reviewed capacity and schedule writes atomically when apply fails', async () => {
+    const { projectId, rtId, featureId } = await createDraftFixture()
+    const draft = {
+      capacityEdits: [{ resourceTypeId: rtId, startWeek: 0, endWeek: 4, headcount: 1, locked: true }],
+      manualFeatureEntries: [{ featureId, startWeek: 1, durationWeeks: 1 }],
+      manualStoryEntries: [],
+    }
+    const generatedResponse = await generateDraftPlan(projectId, draft)
+    expect(generatedResponse.status).toBe(200)
+    const result = generatedResponse.body as DraftPlanResponse
+    const before = await captureCanonicalState(projectId)
+
+    __setApplyFailureSeam(() => { throw new Error('draft apply seam failure') })
+    let appliedResponse: { status: number } | undefined
+    try {
+      appliedResponse = await request(app)
+        .post(`/api/projects/${projectId}/squad-plan/apply`)
+        .set('Authorization', authHeader)
+        .send(buildDraftApplyBody(result, draft))
+    } finally {
+      __setApplyFailureSeam(null)
+    }
+    expect(appliedResponse!.status).toBe(500)
+
+    const after = await captureCanonicalState(projectId)
+    expect(after.plans).toEqual(before.plans)
+    expect(after.profiles).toEqual(before.profiles)
+    expect(after.timelineEntries).toEqual(before.timelineEntries)
+    expect(after.storyTimelineEntries).toEqual(before.storyTimelineEntries)
+    expect(after.weeklyDemandCache).toEqual(before.weeklyDemandCache)
+  })
+
+  it('keeps explicit manual ROLE ownership protected when applying a draft', async () => {
+    const { projectId, rtId } = await createDraftFixture()
+    const profile = await prisma.capacityProfile.findFirstOrThrow({ where: { projectId, resourceTypeId: rtId } })
+    const profileId = profile.id
+    await prisma.capacityProfile.update({
+      where: { id: profileId },
+      data: { planningBasis: 'DEMAND_FOLLOWING', source: 'MANUAL', defaultPercent: 100, provenance: null },
+    })
+    const before = await prisma.capacityProfile.findUniqueOrThrow({ where: { id: profileId } })
+    const generatedResponse = await generateDraftPlan(projectId)
+    expect(generatedResponse.status).toBe(200)
+    const result = generatedResponse.body as DraftPlanResponse
+
+    const response = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildDraftApplyBody(result, result.draft))
+    expect(response.status).toBe(409)
+    expect(response.body.error).toEqual(expect.any(String))
+
+    const after = await prisma.capacityProfile.findUniqueOrThrow({ where: { id: profileId } })
+    expect(after).toMatchObject({
+      ownerKind: before.ownerKind,
+      source: before.source,
+      planningBasis: before.planningBasis,
+      defaultPercent: before.defaultPercent,
+    })
+  })
+  it('does not sign an irreconcilable hard lock, then recovers after unlocking it', async () => {
+    const { projectId, rtId } = await createDraftFixture()
+    await prisma.capacityProfile.updateMany({
+      where: { projectId, resourceTypeId: rtId },
+      data: { startWeek: 0, endWeek: 11 },
+    })
+    const lockedDraft = {
+      capacityEdits: [{ resourceTypeId: rtId, startWeek: 0, endWeek: 12, headcount: 0, locked: true }],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+    }
+    const lockedResponse = await generateDraftPlan(projectId, lockedDraft)
+    expect(lockedResponse.status).toBe(200)
+    expect(lockedResponse.body.targetAchieved).toBe(false)
+    expect(lockedResponse.body.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ blocker: expect.any(String) }),
+    ]))
+    expect(lockedResponse.body.draft).toEqual(lockedDraft)
+    expect(lockedResponse.body.draftToken).toBeUndefined()
+
+    const unlockedDraft = {
+      ...lockedDraft,
+      capacityEdits: [{ ...lockedDraft.capacityEdits[0], headcount: 1, locked: false }],
+    }
+    const recoveredResponse = await generateDraftPlan(projectId, unlockedDraft)
+    expect(recoveredResponse.status).toBe(200)
+    expect(recoveredResponse.body.draft).toEqual(unlockedDraft)
+    expect(recoveredResponse.body.draftToken).toEqual(expect.any(String))
+    expect(recoveredResponse.body.deliveryWeeks).toEqual(expect.any(Number))
+  })
+
+  it('enforces project ownership for draft generation and apply', async () => {
+    const foreignUser = await prisma.user.create({
+      data: {
+        email: `squadplan-foreign-${Date.now()}@example.com`,
+        name: 'Foreign Squad Plan User',
+        password: '$2b$10$placeholder',
+      },
+    })
+    const foreignProject = await prisma.project.create({
+      data: { name: `Foreign Squad Plan ${Date.now()}`, ownerId: foreignUser.id },
+    })
+    try {
+      const generateResponse = await request(app)
+        .post(`/api/projects/${foreignProject.id}/squad-plan`)
+        .set('Authorization', authHeader)
+        .send({ targetDurationWeeks: 12, periodWeeks: 4, maxDeltaPerPeriod: 1 })
+      expect(generateResponse.status).toBe(404)
+
+      const applyResponse = await request(app)
+        .post(`/api/projects/${foreignProject.id}/squad-plan/apply`)
+        .set('Authorization', authHeader)
+        .send({})
+      expect(applyResponse.status).toBe(404)
+    } finally {
+      await prisma.project.delete({ where: { id: foreignProject.id } })
+      await prisma.user.delete({ where: { id: foreignUser.id } })
+    }
+  })
+
+  it('keeps a finite target miss reviewable and applyable', async () => {
+    const { projectId, rtId } = await createDraftFixture(80)
+    const draft = {
+      capacityEdits: [],
+      manualFeatureEntries: [],
+      manualStoryEntries: [],
+    }
+    const generatedResponse = await generateDraftPlan(projectId, draft, {
+      targetDurationWeeks: 1,
+      maxCap: { [rtId]: 1 },
+    })
+    expect(generatedResponse.status).toBe(200)
+    const result = generatedResponse.body as DraftPlanResponse
+    expect(result.targetAchieved).toBe(false)
+    expect(result.deliveryWeeks).toEqual(expect.any(Number))
+    expect(result.draftToken).toEqual(expect.any(String))
+
+    const appliedResponse = await request(app)
+      .post(`/api/projects/${projectId}/squad-plan/apply`)
+      .set('Authorization', authHeader)
+      .send(buildDraftApplyBody(result, draft))
+    expect(appliedResponse.status).toBe(201)
+  })
+})
