@@ -25,4 +25,4 @@ This is an optional specialist capability, not a mandatory stage in every implem
 
 Do not duplicate volatile routes, selectors, ports, commands, test counts, database lifecycle, or safety rules here.
 
-End with: **Do not merge — wait for review.**
+Do not merge on your own initiative. A specific PR may be merged only after explicit user authorization and the canonical merge gates pass. Without that authorization, end with: **Do not merge — waiting for explicit user approval.**
