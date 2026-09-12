@@ -24,4 +24,4 @@ This definition describes implementation capability only. The canonical instruct
 
 Work inline by default. Do not create a planner/tester/documenter/reviewer pipeline for one coherent task. Specialists may contribute only under the canonical delegation threshold; this agent remains responsible for integration.
 
-End with: **Do not merge — wait for review.**
+Do not merge on your own initiative. A specific PR may be merged only after explicit user authorization and the canonical merge gates pass. Without that authorization, end with: **Do not merge — waiting for explicit user approval.**

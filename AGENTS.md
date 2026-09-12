@@ -8,4 +8,4 @@ Before implementing, testing, reviewing, or preparing a pull request in this rep
 
 Custom agent definitions and tool-specific instruction files are adapters only. They must not override the canonical project instructions.
 
-Never push directly to `main`, merge, enable auto-merge, approve your own PR, or bypass required checks. End implementation handoffs with: **Do not merge — wait for review.**
+Never push directly to `main`, merge or enable auto-merge on your own initiative, approve your own PR, or bypass required checks. A specific PR may be merged only after explicit user authorization and only when the canonical merge gates pass. End implementation handoffs without merge authorization with: **Do not merge — waiting for explicit user approval.**
