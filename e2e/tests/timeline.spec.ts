@@ -1,6 +1,6 @@
 import { test, expect, type Page, type Request, type Locator } from '@playwright/test'
 import { login, createProject, openStartingTeamFinder, quickSchedule, DATABASE_URL } from './helpers'
-import { factorySupplyChainBenchmark } from '../../server/src/test/planningBenchmarkFixtures.ts'
+import { factorySupplyChainBenchmark, FACTORY_SUPPLY_CHAIN_FACTS } from '../../server/src/test/planningBenchmarkFixtures.ts'
 import { Client } from 'pg'
 import path from 'path'
 import fs from 'fs'
@@ -319,7 +319,7 @@ const AUTOMATIC_PLAN_CSV = [
   'Epic,Automatic Plan,,,,,,,,,,active,,',
   'Feature,Automatic Plan,Capacity-bound feature,,,,,,,,,,,',
   'Story,Automatic Plan,Capacity-bound feature,Delivery story,,,,,,,,,,active',
-  'Task,Automatic Plan,Capacity-bound feature,Delivery story,Large Developer task,,Developer,800,100,,,,,',
+  'Task,Automatic Plan,Capacity-bound feature,Delivery story,Large Developer task,,Developer,960,120,,,,,',
 ].join('\n')
 
 function factorySupplyChainCsv() {
@@ -410,6 +410,77 @@ async function getProjectJson(page: Page, endpoint: string) {
   }, endpoint)
 }
 
+type CapacityPlanPeriod = {
+  startWeek: number
+  endWeek: number
+  resources: Array<{ resourceTypeName: string; headcount: number }>
+}
+
+type WeeklyCapacityPoint = {
+  week: number
+  resourceTypeName: string
+  capacityDays: number
+}
+
+function assertWeeklyCapacityParity(
+  generatedPeriods: CapacityPlanPeriod[],
+  persistedWeeklyCapacity: WeeklyCapacityPoint[],
+  resourceTypeName: string,
+) {
+  const expectedCapacityByWeek = new Map<number, number>()
+  for (const period of generatedPeriods) {
+    const resource = period.resources.find(
+      candidate => candidate.resourceTypeName === resourceTypeName,
+    )
+    const capacityDays = (resource?.headcount ?? 0) * 5
+    for (let week = period.startWeek; week < period.endWeek; week++) {
+      expectedCapacityByWeek.set(week, capacityDays)
+    }
+  }
+
+  const actualCapacityByWeek = new Map<number, number>()
+  for (const row of persistedWeeklyCapacity) {
+    if (row.resourceTypeName !== resourceTypeName) continue
+    actualCapacityByWeek.set(row.week, (actualCapacityByWeek.get(row.week) ?? 0) + row.capacityDays)
+  }
+
+  // Timeline weeklyCapacity is a transport DTO rounded to one decimal day.
+  // Compare staffed weeks at that DTO precision, but keep zero/gap weeks exact.
+  const capacityDtoDecimalPlaces = 1
+  const capacityDtoRoundingHalfUnit = 0.5 * 10 ** -capacityDtoDecimalPlaces
+  const allCapacityWeeks = new Set([...expectedCapacityByWeek.keys(), ...actualCapacityByWeek.keys()])
+  for (const week of allCapacityWeeks) {
+    const expectedCapacity = expectedCapacityByWeek.get(week) ?? 0
+    const actualCapacity = actualCapacityByWeek.get(week) ?? 0
+    if (expectedCapacity === 0) {
+      expect(actualCapacity, `Unexpected capacity in gap week ${week}`).toBe(0)
+      continue
+    }
+    const floatingPointEpsilon = Number.EPSILON * Math.max(
+      1,
+      Math.abs(expectedCapacity),
+      Math.abs(actualCapacity),
+    )
+    expect(
+      Math.abs(actualCapacity - expectedCapacity),
+      `Capacity mismatch in week ${week}: expected ${expectedCapacity}, received ${actualCapacity}`,
+    ).toBeLessThanOrEqual(capacityDtoRoundingHalfUnit + floatingPointEpsilon)
+  }
+
+  expect(
+    [...actualCapacityByWeek.entries()]
+      .filter(([, capacityDays]) => capacityDays > 0)
+      .map(([week]) => week),
+  ).toEqual(
+    [...expectedCapacityByWeek.entries()]
+      .filter(([, capacityDays]) => capacityDays > 0)
+      .map(([week]) => week),
+  )
+}
+
+
+
+
 
 
 /**
@@ -468,6 +539,13 @@ async function setupOptimiserTimeline(
 
 async function setupFactorySupplyChainTimeline(page: Page) {
   const projectName = `E2E Factory Supply Chain ${Date.now()}`
+  const benchmark = factorySupplyChainBenchmark()
+  const constrainedRole = benchmark.input.resourceTypes.find(
+    resourceType => resourceType.id === benchmark.facts.constrainedRoleId,
+  )
+  expect(constrainedRole).toBeDefined()
+  const constrainedSegment = constrainedRole?.roleSegments?.[0]
+  expect(constrainedSegment).toBeDefined()
   await login(page)
   await createProject(page, projectName)
   await page.getByRole('heading', { name: projectName, exact: true }).first().click()
@@ -479,14 +557,14 @@ async function setupFactorySupplyChainTimeline(page: Page) {
     storiesCreated?: number
     tasksCreated?: number
   }
-  const expectedTaskCount = factorySupplyChainBenchmark().input.epics
+  const expectedTaskCount = benchmark.input.epics
     .flatMap(epic => epic.features)
     .flatMap(feature => feature.userStories)
     .reduce((total, story) => total + story.tasks.length, 0)
   expect(importBody).toMatchObject({
-    epicsCreated: 18,
-    featuresCreated: 222,
-    storiesCreated: 222,
+    epicsCreated: benchmark.facts.epicCount,
+    featuresCreated: benchmark.facts.featureCount,
+    storiesCreated: benchmark.facts.featureCount,
     tasksCreated: expectedTaskCount,
   })
 
@@ -517,9 +595,63 @@ async function setupFactorySupplyChainTimeline(page: Page) {
     expect(response.status).toBe(200)
   }
 
+  const constrainedResourceType = resourceTypes.find(
+    resourceType => resourceType.name === 'Senior Data Engineer',
+  )
+  expect(constrainedResourceType).toBeDefined()
+  const token = await page.evaluate(() => localStorage.getItem('token'))
+  expect(token).toBeTruthy()
+  const profileResponse = await page.request.put(
+    `/api/projects/${projectId}/capacity-profiles/ROLE/${constrainedResourceType!.id}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        defaultPercent: constrainedSegment!.allocationPercent,
+        startWeek: constrainedSegment!.startWeek,
+        endWeek: constrainedSegment!.endWeek,
+      },
+    },
+  )
+  expect(profileResponse.status()).toBe(200)
+  const profilesBody = await page.request.get(
+    `/api/projects/${projectId}/capacity-profiles`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
+  expect(profilesBody.status()).toBe(200)
+  const profiles = await profilesBody.json() as {
+    capacityProfiles: Array<{
+      owner: { kind: string; id: string }
+      planningBasis: string
+      defaultPercent: number | null
+      startWeek: number | null
+      endWeek: number | null
+      segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+    }>
+  }
+  const constrainedProfile = profiles.capacityProfiles.find(profile =>
+    profile.owner.kind === 'role' && profile.owner.id === constrainedResourceType!.id,
+  )
+  expect(constrainedProfile).toMatchObject({
+    owner: { kind: 'role', id: constrainedResourceType!.id },
+    planningBasis: 'availabilityWindow',
+    defaultPercent: constrainedSegment!.allocationPercent,
+    startWeek: constrainedSegment!.startWeek,
+    endWeek: constrainedSegment!.endWeek,
+    segments: [],
+  })
+
   await page.goto(`/projects/${projectId}/timeline`)
   await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 15_000 })
-  return { projectId, importBody }
+  return {
+    projectId,
+    importBody,
+    constrainedProfile: {
+      startWeek: constrainedSegment!.startWeek,
+      endWeek: constrainedSegment!.endWeek,
+      allocationPercent: constrainedSegment!.allocationPercent,
+    },
+  }
 }
 
 // ── Test 1: open & close ──────────────────────────────────────────────────────
@@ -1811,63 +1943,13 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     expect(persistedDeliveryWeeks).toBeCloseTo(generatedPlan.deliveryWeeks, 6)
 
     const generatedResource = generatedPlan.periods
-      .flatMap(period => period.resources.map(resource => ({
-        ...resource,
-        startWeek: period.startWeek,
-        endWeek: period.endWeek,
-      })))
+      .flatMap(period => period.resources)
       .find(resource => resource.headcount > 0)
     expect(generatedResource, 'Generated plan did not contain staffed capacity').toBeDefined()
-    const expectedCapacityByWeek = new Map<number, number>()
-    for (const period of generatedPlan.periods) {
-      const resource = period.resources.find(
-        candidate => candidate.resourceTypeName === generatedResource!.resourceTypeName,
-      )
-      const capacityDays = (resource?.headcount ?? 0) * 5
-      for (let week = period.startWeek; week < period.endWeek; week++) {
-        expectedCapacityByWeek.set(week, capacityDays)
-      }
-    }
-    const actualCapacityByWeek = new Map<number, number>()
-    for (const row of appliedTimeline.weeklyCapacity) {
-      if (row.resourceTypeName !== generatedResource!.resourceTypeName) continue
-      actualCapacityByWeek.set(row.week, (actualCapacityByWeek.get(row.week) ?? 0) + row.capacityDays)
-    }
-    // Timeline weeklyCapacity is a transport DTO rounded to one decimal day.
-    // Compare staffed weeks at that DTO precision, but keep zero/gap weeks exact.
-    const capacityDtoDecimalPlaces = 1
-    const capacityDtoRoundingHalfUnit = 0.5 * 10 ** -capacityDtoDecimalPlaces
-    const allCapacityWeeks = new Set([...expectedCapacityByWeek.keys(), ...actualCapacityByWeek.keys()])
-    for (const week of allCapacityWeeks) {
-      const expectedCapacity = expectedCapacityByWeek.get(week) ?? 0
-      const actualCapacity = actualCapacityByWeek.get(week) ?? 0
-      if (expectedCapacity === 0) {
-        expect(actualCapacity, `Unexpected capacity in gap week ${week}`).toBe(0)
-        continue
-      }
-      const floatingPointEpsilon = Number.EPSILON * Math.max(
-        1,
-        Math.abs(expectedCapacity),
-        Math.abs(actualCapacity),
-      )
-      expect(
-        Math.abs(actualCapacity - expectedCapacity),
-        `Capacity mismatch in week ${week}: expected ${expectedCapacity}, received ${actualCapacity}`,
-      ).toBeLessThanOrEqual(capacityDtoRoundingHalfUnit + floatingPointEpsilon)
-    }
-
-    /*
-     * Keep this explicit parity assertion: a plan that only happens to
-     * overlap on one positive week is not an apply round-trip.
-     */
-    expect(
-      [...actualCapacityByWeek.entries()]
-        .filter(([, capacityDays]) => capacityDays > 0)
-        .map(([week]) => week),
-    ).toEqual(
-      [...expectedCapacityByWeek.entries()]
-        .filter(([, capacityDays]) => capacityDays > 0)
-        .map(([week]) => week),
+    assertWeeklyCapacityParity(
+      generatedPlan.periods,
+      appliedTimeline.weeklyCapacity,
+      generatedResource!.resourceTypeName,
     )
 
     expect(applyData.name).toBeTruthy()
@@ -2159,6 +2241,8 @@ test.describe('Squad Planner — automatic planning validation', () => {
       avgUtilisationPct: number
       staffedFteWeeks?: number
       periods: Array<{
+        startWeek: number
+        endWeek: number
         resources: Array<{ resourceTypeName: string; headcount: number }>
       }>
       schedule?: {
@@ -2179,6 +2263,11 @@ test.describe('Squad Planner — automatic planning validation', () => {
     expect(plan.staffedFteWeeks).toBeGreaterThan(0)
     expect(plan.schedule?.features).toEqual(expect.arrayContaining([
       expect.objectContaining({ featureId: expect.any(String), durationWeeks: expect.any(Number) }),
+    ]))
+    expect(plan.schedule?.features).toHaveLength(1)
+    expect(plan.schedule?.stories).toHaveLength(1)
+    expect(plan.schedule?.stories).toEqual(expect.arrayContaining([
+      expect.objectContaining({ storyId: expect.any(String), durationWeeks: expect.any(Number) }),
     ]))
     await expect(drawer.getByText(/requested duration/i)).toBeVisible()
     await expect(drawer.getByText(/achieved duration/i)).toBeVisible()
@@ -2212,12 +2301,26 @@ test.describe('Squad Planner — automatic planning validation', () => {
 
     await page.reload()
     await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 15_000 })
-    const persistedTimeline = await getProjectJson(page, `/api/projects/${projectId}/timeline`) as typeof timelineBefore
-    const persistedFeature = persistedTimeline.entries.find(entry => entry.featureId === plan.schedule?.features[0]?.featureId)
-    expect(persistedFeature).toMatchObject({
-      startWeek: plan.schedule?.features[0]?.startWeek,
-      durationWeeks: plan.schedule?.features[0]?.durationWeeks,
-    })
+    const persistedTimeline = await getProjectJson(page, `/api/projects/${projectId}/timeline`) as typeof timelineBefore & {
+      weeklyCapacity: Array<{ week: number; resourceTypeName: string; capacityDays: number }>
+    }
+    expect(persistedTimeline.entries).toHaveLength(plan.schedule?.features.length ?? 0)
+    for (const reviewedFeature of plan.schedule?.features ?? []) {
+      const persistedFeature = persistedTimeline.entries.find(entry => entry.featureId === reviewedFeature.featureId)
+      expect(persistedFeature).toMatchObject({
+        startWeek: reviewedFeature.startWeek,
+        durationWeeks: reviewedFeature.durationWeeks,
+      })
+    }
+    expect(persistedTimeline.storyEntries).toHaveLength(plan.schedule?.stories.length ?? 0)
+    for (const reviewedStory of plan.schedule?.stories ?? []) {
+      const persistedStory = persistedTimeline.storyEntries.find(entry => entry.storyId === reviewedStory.storyId)
+      expect(persistedStory).toMatchObject({
+        startWeek: reviewedStory.startWeek,
+        durationWeeks: reviewedStory.durationWeeks,
+      })
+    }
+    assertWeeklyCapacityParity(plan.periods, persistedTimeline.weeklyCapacity, 'Developer')
     const profileAfterApply = await getProjectJson(page, `/api/projects/${projectId}/resource-profile`) as typeof profileBefore & {
       resourceRows: Array<{
         name: string
@@ -2239,7 +2342,7 @@ test.describe('Squad Planner — automatic planning validation', () => {
 test.describe('Squad Planner — Factory / Supply Chain benchmark', () => {
   test('imports the sanitised benchmark and returns a credible plan or actionable diagnostics', async ({ page }) => {
     test.setTimeout(360_000)
-    const { projectId } = await setupFactorySupplyChainTimeline(page)
+    const { projectId, constrainedProfile } = await setupFactorySupplyChainTimeline(page)
 
     await page.getByRole('button', { name: /open squad planner/i }).first().click()
     const drawer = page.getByRole('dialog', { name: /squad planner/i })
@@ -2260,6 +2363,7 @@ test.describe('Squad Planner — Factory / Supply Chain benchmark', () => {
     const plan = await planResponse.json() as {
       error?: string
       diagnostics?: Array<{ explanation: string; resourceTypeName?: string }>
+      config?: { targetDurationWeeks: number }
       deliveryWeeks: number | null
       targetAchieved?: boolean
       peakHeadcount: number
@@ -2270,9 +2374,10 @@ test.describe('Squad Planner — Factory / Supply Chain benchmark', () => {
         stories: Array<{ storyId: string; startWeek: number; durationWeeks: number }>
       }
     }
-    console.log(`[483] Factory plan status=${planResponse.status()} target=78 achieved=${plan.deliveryWeeks ?? 'unavailable'} peak=${plan.peakHeadcount ?? 'unavailable'} diagnostics=${plan.diagnostics?.length ?? 0}`)
+    console.log(`[483] Factory plan status=${planResponse.status()} target=${plan.config?.targetDurationWeeks ?? FACTORY_SUPPLY_CHAIN_FACTS.targetDurationWeeks} achieved=${plan.deliveryWeeks ?? 'unavailable'} targetAchieved=${plan.targetAchieved ?? 'unavailable'} peak=${plan.peakHeadcount ?? 'unavailable'} diagnostics=${plan.diagnostics?.length ?? 0} constrainedProfile=${constrainedProfile.startWeek}-${constrainedProfile.endWeek}@${constrainedProfile.allocationPercent}%`)
 
-    if (planResponse.status() === 200) {
+    if (planResponse.status() === 200 && plan.targetAchieved === true) {
+      expect(plan.config?.targetDurationWeeks).toBe(FACTORY_SUPPLY_CHAIN_FACTS.targetDurationWeeks)
       expect(plan.deliveryWeeks).toBeGreaterThan(0)
       expect(plan.periods.length).toBeGreaterThan(0)
       expect(plan.schedule?.features).toHaveLength(222)
@@ -2303,6 +2408,16 @@ test.describe('Squad Planner — Factory / Supply Chain benchmark', () => {
       }
       expect(persistedTimeline.entries).toHaveLength(222)
       expect(persistedTimeline.storyEntries).toHaveLength(222)
+    } else if (planResponse.status() === 200) {
+      expect(plan.targetAchieved).toBe(false)
+      expect(plan.diagnostics).toBeDefined()
+      expect(plan.diagnostics!.length).toBeGreaterThan(0)
+      expect(plan.diagnostics!.every(diagnostic => diagnostic.explanation.length > 0)).toBe(true)
+      const targetMissStatus = drawer.locator('div[role="status"]').filter({
+        hasText: /Target not achievable under current constraints/,
+      })
+      await expect(targetMissStatus).toBeVisible({ timeout: 30_000 })
+      await expect(targetMissStatus).toContainText(plan.diagnostics![0].explanation)
     } else {
       expect(planResponse.status()).toBe(400)
       expect(plan.error).toContain('Details:')
@@ -2312,6 +2427,7 @@ test.describe('Squad Planner — Factory / Supply Chain benchmark', () => {
       await expect(drawer.getByRole('alert')).toContainText(plan.diagnostics![0].explanation)
       expect(plan.diagnostics!.every(diagnostic => diagnostic.explanation.length > 0)).toBe(true)
     }
+
   })
 })
 
