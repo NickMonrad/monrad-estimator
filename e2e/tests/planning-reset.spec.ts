@@ -16,10 +16,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
-import { login, createProject, quickSchedule } from './helpers'
-import path from 'path'
-import fs from 'fs'
-import os from 'os'
+import { login, createProject, quickSchedule, csvFile } from './helpers'
 
 const CSV_CONTENT = [
   'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
@@ -33,11 +30,8 @@ async function seedBacklogViaCsv(page: Page) {
   await page.getByRole('button', { name: /backlog/i }).click()
   await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
 
-  const tmpFile = path.join(os.tmpdir(), `planning-reset-seed-${Date.now()}.csv`)
-  fs.writeFileSync(tmpFile, CSV_CONTENT)
   await page.getByRole('button', { name: /import csv/i }).click()
-  await page.locator('input[type="file"]').setInputFiles(tmpFile)
-  fs.unlinkSync(tmpFile)
+  await page.locator('input[type="file"]').setInputFiles(csvFile(CSV_CONTENT))
 
   await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
   await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
@@ -48,18 +42,24 @@ async function seedBacklogViaCsv(page: Page) {
  * Open the capacity profile editor for EVERY role row and save "As needed".
  * While NEEDS_REPLAN the Resource Profile exposes every preserved role —
  * including zero-demand roles — so this creates the user's chosen profile
- * for each of them. Rows are iterated by index (the row list keeps its
- * order across the refetch after each save; `.first()` would re-target the
- * same row forever because every editable row shares the same button title).
+ * for each of them.
+ *
+ * Rows are iterated by the row identities captured up front, not by index.
+ * Another spec (global-admin-auth) creates and renames global resource types
+ * while this test runs, and that inserts a role row into every project; the
+ * row list is sorted by category and name, so an insertion or rename can
+ * re-sort the list between refetches and make index-based iteration skip a
+ * role (or edit the same role twice).
  */
 async function setAllRoleCapacitiesAsNeeded(page: Page) {
-  const rows = page.locator('tr[data-testid^="resource-profile-row-"]')
-  const rowCount = await rows.count()
-  for (let i = 0; i < rowCount; i++) {
+  const rowTestIds = await page
+    .locator('tr[data-testid^="resource-profile-row-"]')
+    .evaluateAll(rows => rows.map(row => row.getAttribute('data-testid') ?? ''))
+  for (const rowTestId of rowTestIds) {
     // Missing persisted profiles render the amber "Needs capacity profile"
     // badge (issue #456); persisted ones keep the normal edit badge — both
     // open the same capacity editor.
-    const editButton = rows.nth(i).locator(
+    const editButton = page.getByTestId(rowTestId).locator(
       'button[title="Click to edit capacity profile"], button[title="Click to create capacity profile"]',
     )
     await editButton.waitFor({ state: 'visible', timeout: 10_000 })

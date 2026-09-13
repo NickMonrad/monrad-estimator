@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, createProject, deleteTemplatesByName } from './helpers'
+import { login, createProject, deleteTemplatesByName, csvFile } from './helpers'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -72,13 +72,9 @@ test.describe('Backlog', () => {
     const headers = 'Epic,Feature,Story,Task,ResourceType,HoursExtraSmall,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge,HoursEffort,DurationDays,Description,Assumptions'
     const dataRow = 'E2E DurationEpic,E2E DurationFeature,E2E DurationStory,E2E DurationTask,Developer,0,0,0,0,0,8,,Task desc,'
     const csv = [headers, dataRow].join('\n')
-    const tmpFile = path.join(os.tmpdir(), 'duration-import.csv')
-    fs.writeFileSync(tmpFile, csv)
 
     await page.getByRole('button', { name: /import csv/i }).click()
-    const fileInput = page.locator('input[type="file"]')
-    await fileInput.setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(csv))
 
     // Step through the two-step modal: staging → confirm → import
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
@@ -334,12 +330,9 @@ test.describe('Backlog', () => {
     const taskName = `E2E Dup Task ${Date.now()}`
     const headers = 'Epic,Feature,Story,Task,ResourceType,HoursEffort,DurationDays,Description,Assumptions'
     const csv = [headers, `${epicName},${featureName},${storyName},${taskName},Developer,12.5,2,Task description,Task assumptions`].join('\n')
-    const tmpFile = path.join(os.tmpdir(), `backlog-duplication-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, csv)
 
     await page.getByRole('button', { name: /import csv/i }).click()
-    await page.locator('input[type="file"]').setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(csv))
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
     await expect(page.getByText(epicName, { exact: true })).toBeVisible({ timeout: 10_000 })
@@ -442,13 +435,9 @@ test.describe('CSV redesign — Type column and status fields', () => {
     const oldHeaders = 'Epic,Feature,Story,Task,ResourceType,HoursExtraSmall,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge,HoursEffort,DurationDays,Description,Assumptions'
     const oldData = 'E2E TypeExportEpic,E2E TypeExportFeature,E2E TypeExportStory,E2E TypeExportTask,Developer,0,0,0,0,0,8,,,'
     const csv = [oldHeaders, oldData].join('\n')
-    const tmpFile = path.join(os.tmpdir(), `csv-type-export-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, csv)
 
     await page.getByRole('button', { name: /import csv/i }).click()
-    const fileInput = page.locator('input[type="file"]')
-    await fileInput.setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(csv))
 
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
@@ -517,13 +506,8 @@ test.describe('CSV redesign — Type column and status fields', () => {
       'Task,E2E StatusImportEpic,E2E StatusImportFeature,E2E StatusImportStory,E2E StatusImportTask,,Developer,4,,,,,,',
     ].join('\n')
 
-    const tmpFile = path.join(os.tmpdir(), `csv-status-import-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, csv)
-
     await page.getByRole('button', { name: /import csv/i }).click()
-    const fileInput = page.locator('input[type="file"]')
-    await fileInput.setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(csv))
 
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
@@ -549,13 +533,8 @@ test.describe('CSV redesign — Type column and status fields', () => {
       'Task,E2E WarnEpic,E2E WarnFeature,E2E WarnStory,E2E WarnTask,,Developer,4,,,,inactive,,',
     ].join('\n')
 
-    const tmpFile = path.join(os.tmpdir(), `csv-warn-wrongtype-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, csv)
-
     await page.getByRole('button', { name: /import csv/i }).click()
-    const fileInput = page.locator('input[type="file"]')
-    await fileInput.setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(csv))
 
     // After file upload the modal automatically moves to the staging step.
     // The yellow warning panel should appear with the EpicStatus message.
@@ -588,13 +567,9 @@ test.describe('Dependencies', () => {
       'Epic,E2E DepEpic,,,,,,,,,,active,,,sequential,,, ',
       'Feature,E2E DepEpic,E2E DepFeature,,,,,,,,,,,,,sequential,,',
     ].join('\n')
-    const tmpFile = path.join(os.tmpdir(), `csv-dep-export-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, csv)
 
     await page.getByRole('button', { name: /import csv/i }).click()
-    const fileInput = page.locator('input[type="file"]')
-    await fileInput.setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(csv))
 
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
@@ -642,11 +617,8 @@ test.describe('Grid Entry', () => {
       'Epic,Feature,Story,Task,ResourceType,HoursEffort,DurationDays,Description,Assumptions',
       'Grid Seed Epic,Grid Seed Feature,Grid Seed Story,Grid Seed Task,Developer,4,1,,',
     ].join('\n')
-    const seedPath = path.join(os.tmpdir(), `grid-seed-${Date.now()}.csv`)
-    fs.writeFileSync(seedPath, seedCsv)
     await page.getByRole('button', { name: /import csv/i }).click()
-    await page.locator('input[type="file"]').setInputFiles(seedPath)
-    fs.unlinkSync(seedPath)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(seedCsv))
     await page.getByRole('button', { name: /review & confirm/i }).click()
     await page.getByRole('button', { name: /import backlog/i }).click()
     await expect(page.getByText('Grid Seed Epic')).toBeVisible()

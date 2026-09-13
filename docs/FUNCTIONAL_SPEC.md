@@ -753,6 +753,8 @@ The global catalog of roles/disciplines used across all projects.
 | Description | Optional |
 | Is default | Whether to include in new project seeding |
 
+Creating a global type also seeds a project-scoped resource type into every existing project. Each seeded role carries the same authoritative ROLE capacity profile that project creation and CSV import create, because profile-first planning fails closed for a role without one.
+
 ### Project Resource Types (`/projects/:id/resource-types`)
 
 Each project has its own scoped copy of the resource types it uses.

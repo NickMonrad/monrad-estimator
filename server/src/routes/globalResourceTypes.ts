@@ -13,7 +13,13 @@ router.get('/', authenticate, asyncHandler(async (_req: AuthRequest, res: Respon
 }))
 
 // POST /api/global-resource-types — auth required
-// After creating, seeds a ResourceType instance into every existing project
+// After creating, seeds a ResourceType instance into every existing project.
+//
+// Each seeded role also receives its authoritative ROLE capacity profile, in
+// one transaction: profile-first planning fails closed when a role has no
+// profile, so a bare ResourceType row would make every existing project
+// unreadable on the Timeline/Resource Profile endpoints. The seeded profile
+// reproduces the strict mapper shape used by project creation and CSV import.
 router.post('/', authenticate, requireAdmin, asyncHandler(async (req: AuthRequest, res: Response) => {
   const { name, category, description, defaultHoursPerDay, defaultDayRate } = req.body
   if (!name || !category) { res.status(400).json({ error: 'name and category are required' }); return }
@@ -22,15 +28,31 @@ router.post('/', authenticate, requireAdmin, asyncHandler(async (req: AuthReques
   })
   const projects = await prisma.project.findMany({ select: { id: true } })
   if (projects.length > 0) {
-    await prisma.resourceType.createMany({
-      data: projects.map(p => ({
-        name,
-        category,
-        projectId: p.id,
-        globalTypeId: gt.id,
-        hoursPerDay: gt.defaultHoursPerDay ?? null,
-        dayRate: gt.defaultDayRate ?? null,
-      }))
+    await prisma.$transaction(async tx => {
+      for (const project of projects) {
+        await tx.resourceType.create({
+          data: {
+            name,
+            category,
+            projectId: project.id,
+            globalTypeId: gt.id,
+            hoursPerDay: gt.defaultHoursPerDay ?? null,
+            dayRate: gt.defaultDayRate ?? null,
+            capacityProfiles: {
+              create: {
+                projectId: project.id,
+                ownerKind: 'ROLE',
+                planningBasis: 'AVAILABILITY_WINDOW',
+                source: 'AVAILABILITY_WINDOW',
+                defaultPercent: 100,
+                startWeek: null,
+                endWeek: null,
+                provenance: 'LEGACY_MAPPER',
+              },
+            },
+          },
+        })
+      }
     })
   }
   res.status(201).json(gt)
