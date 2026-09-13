@@ -179,11 +179,11 @@ API-level tests using the `request` fixture. No browser UI involved.
 |------|-------------|
 | grows an unrestricted squad, stays draft-only, and persists after apply | Imports a capacity-bound Developer task, verifies a blank maximum is rendered as unrestricted, generates a 3-month plan that grows above the current one-person count, confirms metrics and timeline/capacity remain unchanged before Apply, then applies and reloads to verify persisted timeline placement and planned capacity profile |
 
-#### `Squad Planner — Factory / Supply Chain benchmark` describe block — issue #483
+#### `Squad Planner — synthetic large-programme benchmark` describe block — issue #483
 
 | Test | Description |
 |------|-------------|
-| imports the sanitised benchmark and returns a credible plan or actionable diagnostics | Imports the 18-epic, 222-feature sanitized benchmark through the application CSV APIs, restores the fixture role counts, verifies blank maximums, and accepts either a complete 222-feature plan with metrics plus apply/reload persistence or structured diagnostic explanations rendered in the drawer |
+| imports the synthetic benchmark and returns a credible plan or actionable diagnostics | Imports the deterministic 14-epic, 210-feature synthetic benchmark through the application CSV APIs, restores its generic role counts, verifies blank maximums, and accepts either a complete 210-feature plan with metrics plus apply/reload persistence or structured diagnostic explanations rendered in the drawer |
 
 #### `Squad Planner — editable draft review loop` describe block — issue #482
 

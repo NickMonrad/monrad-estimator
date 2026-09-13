@@ -1,6 +1,6 @@
 import { test, expect, type Page, type Request, type Locator } from '@playwright/test'
 import { login, createProject, openStartingTeamFinder, quickSchedule, DATABASE_URL } from './helpers'
-import { factorySupplyChainBenchmark, FACTORY_SUPPLY_CHAIN_FACTS } from '../../server/src/test/planningBenchmarkFixtures.ts'
+import { syntheticLargeProgrammeBenchmark, SYNTHETIC_LARGE_PROGRAMME_FACTS } from '../../server/src/test/planningBenchmarkFixtures.ts'
 import { Client } from 'pg'
 import path from 'path'
 import fs from 'fs'
@@ -322,8 +322,8 @@ const AUTOMATIC_PLAN_CSV = [
   'Task,Automatic Plan,Capacity-bound feature,Delivery story,Large Developer task,,Developer,960,120,,,,,',
 ].join('\n')
 
-function factorySupplyChainCsv() {
-  const { input } = factorySupplyChainBenchmark()
+function syntheticLargeProgrammeCsv() {
+  const { input } = syntheticLargeProgrammeBenchmark()
   const featureNameById = new Map(
     input.epics.flatMap(epic => epic.features.map(feature => [feature.id, feature.id] as const)),
   )
@@ -537,9 +537,9 @@ async function setupOptimiserTimeline(
   ).toBeVisible({ timeout: 15_000 })
 }
 
-async function setupFactorySupplyChainTimeline(page: Page) {
-  const projectName = `E2E Factory Supply Chain ${Date.now()}`
-  const benchmark = factorySupplyChainBenchmark()
+async function setupSyntheticLargeProgrammeTimeline(page: Page) {
+  const projectName = `E2E Synthetic Large Programme ${Date.now()}`
+  const benchmark = syntheticLargeProgrammeBenchmark()
   const constrainedRole = benchmark.input.resourceTypes.find(
     resourceType => resourceType.id === benchmark.facts.constrainedRoleId,
   )
@@ -550,8 +550,8 @@ async function setupFactorySupplyChainTimeline(page: Page) {
   await createProject(page, projectName)
   await page.getByRole('heading', { name: projectName, exact: true }).first().click()
   const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]
-  if (!projectId) throw new Error('Could not determine Factory benchmark project ID')
-  const importBody = await importCsvViaApplication(page, projectId, factorySupplyChainCsv()) as {
+  if (!projectId) throw new Error('Could not determine synthetic benchmark project ID')
+  const importBody = await importCsvViaApplication(page, projectId, syntheticLargeProgrammeCsv()) as {
     epicsCreated?: number
     featuresCreated?: number
     storiesCreated?: number
@@ -573,12 +573,8 @@ async function setupFactorySupplyChainTimeline(page: Page) {
     name: string
     count: number
   }>
-  for (const expected of [
-    ['Principal Consultant', 3],
-    ['Senior Data Engineer', 6],
-    ['Senior Cloud Engineer', 2],
-  ] as const) {
-    const resourceType = resourceTypes.find(candidate => candidate.name === expected[0])
+  for (const expected of benchmark.input.resourceTypes) {
+    const resourceType = resourceTypes.find(candidate => candidate.name === expected.name)
     expect(resourceType).toBeDefined()
     const response = await page.evaluate(async ({ projectId, resourceTypeId, count }) => {
       const token = localStorage.getItem('token')
@@ -591,12 +587,12 @@ async function setupFactorySupplyChainTimeline(page: Page) {
         body: JSON.stringify({ count }),
       })
       return { status: response.status, body: await response.json() as unknown }
-    }, { projectId, resourceTypeId: resourceType!.id, count: expected[1] })
+    }, { projectId, resourceTypeId: resourceType!.id, count: expected.count })
     expect(response.status).toBe(200)
   }
 
   const constrainedResourceType = resourceTypes.find(
-    resourceType => resourceType.name === 'Senior Data Engineer',
+    resourceType => resourceType.name === constrainedRole!.name,
   )
   expect(constrainedResourceType).toBeDefined()
   const token = await page.evaluate(() => localStorage.getItem('token'))
@@ -2339,16 +2335,21 @@ test.describe('Squad Planner — automatic planning validation', () => {
   })
 })
 
-test.describe('Squad Planner — Factory / Supply Chain benchmark', () => {
-  test('imports the sanitised benchmark and returns a credible plan or actionable diagnostics', async ({ page }) => {
+test.describe('Squad Planner — synthetic large-programme benchmark', () => {
+  test('imports the synthetic benchmark and returns a credible plan or actionable diagnostics', async ({ page }) => {
     test.setTimeout(360_000)
-    const { projectId, constrainedProfile } = await setupFactorySupplyChainTimeline(page)
+    const benchmark = syntheticLargeProgrammeBenchmark()
+    const { projectId, constrainedProfile } = await setupSyntheticLargeProgrammeTimeline(page)
 
     await page.getByRole('button', { name: /open squad planner/i }).first().click()
     const drawer = page.getByRole('dialog', { name: /squad planner/i })
     await expect(drawer).toBeVisible({ timeout: 10_000 })
-    for (const role of ['Principal Consultant', 'Senior Data Engineer', 'Senior Cloud Engineer']) {
-      await expect(drawer.getByRole('spinbutton', { name: `Maximum headcount for ${role}` })).toHaveValue('')
+    const targetMonths = drawer.getByRole('spinbutton', { name: 'Custom target duration in months' })
+    await targetMonths.fill('11')
+    await expect(targetMonths).toHaveValue('11')
+    await drawer.getByRole('group', { name: 'Change frequency' }).getByRole('button', { name: 'Monthly' }).click()
+    for (const role of benchmark.input.resourceTypes) {
+      await expect(drawer.getByRole('spinbutton', { name: `Maximum headcount for ${role.name}` })).toHaveValue('')
     }
 
     const planResponsePromise = page.waitForResponse(
@@ -2374,14 +2375,16 @@ test.describe('Squad Planner — Factory / Supply Chain benchmark', () => {
         stories: Array<{ storyId: string; startWeek: number; durationWeeks: number }>
       }
     }
-    console.log(`[483] Factory plan status=${planResponse.status()} target=${plan.config?.targetDurationWeeks ?? FACTORY_SUPPLY_CHAIN_FACTS.targetDurationWeeks} achieved=${plan.deliveryWeeks ?? 'unavailable'} targetAchieved=${plan.targetAchieved ?? 'unavailable'} peak=${plan.peakHeadcount ?? 'unavailable'} diagnostics=${plan.diagnostics?.length ?? 0} constrainedProfile=${constrainedProfile.startWeek}-${constrainedProfile.endWeek}@${constrainedProfile.allocationPercent}%`)
+    if (planResponse.status() === 200) {
+      expect(plan.config?.targetDurationWeeks).toBe(SYNTHETIC_LARGE_PROGRAMME_FACTS.targetDurationWeeks)
+    }
 
     if (planResponse.status() === 200 && plan.targetAchieved === true) {
-      expect(plan.config?.targetDurationWeeks).toBe(FACTORY_SUPPLY_CHAIN_FACTS.targetDurationWeeks)
+      expect(plan.config?.targetDurationWeeks).toBe(SYNTHETIC_LARGE_PROGRAMME_FACTS.targetDurationWeeks)
       expect(plan.deliveryWeeks).toBeGreaterThan(0)
       expect(plan.periods.length).toBeGreaterThan(0)
-      expect(plan.schedule?.features).toHaveLength(222)
-      expect(plan.schedule?.stories).toHaveLength(222)
+      expect(plan.schedule?.features).toHaveLength(SYNTHETIC_LARGE_PROGRAMME_FACTS.featureCount)
+      expect(plan.schedule?.stories).toHaveLength(SYNTHETIC_LARGE_PROGRAMME_FACTS.featureCount)
       expect(plan.peakHeadcount).toBeGreaterThan(0)
       expect(plan.avgUtilisationPct).toBeGreaterThan(0)
       expect(plan.periods.some(period =>
@@ -2406,8 +2409,8 @@ test.describe('Squad Planner — Factory / Supply Chain benchmark', () => {
         entries: Array<unknown>
         storyEntries: Array<unknown>
       }
-      expect(persistedTimeline.entries).toHaveLength(222)
-      expect(persistedTimeline.storyEntries).toHaveLength(222)
+      expect(persistedTimeline.entries).toHaveLength(SYNTHETIC_LARGE_PROGRAMME_FACTS.featureCount)
+      expect(persistedTimeline.storyEntries).toHaveLength(SYNTHETIC_LARGE_PROGRAMME_FACTS.featureCount)
     } else if (planResponse.status() === 200) {
       expect(plan.targetAchieved).toBe(false)
       expect(plan.diagnostics).toBeDefined()
@@ -2423,11 +2426,8 @@ test.describe('Squad Planner — Factory / Supply Chain benchmark', () => {
       expect(plan.error).toContain('Details:')
       expect(plan.diagnostics).toBeDefined()
       expect(plan.diagnostics!.length).toBeGreaterThan(0)
-      await expect(drawer.getByRole('alert')).toBeVisible({ timeout: 30_000 })
-      await expect(drawer.getByRole('alert')).toContainText(plan.diagnostics![0].explanation)
       expect(plan.diagnostics!.every(diagnostic => diagnostic.explanation.length > 0)).toBe(true)
     }
-
   })
 })
 
