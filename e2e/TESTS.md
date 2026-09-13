@@ -110,7 +110,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (22 tests)
+### `timeline.spec.ts` — Timeline (23 tests)
 
 #### `Timeline` describe block (4 tests)
 
@@ -172,6 +172,18 @@ API-level tests using the `request` fixture. No browser UI involved.
 | Test | Description |
 |------|-------------|
 | generate, apply, verify planned resources, reapply, and snapshot history | Seeds Developer + Tech Lead tasks via CSV, schedules, opens Squad Planner drawer, generates a capacity profile, applies it (accepts confirm dialog), asserts exact generated-vs-persisted feature starts, delivery duration, and every staffed weekly capacity point through the Timeline API (with the documented one-decimal DTO rounding tolerance; zero/gap weeks and staffed-week coverage remain exact), navigates to Resource Profile — asserts planned resource badges, "Squad Planner" source tag, and disabled name inputs appear. Reopens Squad Planner with changed settings, reapplies, and verifies stable identity and updated capacity. Exercises Snapshot History panel — verifies `optimiser_appl…
+
+#### `Squad Planner — automatic planning validation` describe block — issue #483
+
+| Test | Description |
+|------|-------------|
+| grows an unrestricted squad, stays draft-only, and persists after apply | Imports a capacity-bound Developer task, verifies a blank maximum is rendered as unrestricted, generates a 3-month plan that grows above the current one-person count, confirms metrics and timeline/capacity remain unchanged before Apply, then applies and reloads to verify persisted timeline placement and planned capacity profile |
+
+#### `Squad Planner — synthetic large-programme benchmark` describe block — issue #483
+
+| Test | Description |
+|------|-------------|
+| imports the synthetic benchmark and returns a credible plan or actionable diagnostics | Imports the deterministic 14-epic, 210-feature synthetic benchmark through the application CSV APIs, restores its generic role counts, verifies blank maximums, and accepts either a complete 210-feature plan with metrics plus apply/reload persistence or structured diagnostic explanations rendered in the drawer |
 
 #### `Squad Planner — editable draft review loop` describe block — issue #482
 
@@ -358,7 +370,7 @@ Creates a fresh admin user (via API registration + DB role update). Tests run as
 - Use `test.beforeEach` to handle common setup (login, navigation)
 - Avoid hardcoded `page.waitForTimeout()` — use `waitFor()` or built-in auto-waiting instead
 - Tests that depend on pre-existing data should create their own data in `beforeEach`
-- File upload tests: write a temp file to `os.tmpdir()` and clean up with `fs.unlinkSync` after
+- File upload tests: build the payload in memory with `csvFile(content)` from `./helpers` and pass it to `setInputFiles`. Do not write a temp file and delete it after `setInputFiles` — the browser reads the file later (when the page's handler runs), so an early `fs.unlinkSync` intermittently fails the read and the upload never reaches the API.
 
 ### Helper reference
 
@@ -367,6 +379,7 @@ import { login, createProject, createTestUser, createUserAndLogin, TEST_EMAIL, T
 
 // login(page)                       — navigates to / and signs in with seed user, waits for /projects
 // createProject(page, name)         — clicks New Project, fills name, submits
+// csvFile(content)                  — in-memory CSV upload payload for setInputFiles
 // createTestUser(role?)             — creates unique test user (USER/ADMIN) via API + optional DB role update
 // createUserAndLogin(page, role?)   — creates test user and logs in via browser UI
 ```
