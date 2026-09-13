@@ -2427,6 +2427,9 @@ test.describe('Squad Planner — synthetic large-programme benchmark', () => {
       expect(plan.diagnostics).toBeDefined()
       expect(plan.diagnostics!.length).toBeGreaterThan(0)
       expect(plan.diagnostics!.every(diagnostic => diagnostic.explanation.length > 0)).toBe(true)
+      const plannerError = drawer.getByRole('alert')
+      await expect(plannerError).toBeVisible({ timeout: 30_000 })
+      await expect(plannerError).toContainText(plan.diagnostics![0].explanation)
     }
   })
 })
