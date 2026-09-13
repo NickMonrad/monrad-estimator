@@ -2,17 +2,24 @@
 
 Issue #479 establishes a deterministic evidence baseline before changing planner semantics. The committed tests use the existing pure `runScheduler`, `runSAPlanner`, and `computeCapacityPlan` paths; production planner code is unchanged.
 
-## Source evidence and sanitisation
+## Deterministic synthetic benchmark
 
-The large benchmark is derived from the authoritative planning repository's generated programme-led Monrad import and its planning outputs:
+The large benchmark is generated independently from any customer or
+programme-led import. Its committed shape is fixed by index-based rules:
 
-- generated programme-led import: 18 epics, 222 features, 755 source tasks, and 16,989.8 source hours;
-- resource summary: role demand and peak demand shape;
-- planning-period resource profile and recommended staffing profile: 19-working-day periods, role mix, ramp limits and proposed capacity shape;
-- detailed programme timeline: dependency-driven sequencing and 337 model working days; and
-- dependency register and generated dependency model: prerequisite topology.
+- 14 synthetic epics, each containing 15 features and one story per feature;
+- three generic technical roles with counts of 3 Platform Engineers, 5 Data
+  Engineers and 2 Cloud Engineers;
+- varied role effort, alternating parallel/sequential epic modes, branch and
+  chain feature dependencies, and three explicit epic dependency edges; and
+- an explicit Data Engineer availability window used only by the constrained
+  failure path.
 
-The committed fixture retains 18 generic epics, 222 generic features, 256 resolved feature dependency edges, one epic dependency, three generic roles, and role-level feature effort. It aggregates source tasks by role inside each feature, excludes customer-owned zero-effort tasks, and removes customer names, descriptions, story text and identifiers. The source role totals retained by the fixture are Principal Consultant 4,062.2 hours, Senior Data Engineer 10,024.4 hours, and Senior Cloud Engineer 2,903.2 hours.
+The fixture retains no customer names, descriptions, story text, identifiers,
+source metadata or imported measurements. The expected scale and constraint
+values are exported by
+`server/src/test/planningBenchmarkFixtures.ts`; effort totals are calculated
+from the generated task graph.
 
 ## Measurement and invariants
 
@@ -42,23 +49,37 @@ The serial fixture remains four weeks with one or four Developers because each t
 | Scenario | Target / achieved weeks | Effort | Staffed capacity | Peak role / total FTE | Utilisation | Capacity / dependency violations |
 |---|---:|---|---|---|---|---|
 | Explicit Developer maximum | 2 / 4 | Developer 160 hours / 20 days | 160 hours / 4 FTE-weeks | Developer 1 / 1 | 100% | 0 / 0; explicit max 1 is the blocker |
-| Derived Factory control | 78 / 53 | PC 4,062.2h; Data 10,024.4h; Cloud 2,903.2h | PC 6,150h / 153.75 FTE-weeks; Data 12,560h / 314; Cloud 4,160h / 104 | PC 3; Data 6; Cloud 2 / 11 | 66.01%; 79.80%; 69.75% | 0 / 0 |
-| Derived Factory profile-window failure | 78 / unavailable | PC 4,062.2h; Data 10,024.4h; Cloud 2,903.2h | unavailable after planner failure | unavailable | unavailable | unavailable; profile failure recorded |
+| Synthetic programme control | 48 / 91 | Generated from 210 features | deterministic successful plan | 10.25 total FTE | calculated | 0 / 0 |
+| Synthetic profile-window failure | 48 / unavailable | Same generated task graph | unavailable after planner failure | unavailable | unavailable | unavailable; profile failure recorded |
 
-The explicit-cap result is a deterministic best-effort plan, not a claimed target-feasible result: the plan reaches four weeks under a hard one-FTE cap against a two-week target. Both successful capacity-plan baselines prove expected effort equals the actual weekly planner demand by role. No post-failure utilisation or schedule values are fabricated for the Factory failure.
+The explicit-cap result is a deterministic best-effort plan, not a claimed
+target-feasible result: the plan reaches four weeks under a hard one-FTE cap
+against a two-week target. The synthetic control proves expected effort equals
+the actual weekly planner demand by role. No post-failure utilisation or
+schedule values are fabricated.
 
-## Factory / Supply Chain reproduction
+## Synthetic profile-window reproduction
 
-The sanitised fixture uses the source-derived role-capacity shape of 3 Principal Consultants, 6 Senior Data Engineers and 2 Senior Cloud Engineers, target 78 weeks, period size 13 weeks, maximum headcount delta 1, no explicit `maxCap`, `maxParallelismPerFeature=2`, and `maxConcurrentEpics=6`. The Data role additionally has an authoritative profile segment covering weeks 0–5 only for the failure path.
+The synthetic fixture uses 3 Platform Engineers, 5 Data Engineers and 2 Cloud
+Engineers, target 48 weeks, period size 4 weeks, maximum headcount delta 1,
+no explicit `maxCap`, `maxParallelismPerFeature=3`, and
+`maxConcurrentEpics=4`. The Data Engineer role additionally has a profile
+segment covering weeks 0–6 at 100% for the failure path.
 
-Both paths run through `computeCapacityPlan`, the pure core used by `POST /api/projects/:projectId/squad-plan`:
+Both paths run through `computeCapacityPlan`, the pure core used by
+`POST /api/projects/:projectId/squad-plan`:
 
-- **Observed failure:** `Fractional planner could not finish feature factory-feature-003 within 1107 weeks`.
-- **Control:** removing only the Data role profile segment, while preserving counts, target, topology, effort, dependency edges, parallelism and epic concurrency, succeeds in 53 weeks with peak 11 FTE, expected-versus-scheduled effort conservation by role, and no capacity or predecessor-completion dependency violations.
+- **Observed failure:** `Fractional planner could not finish feature synthetic-feature-009 within 1050 weeks`.
+- **Control:** removing only the Data Engineer profile segment, while preserving the generated counts, target, topology, effort, dependency edges, parallelism and epic concurrency, succeeds in 91 weeks with peak 10.25 FTE and no capacity or predecessor-completion dependency violations.
 
-The constraint is code/runtime evidenced. `computeCapacityPlan` invokes `runSAPlanner`; `runSAPlanner` obtains weekly capacity through `getWeeklyCapacity`; a non-empty `roleSegments` array replaces the role's phantom-slot capacity and weeks outside the segment have zero capacity. The derived fixture has continuing Data demand after week 5, so the allocator cannot complete the blocked feature and eventually exhausts its deterministic horizon. The control removes that window and succeeds, isolating the profile window as the limiting constraint for this reproduction. The result is not a claim that every current customer runtime failure has the same blocker.
-
-The source planning outputs provide a useful qualified comparison: the accepted dependency-driven timeline ends at 337 model working days and its resource profile reports a raw-demand peak of 11.5 FTE. The 53-week control is faster, but its 11-FTE staffing and role aggregation are not an exact reproduction of the source profile because customer-owned work and PM/governance calculations are excluded from the sanitised planner input. The benchmark therefore compares shape and constraints, not exact weekly equality.
+The constraint is code/runtime evidenced. `computeCapacityPlan` invokes
+`runSAPlanner`; `runSAPlanner` obtains weekly capacity through
+`getWeeklyCapacity`; a non-empty `roleSegments` array replaces the role's
+phantom-slot capacity and weeks outside the segment have zero capacity. The
+synthetic graph has continuing Data Engineer demand after week 6, so the
+allocator cannot complete the blocked feature and exhausts its deterministic
+horizon. The control removes that window and succeeds, isolating the profile
+window as the limiting constraint.
 
 ## Implications for #480 and #481
 

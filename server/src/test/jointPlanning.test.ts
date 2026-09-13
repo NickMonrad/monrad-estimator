@@ -17,7 +17,7 @@ import {
   roleHandoff,
   sparseSpecialist,
   mixedProgramme,
-  factorySupplyChainBenchmark,
+  syntheticLargeProgrammeBenchmark,
   makeEpic,
   makeFeature,
   makeInput,
@@ -225,9 +225,9 @@ describe('joint planning loop — scenario H: determinism', () => {
   })
 })
 
-describe('Factory / Supply Chain benchmark through joint planning loop', () => {
+describe('synthetic large-programme benchmark through joint planning loop', () => {
   it('achieves material improvement or reports hard-constraint evidence', () => {
-    const benchmark = factorySupplyChainBenchmark()
+    const benchmark = syntheticLargeProgrammeBenchmark()
     const { input, config, facts } = benchmark
 
     const jointResult = computeJointPlan(input, config)
@@ -236,19 +236,18 @@ describe('Factory / Supply Chain benchmark through joint planning loop', () => {
       expect(jointResult.deliveryWeeks).toBeLessThanOrEqual(facts.targetDurationWeeks)
       expect(jointResult.iterations).toBeGreaterThanOrEqual(1)
       expectReturnedPlanReplays(input, jointResult, config)
-      console.log(`Factory/Supply Chain: target=${facts.targetDurationWeeks}w, achieved=${jointResult.deliveryWeeks}w, iterations=${jointResult.iterations}`)
+      console.log(`Synthetic programme: target=${facts.targetDurationWeeks}w, achieved=${jointResult.deliveryWeeks}w, iterations=${jointResult.iterations}`)
       console.log(`  peak headcount: ${jointResult.peakHeadcount}, cost: ${jointResult.totalCost}`)
     } else {
       expect(jointResult.loopDiagnostics.length).toBeGreaterThan(0)
       expect(jointResult.diagnostics?.length).toBeGreaterThan(0)
       expect(jointResult.deliveryWeeks).toBeGreaterThan(facts.targetDurationWeeks)
-      console.log(`Factory/Supply Chain: target=${facts.targetDurationWeeks}w NOT met, diagnostics:`)
-      for (const d of jointResult.loopDiagnostics) {
-        console.log(`  ${d.blocker}: ${d.explanation}`)
+      console.log(`Synthetic programme: target=${facts.targetDurationWeeks}w NOT met, diagnostics:`)
+      for (const diagnostic of jointResult.loopDiagnostics) {
+        console.log(`  ${diagnostic.blocker}: ${diagnostic.explanation}`)
       }
     }
 
-    // Determinism check
     const second = computeJointPlan(input, config)
     expect(second.deliveryWeeks).toBe(jointResult.deliveryWeeks)
     expect(second.periods).toEqual(jointResult.periods)

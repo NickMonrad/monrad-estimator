@@ -1,9 +1,23 @@
 import { test, expect, type Page, type Request, type Locator } from '@playwright/test'
 import { login, createProject, openStartingTeamFinder, quickSchedule, DATABASE_URL } from './helpers'
+import { syntheticLargeProgrammeBenchmark, SYNTHETIC_LARGE_PROGRAMME_FACTS } from '../../server/src/test/planningBenchmarkFixtures.ts'
 import { Client } from 'pg'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
+
+const BACKLOG_CSV_HEADERS = [
+  'Type', 'Epic', 'Feature', 'Story', 'Task',
+  'Template', 'TemplateSize', 'ResourceType',
+  'HoursEffort', 'DurationDays', 'Description', 'Assumptions',
+  'EpicStatus', 'FeatureStatus', 'StoryStatus',
+  'EpicMode', 'FeatureMode', 'EpicDependsOn', 'FeatureDependsOn',
+]
+
+function csvCell(value: string | number | null | undefined) {
+  const text = value == null ? '' : String(value)
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
 
 /**
  * Shared setup for timeline tests 2-4.
@@ -296,6 +310,178 @@ const OPTIMISER_CSV = [
   'Task,Opt Epic,Opt Feature,Opt Story,Ramp Task 2,,Developer,80,10,,,,,',
   'Task,Opt Epic,Opt Feature,Opt Story,Ramp Task 3,,Developer,80,10,,,,,',
 ].join('\n')
+/**
+ * A small automatic-planning case where one current Developer cannot meet the
+ * requested 3-month target, so an unrestricted plan must grow the squad.
+ */
+const AUTOMATIC_PLAN_CSV = [
+  'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
+  'Epic,Automatic Plan,,,,,,,,,,active,,',
+  'Feature,Automatic Plan,Capacity-bound feature,,,,,,,,,,,',
+  'Story,Automatic Plan,Capacity-bound feature,Delivery story,,,,,,,,,,active',
+  'Task,Automatic Plan,Capacity-bound feature,Delivery story,Large Developer task,,Developer,960,120,,,,,',
+].join('\n')
+
+function syntheticLargeProgrammeCsv() {
+  const { input } = syntheticLargeProgrammeBenchmark()
+  const featureNameById = new Map(
+    input.epics.flatMap(epic => epic.features.map(feature => [feature.id, feature.id] as const)),
+  )
+  const rows: Array<Array<string | number | null | undefined>> = []
+  for (const epic of input.epics) {
+    const epicDependsOn = input.epicDeps
+      .filter(dependency => dependency.epicId === epic.id)
+      .map(dependency => input.epics.find(candidate => candidate.id === dependency.dependsOnId)?.name)
+      .filter(Boolean)
+      .join(', ')
+    rows.push([
+      'Epic', epic.name, '', '', '', '', '', '', '', '', '', '',
+      'active', '', '', epic.featureMode ?? 'sequential', '', epicDependsOn, '',
+    ])
+    for (const feature of epic.features) {
+      const featureDependsOn = feature.dependencies
+        .map(dependency => featureNameById.get(dependency.dependsOnId))
+        .filter(Boolean)
+        .join(', ')
+      rows.push([
+        'Feature', epic.name, feature.id, '', '', '', '', '', '', '', '', '',
+        '', 'active', '', '', 'sequential', '', featureDependsOn,
+      ])
+      for (const story of feature.userStories) {
+        rows.push([
+          'Story', epic.name, feature.id, story.id, '', '', '', '', '', '', '', '',
+          '', '', 'active', '', '', '', '',
+        ])
+        for (const task of story.tasks) {
+          rows.push([
+            'Task', epic.name, feature.id, story.id, `${task.resourceType.name} work`,
+            '', '', task.resourceType.name, task.hoursEffort, task.durationDays, '', '',
+            '', '', '', '', '', '', '',
+          ])
+        }
+      }
+    }
+  }
+  return [
+    BACKLOG_CSV_HEADERS.map(csvCell).join(','),
+    ...rows.map(row => row.map(csvCell).join(',')),
+  ].join('\n')
+}
+
+async function importCsvViaApplication(page: Page, projectId: string, csv: string) {
+  return page.evaluate(async ({ projectId, csv }) => {
+    const token = localStorage.getItem('token')
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    }
+    const stagedResponse = await fetch(`/api/projects/${projectId}/backlog/stage-csv`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ csv }),
+    })
+    const stagedBody = await stagedResponse.json() as { staged?: unknown[]; summary?: { total: number; errorCount: number } }
+    if (!stagedResponse.ok || !Array.isArray(stagedBody.staged)) {
+      throw new Error(`CSV staging failed (${stagedResponse.status}): ${JSON.stringify(stagedBody)}`)
+    }
+    if ((stagedBody.summary?.errorCount ?? 0) > 0) {
+      throw new Error(`CSV staging returned validation errors: ${JSON.stringify(stagedBody.summary)}`)
+    }
+    const importResponse = await fetch(`/api/projects/${projectId}/backlog/import-csv`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ rows: stagedBody.staged }),
+    })
+    const importBody = await importResponse.json() as Record<string, unknown>
+    if (!importResponse.ok) {
+      throw new Error(`CSV import failed (${importResponse.status}): ${JSON.stringify(importBody)}`)
+    }
+    return importBody
+  }, { projectId, csv })
+}
+async function getProjectJson(page: Page, endpoint: string) {
+  return page.evaluate(async endpoint => {
+    const token = localStorage.getItem('token')
+    const response = await fetch(endpoint, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!response.ok) throw new Error(`${endpoint} returned ${response.status}`)
+    return response.json() as Promise<unknown>
+  }, endpoint)
+}
+
+type CapacityPlanPeriod = {
+  startWeek: number
+  endWeek: number
+  resources: Array<{ resourceTypeName: string; headcount: number }>
+}
+
+type WeeklyCapacityPoint = {
+  week: number
+  resourceTypeName: string
+  capacityDays: number
+}
+
+function assertWeeklyCapacityParity(
+  generatedPeriods: CapacityPlanPeriod[],
+  persistedWeeklyCapacity: WeeklyCapacityPoint[],
+  resourceTypeName: string,
+) {
+  const expectedCapacityByWeek = new Map<number, number>()
+  for (const period of generatedPeriods) {
+    const resource = period.resources.find(
+      candidate => candidate.resourceTypeName === resourceTypeName,
+    )
+    const capacityDays = (resource?.headcount ?? 0) * 5
+    for (let week = period.startWeek; week < period.endWeek; week++) {
+      expectedCapacityByWeek.set(week, capacityDays)
+    }
+  }
+
+  const actualCapacityByWeek = new Map<number, number>()
+  for (const row of persistedWeeklyCapacity) {
+    if (row.resourceTypeName !== resourceTypeName) continue
+    actualCapacityByWeek.set(row.week, (actualCapacityByWeek.get(row.week) ?? 0) + row.capacityDays)
+  }
+
+  // Timeline weeklyCapacity is a transport DTO rounded to one decimal day.
+  // Compare staffed weeks at that DTO precision, but keep zero/gap weeks exact.
+  const capacityDtoDecimalPlaces = 1
+  const capacityDtoRoundingHalfUnit = 0.5 * 10 ** -capacityDtoDecimalPlaces
+  const allCapacityWeeks = new Set([...expectedCapacityByWeek.keys(), ...actualCapacityByWeek.keys()])
+  for (const week of allCapacityWeeks) {
+    const expectedCapacity = expectedCapacityByWeek.get(week) ?? 0
+    const actualCapacity = actualCapacityByWeek.get(week) ?? 0
+    if (expectedCapacity === 0) {
+      expect(actualCapacity, `Unexpected capacity in gap week ${week}`).toBe(0)
+      continue
+    }
+    const floatingPointEpsilon = Number.EPSILON * Math.max(
+      1,
+      Math.abs(expectedCapacity),
+      Math.abs(actualCapacity),
+    )
+    expect(
+      Math.abs(actualCapacity - expectedCapacity),
+      `Capacity mismatch in week ${week}: expected ${expectedCapacity}, received ${actualCapacity}`,
+    ).toBeLessThanOrEqual(capacityDtoRoundingHalfUnit + floatingPointEpsilon)
+  }
+
+  expect(
+    [...actualCapacityByWeek.entries()]
+      .filter(([, capacityDays]) => capacityDays > 0)
+      .map(([week]) => week),
+  ).toEqual(
+    [...expectedCapacityByWeek.entries()]
+      .filter(([, capacityDays]) => capacityDays > 0)
+      .map(([week]) => week),
+  )
+}
+
+
+
+
+
 
 /**
  * Creates a fresh project, seeds it with resource types via CSV import,
@@ -303,9 +489,14 @@ const OPTIMISER_CSV = [
  * Resources (Developer + Tech Lead) are required for the finder action
  * button to be enabled.
  */
-async function setupOptimiserTimeline(page: Page): Promise<void> {
+async function setupOptimiserTimeline(
+  page: Page,
+  csv = OPTIMISER_CSV,
+  projectLabel = 'E2E Optimiser',
+  expectedEpicName = 'Opt Epic',
+): Promise<void> {
   const suffix = Date.now()
-  const projectName = `E2E Optimiser ${suffix}`
+  const projectName = `${projectLabel} ${suffix}`
 
   await login(page)
   await createProject(page, projectName)
@@ -319,14 +510,14 @@ async function setupOptimiserTimeline(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
   await page.getByRole('button', { name: /import csv/i }).click()
   const tmpFile = path.join(os.tmpdir(), `optimiser-seed-${suffix}.csv`)
-  fs.writeFileSync(tmpFile, OPTIMISER_CSV)
+  fs.writeFileSync(tmpFile, csv)
   await page.locator('input[type="file"]').setInputFiles(tmpFile)
   fs.unlinkSync(tmpFile)
 
   // Two-step staging confirmation
   await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
   await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
-  await expect(page.getByText('Opt Epic')).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText(expectedEpicName)).toBeVisible({ timeout: 10_000 })
 
   // Navigate to Timeline
   const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
@@ -344,6 +535,119 @@ async function setupOptimiserTimeline(page: Page): Promise<void> {
   await expect(
     page.getByRole('button', { name: /sequential|parallel/i }).first()
   ).toBeVisible({ timeout: 15_000 })
+}
+
+async function setupSyntheticLargeProgrammeTimeline(page: Page) {
+  const projectName = `E2E Synthetic Large Programme ${Date.now()}`
+  const benchmark = syntheticLargeProgrammeBenchmark()
+  const constrainedRole = benchmark.input.resourceTypes.find(
+    resourceType => resourceType.id === benchmark.facts.constrainedRoleId,
+  )
+  expect(constrainedRole).toBeDefined()
+  const constrainedSegment = constrainedRole?.roleSegments?.[0]
+  expect(constrainedSegment).toBeDefined()
+  await login(page)
+  await createProject(page, projectName)
+  await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+  const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]
+  if (!projectId) throw new Error('Could not determine synthetic benchmark project ID')
+  const importBody = await importCsvViaApplication(page, projectId, syntheticLargeProgrammeCsv()) as {
+    epicsCreated?: number
+    featuresCreated?: number
+    storiesCreated?: number
+    tasksCreated?: number
+  }
+  const expectedTaskCount = benchmark.input.epics
+    .flatMap(epic => epic.features)
+    .flatMap(feature => feature.userStories)
+    .reduce((total, story) => total + story.tasks.length, 0)
+  expect(importBody).toMatchObject({
+    epicsCreated: benchmark.facts.epicCount,
+    featuresCreated: benchmark.facts.featureCount,
+    storiesCreated: benchmark.facts.featureCount,
+    tasksCreated: expectedTaskCount,
+  })
+
+  const resourceTypes = await getProjectJson(page, `/api/projects/${projectId}/resource-types`) as Array<{
+    id: string
+    name: string
+    count: number
+  }>
+  for (const expected of benchmark.input.resourceTypes) {
+    const resourceType = resourceTypes.find(candidate => candidate.name === expected.name)
+    expect(resourceType).toBeDefined()
+    const response = await page.evaluate(async ({ projectId, resourceTypeId, count }) => {
+      const token = localStorage.getItem('token')
+      const response = await fetch(`/api/projects/${projectId}/resource-types/${resourceTypeId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ count }),
+      })
+      return { status: response.status, body: await response.json() as unknown }
+    }, { projectId, resourceTypeId: resourceType!.id, count: expected.count })
+    expect(response.status).toBe(200)
+  }
+
+  const constrainedResourceType = resourceTypes.find(
+    resourceType => resourceType.name === constrainedRole!.name,
+  )
+  expect(constrainedResourceType).toBeDefined()
+  const token = await page.evaluate(() => localStorage.getItem('token'))
+  expect(token).toBeTruthy()
+  const profileResponse = await page.request.put(
+    `/api/projects/${projectId}/capacity-profiles/ROLE/${constrainedResourceType!.id}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        defaultPercent: constrainedSegment!.allocationPercent,
+        startWeek: constrainedSegment!.startWeek,
+        endWeek: constrainedSegment!.endWeek,
+      },
+    },
+  )
+  expect(profileResponse.status()).toBe(200)
+  const profilesBody = await page.request.get(
+    `/api/projects/${projectId}/capacity-profiles`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
+  expect(profilesBody.status()).toBe(200)
+  const profiles = await profilesBody.json() as {
+    capacityProfiles: Array<{
+      owner: { kind: string; id: string }
+      planningBasis: string
+      defaultPercent: number | null
+      startWeek: number | null
+      endWeek: number | null
+      segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+    }>
+  }
+  const constrainedProfile = profiles.capacityProfiles.find(profile =>
+    profile.owner.kind === 'role' && profile.owner.id === constrainedResourceType!.id,
+  )
+  expect(constrainedProfile).toMatchObject({
+    owner: { kind: 'role', id: constrainedResourceType!.id },
+    planningBasis: 'availabilityWindow',
+    defaultPercent: constrainedSegment!.allocationPercent,
+    startWeek: constrainedSegment!.startWeek,
+    endWeek: constrainedSegment!.endWeek,
+    segments: [],
+  })
+
+  await page.goto(`/projects/${projectId}/timeline`)
+  await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 15_000 })
+  return {
+    projectId,
+    importBody,
+    constrainedProfile: {
+      startWeek: constrainedSegment!.startWeek,
+      endWeek: constrainedSegment!.endWeek,
+      allocationPercent: constrainedSegment!.allocationPercent,
+    },
+  }
 }
 
 // ── Test 1: open & close ──────────────────────────────────────────────────────
@@ -1635,63 +1939,13 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     expect(persistedDeliveryWeeks).toBeCloseTo(generatedPlan.deliveryWeeks, 6)
 
     const generatedResource = generatedPlan.periods
-      .flatMap(period => period.resources.map(resource => ({
-        ...resource,
-        startWeek: period.startWeek,
-        endWeek: period.endWeek,
-      })))
+      .flatMap(period => period.resources)
       .find(resource => resource.headcount > 0)
     expect(generatedResource, 'Generated plan did not contain staffed capacity').toBeDefined()
-    const expectedCapacityByWeek = new Map<number, number>()
-    for (const period of generatedPlan.periods) {
-      const resource = period.resources.find(
-        candidate => candidate.resourceTypeName === generatedResource!.resourceTypeName,
-      )
-      const capacityDays = (resource?.headcount ?? 0) * 5
-      for (let week = period.startWeek; week < period.endWeek; week++) {
-        expectedCapacityByWeek.set(week, capacityDays)
-      }
-    }
-    const actualCapacityByWeek = new Map<number, number>()
-    for (const row of appliedTimeline.weeklyCapacity) {
-      if (row.resourceTypeName !== generatedResource!.resourceTypeName) continue
-      actualCapacityByWeek.set(row.week, (actualCapacityByWeek.get(row.week) ?? 0) + row.capacityDays)
-    }
-    // Timeline weeklyCapacity is a transport DTO rounded to one decimal day.
-    // Compare staffed weeks at that DTO precision, but keep zero/gap weeks exact.
-    const capacityDtoDecimalPlaces = 1
-    const capacityDtoRoundingHalfUnit = 0.5 * 10 ** -capacityDtoDecimalPlaces
-    const allCapacityWeeks = new Set([...expectedCapacityByWeek.keys(), ...actualCapacityByWeek.keys()])
-    for (const week of allCapacityWeeks) {
-      const expectedCapacity = expectedCapacityByWeek.get(week) ?? 0
-      const actualCapacity = actualCapacityByWeek.get(week) ?? 0
-      if (expectedCapacity === 0) {
-        expect(actualCapacity, `Unexpected capacity in gap week ${week}`).toBe(0)
-        continue
-      }
-      const floatingPointEpsilon = Number.EPSILON * Math.max(
-        1,
-        Math.abs(expectedCapacity),
-        Math.abs(actualCapacity),
-      )
-      expect(
-        Math.abs(actualCapacity - expectedCapacity),
-        `Capacity mismatch in week ${week}: expected ${expectedCapacity}, received ${actualCapacity}`,
-      ).toBeLessThanOrEqual(capacityDtoRoundingHalfUnit + floatingPointEpsilon)
-    }
-
-    /*
-     * Keep this explicit parity assertion: a plan that only happens to
-     * overlap on one positive week is not an apply round-trip.
-     */
-    expect(
-      [...actualCapacityByWeek.entries()]
-        .filter(([, capacityDays]) => capacityDays > 0)
-        .map(([week]) => week),
-    ).toEqual(
-      [...expectedCapacityByWeek.entries()]
-        .filter(([, capacityDays]) => capacityDays > 0)
-        .map(([week]) => week),
+    assertWeeklyCapacityParity(
+      generatedPlan.periods,
+      appliedTimeline.weeklyCapacity,
+      generatedResource!.resourceTypeName,
     )
 
     expect(applyData.name).toBeTruthy()
@@ -1928,6 +2182,258 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     expect(segmentsRestored).toBe(true)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Squad Planner — automatic and representative benchmark validation (issue #483)
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe('Squad Planner — automatic planning validation', () => {
+  test('grows an unrestricted squad, stays draft-only, and persists after apply', async ({ page }) => {
+    test.setTimeout(180_000)
+    await setupOptimiserTimeline(page, AUTOMATIC_PLAN_CSV, 'E2E Automatic Planner', 'Automatic Plan')
+
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+    const timelineBefore = await getProjectJson(page, `/api/projects/${projectId}/timeline`) as {
+      entries: Array<{ featureId: string; startWeek: number; durationWeeks: number }>
+      storyEntries: Array<{ storyId: string; startWeek: number; durationWeeks: number }>
+    }
+    const profileBefore = await getProjectJson(page, `/api/projects/${projectId}/resource-profile`) as {
+      resourceRows: Array<{
+        name: string
+        count: number
+        namedResources?: Array<{ resourceIdentity: string }>
+      }>
+    }
+    const developerBefore = profileBefore.resourceRows.find(row => row.name === 'Developer')
+    expect(developerBefore?.count).toBe(1)
+    expect(developerBefore?.namedResources?.some(resource => resource.resourceIdentity === 'PLANNED_RESOURCE')).toBe(false)
+
+    await page.getByRole('button', { name: /open squad planner/i }).first().click()
+    const drawer = page.getByRole('dialog', { name: /squad planner/i })
+    await expect(drawer).toBeVisible({ timeout: 8_000 })
+
+    const customMonths = drawer.getByRole('spinbutton', { name: 'Custom target duration in months' })
+    await customMonths.fill('3')
+    await expect(customMonths).toHaveValue('3')
+    const developerMax = drawer.getByRole('spinbutton', { name: 'Maximum headcount for Developer' })
+    await expect(developerMax).toHaveValue('')
+    await expect(drawer.getByText(/blank = no limit/i)).toBeVisible()
+
+    const planResponsePromise = page.waitForResponse(
+      response =>
+        response.url().includes(`/api/projects/${projectId}/squad-plan`)
+        && !response.url().endsWith('/apply')
+        && response.request().method() === 'POST',
+      { timeout: 60_000 },
+    )
+    await drawer.getByRole('button', { name: /generate capacity profile/i }).click()
+    const planResponse = await planResponsePromise
+    expect(planResponse.status()).toBe(200)
+    const plan = await planResponse.json() as {
+      config?: { targetDurationWeeks: number; maxCap: Record<string, number> | null }
+      deliveryWeeks: number | null
+      targetAchieved?: boolean
+      peakHeadcount: number
+      avgUtilisationPct: number
+      staffedFteWeeks?: number
+      periods: Array<{
+        startWeek: number
+        endWeek: number
+        resources: Array<{ resourceTypeName: string; headcount: number }>
+      }>
+      schedule?: {
+        features: Array<{ featureId: string; startWeek: number; durationWeeks: number }>
+        stories: Array<{ storyId: string; startWeek: number; durationWeeks: number }>
+      }
+    }
+    expect(plan.config?.targetDurationWeeks).toBe(13)
+    expect(plan.config?.maxCap).toBeNull()
+    expect(plan.deliveryWeeks).toBeGreaterThan(0)
+    expect(plan.targetAchieved).toBe(true)
+    expect(plan.periods.length).toBeGreaterThan(0)
+    expect(plan.periods.some(period =>
+      period.resources.some(resource => resource.resourceTypeName === 'Developer' && resource.headcount > 1),
+    )).toBe(true)
+    expect(plan.peakHeadcount).toBeGreaterThan(1)
+    expect(plan.avgUtilisationPct).toBeGreaterThan(0)
+    expect(plan.staffedFteWeeks).toBeGreaterThan(0)
+    expect(plan.schedule?.features).toEqual(expect.arrayContaining([
+      expect.objectContaining({ featureId: expect.any(String), durationWeeks: expect.any(Number) }),
+    ]))
+    expect(plan.schedule?.features).toHaveLength(1)
+    expect(plan.schedule?.stories).toHaveLength(1)
+    expect(plan.schedule?.stories).toEqual(expect.arrayContaining([
+      expect.objectContaining({ storyId: expect.any(String), durationWeeks: expect.any(Number) }),
+    ]))
+    await expect(drawer.getByText(/requested duration/i)).toBeVisible()
+    await expect(drawer.getByText(/achieved duration/i)).toBeVisible()
+    await expect(drawer.getByText(/peak staffing/i)).toBeVisible()
+    await expect(drawer.getByText('Utilisation', { exact: true })).toBeVisible()
+    console.log(`[483] Automatic plan target=${plan.config?.targetDurationWeeks} achieved=${plan.deliveryWeeks} peak=${plan.peakHeadcount}`)
+
+    // Generation is a review-only operation: neither timeline nor capacity
+    // profiles may change before the explicit Apply action.
+    const timelineAfterDraft = await getProjectJson(page, `/api/projects/${projectId}/timeline`) as typeof timelineBefore
+    expect({
+      entries: timelineAfterDraft.entries,
+      storyEntries: timelineAfterDraft.storyEntries,
+    }).toEqual({
+      entries: timelineBefore.entries,
+      storyEntries: timelineBefore.storyEntries,
+    })
+    const profileAfterDraft = await getProjectJson(page, `/api/projects/${projectId}/resource-profile`) as typeof profileBefore
+    expect(profileAfterDraft.resourceRows.some(row =>
+      row.namedResources?.some(resource => resource.resourceIdentity === 'PLANNED_RESOURCE'),
+    )).toBe(false)
+
+    page.once('dialog', dialog => dialog.accept())
+    const applyResponsePromise = page.waitForResponse(
+      response => response.url().includes('/squad-plan/apply') && response.request().method() === 'POST',
+      { timeout: 60_000 },
+    )
+    await drawer.getByRole('button', { name: /apply capacity profile/i }).click()
+    expect((await applyResponsePromise).status()).toBe(201)
+    await expect(drawer).not.toBeVisible({ timeout: 15_000 })
+
+    await page.reload()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 15_000 })
+    const persistedTimeline = await getProjectJson(page, `/api/projects/${projectId}/timeline`) as typeof timelineBefore & {
+      weeklyCapacity: Array<{ week: number; resourceTypeName: string; capacityDays: number }>
+    }
+    expect(persistedTimeline.entries).toHaveLength(plan.schedule?.features.length ?? 0)
+    for (const reviewedFeature of plan.schedule?.features ?? []) {
+      const persistedFeature = persistedTimeline.entries.find(entry => entry.featureId === reviewedFeature.featureId)
+      expect(persistedFeature).toMatchObject({
+        startWeek: reviewedFeature.startWeek,
+        durationWeeks: reviewedFeature.durationWeeks,
+      })
+    }
+    expect(persistedTimeline.storyEntries).toHaveLength(plan.schedule?.stories.length ?? 0)
+    for (const reviewedStory of plan.schedule?.stories ?? []) {
+      const persistedStory = persistedTimeline.storyEntries.find(entry => entry.storyId === reviewedStory.storyId)
+      expect(persistedStory).toMatchObject({
+        startWeek: reviewedStory.startWeek,
+        durationWeeks: reviewedStory.durationWeeks,
+      })
+    }
+    assertWeeklyCapacityParity(plan.periods, persistedTimeline.weeklyCapacity, 'Developer')
+    const profileAfterApply = await getProjectJson(page, `/api/projects/${projectId}/resource-profile`) as typeof profileBefore & {
+      resourceRows: Array<{
+        name: string
+        count: number
+        namedResources?: Array<{
+          resourceIdentity: string
+          capacityProfile?: { segments?: Array<unknown> }
+        }>
+      }>
+    }
+    const developerAfter = profileAfterApply.resourceRows.find(row => row.name === 'Developer')
+    expect(developerAfter?.namedResources?.some(resource =>
+      resource.resourceIdentity === 'PLANNED_RESOURCE'
+      && (resource.capacityProfile?.segments?.length ?? 0) > 0,
+    )).toBe(true)
+  })
+})
+
+test.describe('Squad Planner — synthetic large-programme benchmark', () => {
+  test('imports the synthetic benchmark and returns a credible plan or actionable diagnostics', async ({ page }) => {
+    test.setTimeout(360_000)
+    const benchmark = syntheticLargeProgrammeBenchmark()
+    const { projectId, constrainedProfile } = await setupSyntheticLargeProgrammeTimeline(page)
+
+    await page.getByRole('button', { name: /open squad planner/i }).first().click()
+    const drawer = page.getByRole('dialog', { name: /squad planner/i })
+    await expect(drawer).toBeVisible({ timeout: 10_000 })
+    const targetMonths = drawer.getByRole('spinbutton', { name: 'Custom target duration in months' })
+    await targetMonths.fill('11')
+    await expect(targetMonths).toHaveValue('11')
+    await drawer.getByRole('group', { name: 'Change frequency' }).getByRole('button', { name: 'Monthly' }).click()
+    for (const role of benchmark.input.resourceTypes) {
+      await expect(drawer.getByRole('spinbutton', { name: `Maximum headcount for ${role.name}` })).toHaveValue('')
+    }
+
+    const planResponsePromise = page.waitForResponse(
+      response =>
+        response.url().includes(`/api/projects/${projectId}/squad-plan`)
+        && !response.url().endsWith('/apply')
+        && response.request().method() === 'POST',
+      { timeout: 300_000 },
+    )
+    await drawer.getByRole('button', { name: /generate capacity profile/i }).click()
+    const planResponse = await planResponsePromise
+    const plan = await planResponse.json() as {
+      error?: string
+      diagnostics?: Array<{ explanation: string; resourceTypeName?: string }>
+      config?: { targetDurationWeeks: number }
+      deliveryWeeks: number | null
+      targetAchieved?: boolean
+      peakHeadcount: number
+      avgUtilisationPct: number
+      periods: Array<{ resources: Array<{ resourceTypeName: string; headcount: number }> }>
+      schedule?: {
+        features: Array<{ featureId: string; startWeek: number; durationWeeks: number }>
+        stories: Array<{ storyId: string; startWeek: number; durationWeeks: number }>
+      }
+    }
+    if (planResponse.status() === 200) {
+      expect(plan.config?.targetDurationWeeks).toBe(SYNTHETIC_LARGE_PROGRAMME_FACTS.targetDurationWeeks)
+    }
+
+    if (planResponse.status() === 200 && plan.targetAchieved === true) {
+      expect(plan.config?.targetDurationWeeks).toBe(SYNTHETIC_LARGE_PROGRAMME_FACTS.targetDurationWeeks)
+      expect(plan.deliveryWeeks).toBeGreaterThan(0)
+      expect(plan.periods.length).toBeGreaterThan(0)
+      expect(plan.schedule?.features).toHaveLength(SYNTHETIC_LARGE_PROGRAMME_FACTS.featureCount)
+      expect(plan.schedule?.stories).toHaveLength(SYNTHETIC_LARGE_PROGRAMME_FACTS.featureCount)
+      expect(plan.peakHeadcount).toBeGreaterThan(0)
+      expect(plan.avgUtilisationPct).toBeGreaterThan(0)
+      expect(plan.periods.some(period =>
+        period.resources.some(resource => resource.headcount > 0),
+      )).toBe(true)
+      await expect(drawer.getByText(/requested duration/i)).toBeVisible({ timeout: 30_000 })
+      await expect(drawer.getByText(/achieved duration/i)).toBeVisible()
+      await expect(drawer.getByText(/peak staffing/i)).toBeVisible()
+      await expect(drawer.getByText('Utilisation', { exact: true })).toBeVisible()
+
+      page.once('dialog', dialog => dialog.accept())
+      const applyResponsePromise = page.waitForResponse(
+        response => response.url().includes('/squad-plan/apply') && response.request().method() === 'POST',
+        { timeout: 120_000 },
+      )
+      await drawer.getByRole('button', { name: /apply capacity profile/i }).click()
+      expect((await applyResponsePromise).status()).toBe(201)
+      await expect(drawer).not.toBeVisible({ timeout: 30_000 })
+      await page.reload()
+      await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 30_000 })
+      const persistedTimeline = await getProjectJson(page, `/api/projects/${projectId}/timeline`) as {
+        entries: Array<unknown>
+        storyEntries: Array<unknown>
+      }
+      expect(persistedTimeline.entries).toHaveLength(SYNTHETIC_LARGE_PROGRAMME_FACTS.featureCount)
+      expect(persistedTimeline.storyEntries).toHaveLength(SYNTHETIC_LARGE_PROGRAMME_FACTS.featureCount)
+    } else if (planResponse.status() === 200) {
+      expect(plan.targetAchieved).toBe(false)
+      expect(plan.diagnostics).toBeDefined()
+      expect(plan.diagnostics!.length).toBeGreaterThan(0)
+      expect(plan.diagnostics!.every(diagnostic => diagnostic.explanation.length > 0)).toBe(true)
+      const targetMissStatus = drawer.locator('div[role="status"]').filter({
+        hasText: /Target not achievable under current constraints/,
+      })
+      await expect(targetMissStatus).toBeVisible({ timeout: 30_000 })
+      await expect(targetMissStatus).toContainText(plan.diagnostics![0].explanation)
+    } else {
+      expect(planResponse.status()).toBe(400)
+      expect(plan.error).toContain('Details:')
+      expect(plan.diagnostics).toBeDefined()
+      expect(plan.diagnostics!.length).toBeGreaterThan(0)
+      expect(plan.diagnostics!.every(diagnostic => diagnostic.explanation.length > 0)).toBe(true)
+      const plannerError = drawer.getByRole('alert')
+      await expect(plannerError).toBeVisible({ timeout: 30_000 })
+      await expect(plannerError).toContainText(plan.diagnostics![0].explanation)
+    }
+  })
+})
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Squad Planner — editable draft review loop (issue #482)
 // ─────────────────────────────────────────────────────────────────────────────
