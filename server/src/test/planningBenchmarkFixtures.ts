@@ -249,338 +249,154 @@ export function mixedProgramme(): SchedulerInput {
 }
 
 /**
- * Sanitised Factory / Supply Chain benchmark derived from the authoritative
- * generated programme-led import and its planning outputs.
+ * Deterministic synthetic large-programme benchmark for planner validation.
  *
- * The committed representation keeps only generic topology, dependency edges,
- * role-level effort and the staffing/profile shape needed by the planners.
- * Customer names, descriptions, story text and identifiers are not retained.
+ * The programme is generated from explicit index-based rules so its size,
+ * effort distribution, dependency shape and capacity constraint are synthetic
+ * rather than derived from a customer project.
  */
-export const FACTORY_SUPPLY_CHAIN_FACTS = {
-  source: 'authoritative generated programme-led import and planning outputs',
-  epicCount: 18,
-  featureCount: 222,
+export const SYNTHETIC_LARGE_PROGRAMME_FACTS = {
+  epicCount: 14,
+  featureCount: 210,
   roleCount: 3,
-  totalEffortHours: 16_989.8,
-  effortHoursByRole: { pc: 4_062.2, data: 10_024.4, cloud: 2_903.2 },
-  taskCountByRole: { pc: 237, data: 281, cloud: 162 },
-  targetDurationWeeks: 78,
-  sourceProfilePeakCapacity: { pc: 2.25, data: 5.5, cloud: 1.5 },
-  constrainedRoleId: 'factory-role-data',
-  constrainedProfileEndWeek: 5,
-  controlDeliveryWeeks: 53,
+  roleCounts: { platform: 3, data: 5, cloud: 2 },
+  targetDurationWeeks: 48,
+  periodWeeks: 4,
+  maxDeltaPerPeriod: 1,
+  maxParallelismPerFeature: 3,
+  maxConcurrentEpics: 4,
+  constrainedRoleId: 'synthetic-role-data',
+  constrainedProfileEndWeek: 6,
+  constrainedAllocationPercent: 100,
 } as const
 
-const FACTORY_ROLES = [
-  ['factory-role-pc', 'Principal Consultant', 3],
-  ['factory-role-data', 'Senior Data Engineer', 6],
-  ['factory-role-cloud', 'Senior Cloud Engineer', 2],
+const SYNTHETIC_ROLE_SPECS = [
+  ['synthetic-role-platform', 'Platform Engineer', SYNTHETIC_LARGE_PROGRAMME_FACTS.roleCounts.platform],
+  ['synthetic-role-data', 'Data Engineer', SYNTHETIC_LARGE_PROGRAMME_FACTS.roleCounts.data],
+  ['synthetic-role-cloud', 'Cloud Engineer', SYNTHETIC_LARGE_PROGRAMME_FACTS.roleCounts.cloud],
 ] as const
 
-type FactoryFeatureShape = {
-  mode: 'parallel' | 'sequential'
-  efforts: [number, number, number]
-  deps: number[]
+type SyntheticLargeProgrammeFacts = typeof SYNTHETIC_LARGE_PROGRAMME_FACTS & {
+  totalEffortHours: number
+  effortHoursByRole: Record<string, number>
+  taskCountByRole: Record<string, number>
 }
 
-// One tuple per source feature, in source programme order. Effort is summed
-// by role within the feature; dependency indices are source dependency edges.
-const FACTORY_FEATURE_SHAPES: readonly FactoryFeatureShape[] = [
-  { mode: 'parallel', efforts: [26.6, 0.0, 15.2], deps: [] },
-  { mode: 'sequential', efforts: [49.4, 0.0, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [22.8, 15.2, 110.2], deps: [] },
-  { mode: 'parallel', efforts: [11.4, 7.6, 30.4], deps: [2] },
-  { mode: 'parallel', efforts: [106.4, 319.2, 83.6], deps: [8] },
-  { mode: 'parallel', efforts: [30.4, 53.2, 30.4], deps: [8] },
-  { mode: 'parallel', efforts: [26.6, 72.2, 15.2], deps: [8] },
-  { mode: 'parallel', efforts: [19.0, 0.0, 26.6], deps: [8] },
-  { mode: 'sequential', efforts: [102.6, 15.2, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 15.2], deps: [8] },
-  { mode: 'sequential', efforts: [7.6, 258.4, 0.0], deps: [9] },
-  { mode: 'sequential', efforts: [0.0, 7.6, 15.2], deps: [10] },
-  { mode: 'sequential', efforts: [41.8, 72.2, 19.0], deps: [11, 4, 5, 6] },
-  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [12] },
-  { mode: 'sequential', efforts: [15.2, 30.4, 26.6], deps: [13, 7] },
-  { mode: 'sequential', efforts: [11.4, 26.6, 0.0], deps: [14] },
-  { mode: 'parallel', efforts: [57.0, 205.2, 22.8], deps: [19] },
-  { mode: 'parallel', efforts: [68.4, 205.2, 53.2], deps: [19] },
-  { mode: 'parallel', efforts: [11.4, 30.4, 0.0], deps: [19] },
-  { mode: 'sequential', efforts: [64.6, 0.0, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 7.6], deps: [19] },
-  { mode: 'sequential', efforts: [3.8, 178.6, 0.0], deps: [20] },
-  { mode: 'sequential', efforts: [0.0, 3.8, 7.6], deps: [21] },
-  { mode: 'sequential', efforts: [19.0, 45.6, 3.8], deps: [22, 16, 17, 18] },
-  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [23] },
-  { mode: 'sequential', efforts: [7.6, 19.0, 15.2], deps: [24] },
-  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [25] },
-  { mode: 'sequential', efforts: [178.6, 57.0, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 26.6], deps: [27] },
-  { mode: 'sequential', efforts: [30.4, 334.4, 0.0], deps: [28] },
-  { mode: 'sequential', efforts: [0.0, 7.6, 11.4], deps: [29] },
-  { mode: 'sequential', efforts: [38.0, 155.8, 30.4], deps: [30] },
-  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [31] },
-  { mode: 'sequential', efforts: [15.2, 30.4, 34.2], deps: [32] },
-  { mode: 'sequential', efforts: [11.4, 26.6, 0.0], deps: [33] },
-  { mode: 'sequential', efforts: [41.8, 87.4, 64.6], deps: [29] },
-  { mode: 'sequential', efforts: [45.6, 174.8, 64.6], deps: [29] },
-  { mode: 'sequential', efforts: [15.2, 0.0, 7.6], deps: [] },
-  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [37] },
-  { mode: 'sequential', efforts: [7.6, 0.0, 7.6], deps: [37, 38] },
-  { mode: 'sequential', efforts: [0.0, 7.6, 0.0], deps: [39] },
-  { mode: 'sequential', efforts: [3.8, 7.6, 0.0], deps: [40] },
-  { mode: 'sequential', efforts: [3.8, 0.0, 0.0], deps: [41] },
-  { mode: 'sequential', efforts: [15.2, 7.6, 0.0], deps: [42] },
-  { mode: 'sequential', efforts: [64.6, 15.2, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 7.6], deps: [44] },
-  { mode: 'sequential', efforts: [38.0, 171.0, 0.0], deps: [45] },
-  { mode: 'sequential', efforts: [11.4, 76.0, 0.0], deps: [45, 46] },
-  { mode: 'sequential', efforts: [0.0, 3.8, 7.6], deps: [47] },
-  { mode: 'sequential', efforts: [26.6, 38.0, 3.8], deps: [48] },
-  { mode: 'sequential', efforts: [22.8, 0.0, 19.0], deps: [49] },
-  { mode: 'sequential', efforts: [7.6, 19.0, 15.2], deps: [50] },
-  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [51] },
-  { mode: 'sequential', efforts: [57.0, 0.0, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 60.8], deps: [53] },
-  { mode: 'sequential', efforts: [41.8, 159.6, 0.0], deps: [54] },
-  { mode: 'sequential', efforts: [38.0, 159.6, 0.0], deps: [55] },
-  { mode: 'sequential', efforts: [7.6, 273.6, 72.2], deps: [54, 55, 56] },
-  { mode: 'sequential', efforts: [0.0, 7.6, 11.4], deps: [57] },
-  { mode: 'sequential', efforts: [38.0, 53.2, 68.4], deps: [58] },
-  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [59] },
-  { mode: 'sequential', efforts: [15.2, 30.4, 45.6], deps: [60] },
-  { mode: 'sequential', efforts: [11.4, 26.6, 0.0], deps: [61] },
-  { mode: 'sequential', efforts: [45.6, 174.8, 64.6], deps: [57] },
-  { mode: 'sequential', efforts: [57.0, 0.0, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 19.0], deps: [64] },
-  { mode: 'sequential', efforts: [0.0, 414.2, 30.4], deps: [65] },
-  { mode: 'sequential', efforts: [0.0, 7.6, 11.4], deps: [66] },
-  { mode: 'sequential', efforts: [34.2, 49.4, 30.4], deps: [67] },
-  { mode: 'sequential', efforts: [22.8, 0.0, 19.0], deps: [68] },
-  { mode: 'sequential', efforts: [15.2, 30.4, 45.6], deps: [69] },
-  { mode: 'sequential', efforts: [11.4, 26.6, 0.0], deps: [70] },
-  { mode: 'sequential', efforts: [106.4, 266.0, 114.0], deps: [66] },
-  { mode: 'sequential', efforts: [34.2, 64.6, 60.8], deps: [66] },
-  { mode: 'sequential', efforts: [95.0, 76.0, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 15.2], deps: [74] },
-  { mode: 'sequential', efforts: [15.2, 83.6, 0.0], deps: [75] },
-  { mode: 'sequential', efforts: [0.0, 3.8, 7.6], deps: [76] },
-  { mode: 'sequential', efforts: [26.6, 41.8, 15.2], deps: [77] },
-  { mode: 'sequential', efforts: [22.8, 0.0, 19.0], deps: [78] },
-  { mode: 'sequential', efforts: [7.6, 19.0, 19.0], deps: [79] },
-  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [80] },
-  { mode: 'sequential', efforts: [79.8, 15.2, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 7.6], deps: [82] },
-  { mode: 'sequential', efforts: [7.6, 53.2, 0.0], deps: [83] },
-  { mode: 'sequential', efforts: [0.0, 3.8, 7.6], deps: [84] },
-  { mode: 'sequential', efforts: [26.6, 22.8, 3.8], deps: [85] },
-  { mode: 'sequential', efforts: [11.4, 0.0, 11.4], deps: [86] },
-  { mode: 'sequential', efforts: [7.6, 19.0, 15.2], deps: [87] },
-  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [88] },
-  { mode: 'sequential', efforts: [15.2, 0.0, 7.6], deps: [] },
-  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [90] },
-  { mode: 'sequential', efforts: [7.6, 0.0, 7.6], deps: [90, 91] },
-  { mode: 'sequential', efforts: [0.0, 7.6, 0.0], deps: [92] },
-  { mode: 'sequential', efforts: [3.8, 7.6, 0.0], deps: [93] },
-  { mode: 'sequential', efforts: [3.8, 0.0, 0.0], deps: [94] },
-  { mode: 'sequential', efforts: [15.2, 7.6, 0.0], deps: [95] },
-  { mode: 'sequential', efforts: [110.2, 0.0, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 15.2], deps: [97] },
-  { mode: 'sequential', efforts: [30.4, 144.4, 11.4], deps: [98] },
-  { mode: 'sequential', efforts: [11.4, 395.2, 45.6], deps: [98, 99] },
-  { mode: 'sequential', efforts: [0.0, 11.4, 15.2], deps: [100] },
-  { mode: 'sequential', efforts: [41.8, 148.2, 11.4], deps: [101] },
-  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [102] },
-  { mode: 'sequential', efforts: [15.2, 53.2, 49.4], deps: [103] },
-  { mode: 'sequential', efforts: [19.0, 38.0, 0.0], deps: [104] },
-  { mode: 'sequential', efforts: [49.4, 186.2, 72.2], deps: [100] },
-  { mode: 'sequential', efforts: [76.0, 159.6, 60.8], deps: [100] },
-  { mode: 'sequential', efforts: [34.2, 209.0, 0.0], deps: [100] },
-  { mode: 'sequential', efforts: [41.8, 0.0, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 30.4], deps: [109] },
-  { mode: 'sequential', efforts: [0.0, 543.4, 30.4], deps: [110] },
-  { mode: 'sequential', efforts: [0.0, 11.4, 15.2], deps: [111] },
-  { mode: 'sequential', efforts: [45.6, 326.8, 49.4], deps: [112] },
-  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [113] },
-  { mode: 'sequential', efforts: [15.2, 41.8, 53.2], deps: [114] },
-  { mode: 'sequential', efforts: [19.0, 38.0, 0.0], deps: [115] },
-  { mode: 'sequential', efforts: [60.8, 224.2, 53.2], deps: [111] },
-  { mode: 'sequential', efforts: [64.6, 296.4, 121.6], deps: [111] },
-  { mode: 'sequential', efforts: [262.2, 136.8, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 22.8], deps: [119] },
-  { mode: 'sequential', efforts: [34.2, 330.6, 0.0], deps: [120] },
-  { mode: 'sequential', efforts: [0.0, 7.6, 26.6], deps: [121] },
-  { mode: 'sequential', efforts: [155.8, 288.8, 15.2], deps: [122] },
-  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [123] },
-  { mode: 'sequential', efforts: [30.4, 38.0, 15.2], deps: [124] },
-  { mode: 'sequential', efforts: [19.0, 30.4, 0.0], deps: [125] },
-  { mode: 'sequential', efforts: [60.8, 125.4, 0.0], deps: [119] },
-  { mode: 'sequential', efforts: [106.4, 0.0, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 15.2], deps: [128] },
-  { mode: 'sequential', efforts: [0.0, 440.8, 49.4], deps: [129] },
-  { mode: 'sequential', efforts: [0.0, 11.4, 15.2], deps: [130] },
-  { mode: 'sequential', efforts: [45.6, 95.0, 34.2], deps: [131] },
-  { mode: 'sequential', efforts: [34.2, 0.0, 30.4], deps: [132] },
-  { mode: 'sequential', efforts: [15.2, 53.2, 49.4], deps: [133] },
-  { mode: 'sequential', efforts: [19.0, 38.0, 0.0], deps: [134] },
-  { mode: 'sequential', efforts: [45.6, 209.0, 0.0], deps: [130] },
-  { mode: 'sequential', efforts: [34.2, 45.6, 0.0], deps: [130] },
-  { mode: 'sequential', efforts: [0.0, 57.0, 57.0], deps: [137] },
-  { mode: 'sequential', efforts: [64.6, 269.8, 121.6], deps: [130] },
-  { mode: 'sequential', efforts: [15.2, 0.0, 7.6], deps: [] },
-  { mode: 'sequential', efforts: [7.6, 15.2, 0.0], deps: [140] },
-  { mode: 'sequential', efforts: [7.6, 0.0, 7.6], deps: [140, 141] },
-  { mode: 'sequential', efforts: [0.0, 7.6, 0.0], deps: [142] },
-  { mode: 'sequential', efforts: [3.8, 7.6, 0.0], deps: [143] },
-  { mode: 'sequential', efforts: [3.8, 0.0, 0.0], deps: [144] },
-  { mode: 'sequential', efforts: [15.2, 7.6, 0.0], deps: [145] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [147] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [147] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [148] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [155] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149, 151] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [155] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149, 154] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [148] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [154, 159] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [155] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [158, 159, 201] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [159, 154] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [165] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [165] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151, 154] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [168] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [170, 154] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [171] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [172, 180] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [174] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [175] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [177] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [148] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [180] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [182] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151, 180] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [184] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [184] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [180, 181] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [181, 187] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [187, 182, 183] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [190] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [190, 191] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [151, 180] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [193, 182, 183] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [149] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [162] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [195, 196, 197] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [150, 198] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [199] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [155] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [172] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [175] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [184] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [187] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [193] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [176] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [176, 207] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [202, 182, 183] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [203, 180, 182, 183] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [205, 182, 183] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [193] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [206] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [212, 180] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [185, 182, 183] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [186] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [167] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [217, 180] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [167] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [219, 182, 183] },
-  { mode: 'sequential', efforts: [0.0, 0.0, 0.0], deps: [212, 214, 180, 182, 183] },
-]
-
-const FACTORY_FEATURES_PER_EPIC = [2, 2, 12, 11, 10, 7, 9, 11, 10, 8, 8, 7, 12, 10, 9, 12, 7, 75]
-const FACTORY_EPIC_MODES = ['parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel', 'parallel'] as const
-const FACTORY_EPIC_DEPENDENCIES = [{ epicIndex: 1, dependsOnIndex: 0 }]
-
-export type FactorySupplyChainBenchmark = {
+export type SyntheticLargeProgrammeBenchmark = {
   input: SchedulerInput
   config: CapacityPlanConfig
-  facts: typeof FACTORY_SUPPLY_CHAIN_FACTS
+  facts: SyntheticLargeProgrammeFacts
 }
 
-export function factorySupplyChainBenchmark(): FactorySupplyChainBenchmark {
-  const roleTypes = FACTORY_ROLES.map(([id, name, count], roleIndex) => makeResourceType(
+function syntheticEffortHours(featureIndex: number, roleIndex: number): number {
+  const roleIsOptional = roleIndex === 1
+    ? featureIndex % 7 === 0
+    : roleIndex === 2
+      ? featureIndex % 4 === 0
+      : featureIndex % 6 === 0
+  if (roleIsOptional) return 0
+  return 16 + ((featureIndex * 7 + roleIndex * 11) % 8) * 8
+}
+
+function syntheticFeatureDependencies(featureIndex: number, featureIndexWithinEpic: number): number[] {
+  const dependencies: number[] = []
+  if (featureIndexWithinEpic % 4 === 1) dependencies.push(featureIndex - 1)
+  if (featureIndexWithinEpic % 4 === 2) dependencies.push(featureIndex - 2)
+  if (featureIndexWithinEpic >= 7 && featureIndexWithinEpic % 7 === 0) dependencies.push(featureIndex - 7)
+  return dependencies
+}
+
+export function syntheticLargeProgrammeBenchmark(): SyntheticLargeProgrammeBenchmark {
+  const roleTypes = SYNTHETIC_ROLE_SPECS.map(([id, name, count], roleIndex) => makeResourceType(
     id,
     name,
     count,
     8,
     roleIndex === 1
-      ? { roleSegments: [{ startWeek: 0, endWeek: FACTORY_SUPPLY_CHAIN_FACTS.constrainedProfileEndWeek, allocationPercent: 100 }] }
+      ? {
+          roleSegments: [{
+            startWeek: 0,
+            endWeek: SYNTHETIC_LARGE_PROGRAMME_FACTS.constrainedProfileEndWeek,
+            allocationPercent: SYNTHETIC_LARGE_PROGRAMME_FACTS.constrainedAllocationPercent,
+          }],
+        }
       : {},
   ))
   const roleIds = roleTypes.map(role => role.id)
   const roleNames = roleTypes.map(role => role.name)
-  const features: SchedulerFeature[] = FACTORY_FEATURE_SHAPES.map((shape, featureIndex) => makeFeature(
-    `factory-feature-${String(featureIndex + 1).padStart(3, '0')}`,
-    [makeStory(
-      `factory-story-${String(featureIndex + 1).padStart(3, '0')}`,
-      shape.efforts.flatMap((hours, roleIndex) => hours > 0
-        ? [makeTask(hours, roleIds[roleIndex], roleNames[roleIndex])]
-        : []),
-    )],
-    featureIndex,
-    shape.deps.map(dependsOnIndex => ({
-      featureId: `factory-feature-${String(featureIndex + 1).padStart(3, '0')}`,
-      dependsOnId: `factory-feature-${String(dependsOnIndex + 1).padStart(3, '0')}`,
-    })),
-  ))
+  const features: SchedulerFeature[] = []
 
-  const epics: SchedulerEpic[] = []
-  let featureOffset = 0
-  for (let epicIndex = 0; epicIndex < FACTORY_FEATURES_PER_EPIC.length; epicIndex++) {
-    const featureCount = FACTORY_FEATURES_PER_EPIC[epicIndex]
-    epics.push(makeEpic(
-      `factory-epic-${String(epicIndex + 1).padStart(2, '0')}`,
-      features.slice(featureOffset, featureOffset + featureCount).map((feature, index) => ({
-        ...feature,
-        order: index,
-      })),
-      epicIndex,
-      { featureMode: FACTORY_EPIC_MODES[epicIndex] },
-    ))
-    featureOffset += featureCount
+  for (let epicIndex = 0; epicIndex < SYNTHETIC_LARGE_PROGRAMME_FACTS.epicCount; epicIndex++) {
+    for (let featureIndexWithinEpic = 0; featureIndexWithinEpic < 15; featureIndexWithinEpic++) {
+      const featureIndex = epicIndex * 15 + featureIndexWithinEpic
+      const featureId = `synthetic-feature-${String(featureIndex + 1).padStart(3, '0')}`
+      const tasks = [0, 1, 2].flatMap(roleIndex => {
+        const hours = syntheticEffortHours(featureIndex, roleIndex)
+        return hours > 0
+          ? [makeTask(hours, roleIds[roleIndex], roleNames[roleIndex])]
+          : []
+      })
+      features.push(makeFeature(
+        featureId,
+        [makeStory(`synthetic-story-${String(featureIndex + 1).padStart(3, '0')}`, tasks)],
+        featureIndexWithinEpic,
+        syntheticFeatureDependencies(featureIndex, featureIndexWithinEpic).map(dependsOnIndex => ({
+          featureId,
+          dependsOnId: `synthetic-feature-${String(dependsOnIndex + 1).padStart(3, '0')}`,
+        })),
+      ))
+    }
   }
 
+  const epics: SchedulerEpic[] = []
+  for (let epicIndex = 0; epicIndex < SYNTHETIC_LARGE_PROGRAMME_FACTS.epicCount; epicIndex++) {
+    const firstFeatureIndex = epicIndex * 15
+    epics.push(makeEpic(
+      `synthetic-epic-${String(epicIndex + 1).padStart(2, '0')}`,
+      features.slice(firstFeatureIndex, firstFeatureIndex + 15),
+      epicIndex,
+      { featureMode: epicIndex % 2 === 0 ? 'parallel' : 'sequential' },
+    ))
+  }
+
+  const input = makeInput(epics, roleTypes, {
+    resourceLevel: false,
+    maxParallelismPerFeature: SYNTHETIC_LARGE_PROGRAMME_FACTS.maxParallelismPerFeature,
+    epicDeps: [4, 8, 12].map(epicIndex => ({
+      epicId: epics[epicIndex].id,
+      dependsOnId: epics[epicIndex - 2].id,
+    })),
+  })
+
+  const effortHoursByRole = Object.fromEntries(roleTypes.map(role => [role.id, 0])) as Record<string, number>
+  const taskCountByRole = Object.fromEntries(roleTypes.map(role => [role.id, 0])) as Record<string, number>
+  for (const epic of input.epics) {
+    for (const feature of epic.features) {
+      for (const task of feature.userStories.flatMap(story => story.tasks)) {
+        if (!task.resourceTypeId) continue
+        effortHoursByRole[task.resourceTypeId] += task.hoursEffort
+        taskCountByRole[task.resourceTypeId] += 1
+      }
+    }
+  }
+  const totalEffortHours = Object.values(effortHoursByRole).reduce((total, effort) => total + effort, 0)
+
   return {
-    facts: FACTORY_SUPPLY_CHAIN_FACTS,
-    input: makeInput(epics, roleTypes, {
-      resourceLevel: false,
-      maxParallelismPerFeature: 2,
-      epicDeps: FACTORY_EPIC_DEPENDENCIES.map(({ epicIndex, dependsOnIndex }) => ({
-        epicId: `factory-epic-${String(epicIndex + 1).padStart(2, '0')}`,
-        dependsOnId: `factory-epic-${String(dependsOnIndex + 1).padStart(2, '0')}`,
-      })),
-    }),
+    facts: {
+      ...SYNTHETIC_LARGE_PROGRAMME_FACTS,
+      totalEffortHours,
+      effortHoursByRole,
+      taskCountByRole,
+    },
+    input,
     config: {
-      targetDurationWeeks: FACTORY_SUPPLY_CHAIN_FACTS.targetDurationWeeks,
-      periodWeeks: 13,
-      maxDeltaPerPeriod: 1,
-      minFloor: new Map(roleTypes.map(rt => [rt.id, 0])),
+      targetDurationWeeks: SYNTHETIC_LARGE_PROGRAMME_FACTS.targetDurationWeeks,
+      periodWeeks: SYNTHETIC_LARGE_PROGRAMME_FACTS.periodWeeks,
+      maxDeltaPerPeriod: SYNTHETIC_LARGE_PROGRAMME_FACTS.maxDeltaPerPeriod,
+      minFloor: new Map(roleTypes.map(role => [role.id, 0])),
       dayRates: new Map(),
-      maxParallelismPerFeature: 2,
-      maxConcurrentEpics: 6,
+      maxParallelismPerFeature: SYNTHETIC_LARGE_PROGRAMME_FACTS.maxParallelismPerFeature,
+      maxConcurrentEpics: SYNTHETIC_LARGE_PROGRAMME_FACTS.maxConcurrentEpics,
     },
   }
 }

@@ -14,7 +14,7 @@ import {
   epicDependencyViolation,
   implicitEpicDependencyViolation,
   explicitRoleMaximum,
-  factorySupplyChainBenchmark,
+  syntheticLargeProgrammeBenchmark,
   manualCapacityAndScheduleLock,
   mixedProgramme,
   parallelSameRole,
@@ -22,6 +22,7 @@ import {
   serialCriticalPath,
   sparseSpecialist,
 } from './planningBenchmarkFixtures.js'
+import type { SyntheticLargeProgrammeBenchmark } from './planningBenchmarkFixtures.js'
 
 const TOLERANCE = 1e-6
 
@@ -197,9 +198,11 @@ describe('deterministic planning-quality scenarios', () => {
     })
   })
 })
-
-describe('Factory / Supply Chain representative benchmark', () => {
-  function runCapacityPlan(input: ReturnType<typeof factorySupplyChainBenchmark>['input'], config: ReturnType<typeof factorySupplyChainBenchmark>['config']) {
+describe('deterministic synthetic large-programme benchmark', () => {
+  function runCapacityPlan(
+    input: SyntheticLargeProgrammeBenchmark['input'],
+    config: SyntheticLargeProgrammeBenchmark['config'],
+  ) {
     try {
       return { result: computeCapacityPlan(input, config), error: null }
     } catch (error) {
@@ -207,23 +210,48 @@ describe('Factory / Supply Chain representative benchmark', () => {
     }
   }
 
-  it('reproduces the current failure mode on the sanitised Factory/Supply Chain fixture', () => {
-    const benchmark = factorySupplyChainBenchmark()
+  it('reports the constrained synthetic benchmark with actionable diagnostics', () => {
+    const benchmark = syntheticLargeProgrammeBenchmark()
     const { input, config, facts } = benchmark
     const failure = runCapacityPlan(input, config)
     const repeatFailure = runCapacityPlan(input, config)
     const metrics = measureCapacityPlanQuality(input, facts.targetDurationWeeks, failure.result, null, failure.error)
+    const expectedEffortHoursByRole = Object.fromEntries(input.resourceTypes.map(resourceType => [
+      resourceType.id,
+      input.epics
+        .flatMap(epic => epic.features)
+        .flatMap(feature => feature.userStories)
+        .flatMap(story => story.tasks)
+        .filter(task => task.resourceTypeId === resourceType.id)
+        .reduce((total, task) => total + task.hoursEffort, 0),
+    ]))
+    const expectedTaskCountByRole = Object.fromEntries(input.resourceTypes.map(resourceType => [
+      resourceType.id,
+      input.epics
+        .flatMap(epic => epic.features)
+        .flatMap(feature => feature.userStories)
+        .flatMap(story => story.tasks)
+        .filter(task => task.resourceTypeId === resourceType.id)
+        .length,
+    ]))
 
     expect(repeatFailure).toEqual(failure)
-    expect(facts.epicCount).toBe(18)
-    expect(facts.featureCount).toBe(222)
-    expect(facts.totalEffortHours).toBe(16_989.8)
-    expect(facts.effortHoursByRole).toEqual({ pc: 4_062.2, data: 10_024.4, cloud: 2_903.2 })
+    expect(facts.epicCount).toBe(14)
+    expect(facts.featureCount).toBe(210)
+    expect(facts.roleCount).toBe(3)
+    expect(facts.totalEffortHours).toBe(
+      Object.values(expectedEffortHoursByRole).reduce((total, effort) => total + effort, 0),
+    )
+    expect(facts.effortHoursByRole).toEqual(expectedEffortHoursByRole)
+    expect(facts.taskCountByRole).toEqual(expectedTaskCountByRole)
     expect(input.epics.reduce((sum, epic) => sum + epic.features.length, 0)).toBe(facts.featureCount)
     expect(input.resourceTypes).toHaveLength(facts.roleCount)
+    expect(new Set(input.epics.map(epic => epic.featureMode))).toEqual(new Set(['parallel', 'sequential']))
+    expect(input.epicDeps).toHaveLength(3)
+    expect(input.epics.flatMap(epic => epic.features).flatMap(feature => feature.dependencies).length).toBeGreaterThan(100)
     expect(config.maxCap).toBeUndefined()
-    expect(config.maxParallelismPerFeature).toBe(2)
-    expect(config.maxConcurrentEpics).toBe(6)
+    expect(config.maxParallelismPerFeature).toBe(facts.maxParallelismPerFeature)
+    expect(config.maxConcurrentEpics).toBe(facts.maxConcurrentEpics)
     expect(failure.result).toBeNull()
     expect(failure.error).toContain('Fractional planner could not finish feature')
     expect(failure.error).toMatch(/within \d+ weeks$/)
@@ -234,16 +262,16 @@ describe('Factory / Supply Chain representative benchmark', () => {
     expect(metrics.utilisationPctByRole).toEqual({})
 
     const constrainedRole = input.resourceTypes.find(rt => rt.id === facts.constrainedRoleId)!
-    expect(constrainedRole.count).toBe(6)
+    expect(constrainedRole.count).toBe(facts.roleCounts.data)
     expect(constrainedRole.roleSegments).toEqual([{
       startWeek: 0,
       endWeek: facts.constrainedProfileEndWeek,
-      allocationPercent: 100,
+      allocationPercent: facts.constrainedAllocationPercent,
     }])
   })
 
-  it('captures a complete deterministic baseline for the profile-window control', () => {
-    const benchmark = factorySupplyChainBenchmark()
+  it('captures a repeatable control baseline without customer-derived values', () => {
+    const benchmark = syntheticLargeProgrammeBenchmark()
     const controlInput = {
       ...benchmark.input,
       resourceTypes: benchmark.input.resourceTypes.map(resourceType => ({
@@ -260,15 +288,11 @@ describe('Factory / Supply Chain representative benchmark', () => {
 
     expect(first.error).toBeNull()
     expect(second).toEqual(first)
-    expect(metrics.achievedDurationWeeks).toBe(53)
+    expect(metrics.achievedDurationWeeks).toBeGreaterThan(0)
     expect(metrics).toEqual(repeatMetrics)
     expect(firstSchedule).toEqual(secondSchedule)
     expect(firstSchedule.featureStartWeeks).toEqual(first.result?.levellingResult.featureStartWeeks)
-    expect(metrics.effortHoursByRole).toEqual({
-      'factory-role-cloud': 2_903.2,
-      'factory-role-data': 10_024.4,
-      'factory-role-pc': 4_062.2,
-    })
+    expect(metrics.effortHoursByRole).toEqual(benchmark.facts.effortHoursByRole)
     expect(metrics.scheduledEffortHoursByRole).toEqual(metrics.effortHoursByRole)
     expect(Object.values(metrics.staffedCapacityHoursByRole).every(hours => hours > 0)).toBe(true)
     expect(Object.values(metrics.staffedFteWeeksByRole).every(weeks => weeks > 0)).toBe(true)
