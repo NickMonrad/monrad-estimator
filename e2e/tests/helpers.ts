@@ -36,6 +36,20 @@ export async function quickSchedule(page: Page) {
   await button.click()
 }
 
+/**
+ * In-memory CSV file payload for `setInputFiles`.
+ *
+ * Uploading from a temp path is racy: the test writes the file, Playwright
+ * hands the path to the browser, and the browser reads it later — so deleting
+ * the temp file straight after `setInputFiles` intermittently makes the page's
+ * `file.text()` fail with NotFoundError. The import then never reaches the API
+ * and the modal shows "Failed to parse CSV". Passing the bytes directly keeps
+ * the upload independent of the filesystem.
+ */
+export function csvFile(content: string): { name: string; mimeType: string; buffer: Buffer } {
+  return { name: 'backlog.csv', mimeType: 'text/csv', buffer: Buffer.from(content) }
+}
+
 /** Open the Starting Team Finder drawer and return its dialog locator. */
 export async function openStartingTeamFinder(page: Page): Promise<Locator> {
   const trigger = page.getByRole('button', { name: /starting team finder/i }).first()

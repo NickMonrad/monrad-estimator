@@ -1,10 +1,7 @@
 import { test, expect, type Page, type Request, type Locator } from '@playwright/test'
-import { login, createProject, openStartingTeamFinder, quickSchedule, DATABASE_URL } from './helpers'
+import { login, createProject, openStartingTeamFinder, quickSchedule, DATABASE_URL, csvFile } from './helpers'
 import { syntheticLargeProgrammeBenchmark, SYNTHETIC_LARGE_PROGRAMME_FACTS } from '../../server/src/test/planningBenchmarkFixtures.ts'
 import { Client } from 'pg'
-import path from 'path'
-import fs from 'fs'
-import os from 'os'
 
 const BACKLOG_CSV_HEADERS = [
   'Type', 'Epic', 'Feature', 'Story', 'Task',
@@ -226,11 +223,8 @@ test.describe('Timeline — cache invalidation', () => {
     await page.getByRole('button', { name: /backlog/i }).click()
 
     await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
-    const tmpFile = path.join(os.tmpdir(), `cache-inv-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, CACHE_INV_CSV)
     await page.getByRole('button', { name: /import csv/i }).click()
-    await page.locator('input[type="file"]').setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(CACHE_INV_CSV))
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
     await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
@@ -509,10 +503,7 @@ async function setupOptimiserTimeline(
   // Import CSV to seed resource types
   await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
   await page.getByRole('button', { name: /import csv/i }).click()
-  const tmpFile = path.join(os.tmpdir(), `optimiser-seed-${suffix}.csv`)
-  fs.writeFileSync(tmpFile, csv)
-  await page.locator('input[type="file"]').setInputFiles(tmpFile)
-  fs.unlinkSync(tmpFile)
+  await page.locator('input[type="file"]').setInputFiles(csvFile(csv))
 
   // Two-step staging confirmation
   await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
@@ -1278,11 +1269,8 @@ test.describe('Resource Profile allocation', () => {
     await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
     await page.getByRole('button', { name: /backlog/i }).click()
 
-    const tmpFile = path.join(os.tmpdir(), `res-alloc-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, CACHE_INV_CSV)
     await page.getByRole('button', { name: /import csv/i }).click()
-    await page.locator('input[type="file"]').setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(CACHE_INV_CSV))
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
     await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
@@ -1404,11 +1392,8 @@ test.describe('Timeline — Resource-counts layout', () => {
     await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
     await page.getByRole('button', { name: /backlog/i }).click()
 
-    const tmpFile = path.join(os.tmpdir(), `rc-layout-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, CACHE_INV_CSV)
     await page.getByRole('button', { name: /import csv/i }).click()
-    await page.locator('input[type="file"]').setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(CACHE_INV_CSV))
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
     await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
@@ -1828,11 +1813,8 @@ test.describe('Squad Planner — profile-first apply and resource identity', () 
     await page.getByRole('button', { name: /backlog/i }).click()
 
     await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
-    const tmpFile = path.join(os.tmpdir(), `squad-plan-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, CACHE_INV_CSV)
     await page.getByRole('button', { name: /import csv/i }).click()
-    await page.locator('input[type="file"]').setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(CACHE_INV_CSV))
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
     await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })

@@ -44,19 +44,49 @@ describe('GET /api/global-resource-types', () => {
 })
 
 describe('POST /api/global-resource-types', () => {
-  it('creates a global resource type and seeds into existing projects', async () => {
+  it('seeds each project role together with its authoritative ROLE capacity profile', async () => {
     vi.mocked(prisma.globalResourceType.create).mockResolvedValue(mockGRT)
-    vi.mocked(prisma.project.findMany).mockResolvedValue([{ id: 'proj-1' }] as any)
-    vi.mocked(prisma.resourceType.createMany).mockResolvedValue({ count: 1 })
+    vi.mocked(prisma.project.findMany).mockResolvedValue([{ id: 'proj-1' }, { id: 'proj-2' }] as never)
+    const seededRoles: Array<{ data: Record<string, unknown> }> = []
+    vi.mocked(prisma.$transaction).mockImplementationOnce(async callback => callback({
+      resourceType: {
+        create: vi.fn(async (args: { data: Record<string, unknown> }) => {
+          seededRoles.push(args)
+          return {}
+        }),
+      },
+    } as never) as never)
+
     const res = await request(app)
       .post('/api/global-resource-types')
       .set('Authorization', adminHeader)
       .send({ name: 'Developer', category: 'ENGINEERING' })
+
     expect(res.status).toBe(201)
     expect(res.body.name).toBe('Developer')
-    expect(prisma.resourceType.createMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.arrayContaining([expect.objectContaining({ projectId: 'proj-1', globalTypeId: 'grt-1' })]) })
-    )
+    // One role per existing project, each carrying the ROLE profile that
+    // profile-first planning requires (a bare role would make every existing
+    // project fail capacity resolution).
+    expect(seededRoles.map(seed => seed.data.projectId)).toEqual(['proj-1', 'proj-2'])
+    for (const seed of seededRoles) {
+      expect(seed.data).toMatchObject({
+        name: 'Developer',
+        category: 'ENGINEERING',
+        globalTypeId: 'grt-1',
+        capacityProfiles: {
+          create: {
+            projectId: seed.data.projectId,
+            ownerKind: 'ROLE',
+            planningBasis: 'AVAILABILITY_WINDOW',
+            source: 'AVAILABILITY_WINDOW',
+            defaultPercent: 100,
+            startWeek: null,
+            endWeek: null,
+            provenance: 'LEGACY_MAPPER',
+          },
+        },
+      })
+    }
   })
 
   it('returns 401 without auth', async () => {

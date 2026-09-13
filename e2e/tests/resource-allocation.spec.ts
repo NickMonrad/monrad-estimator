@@ -1,9 +1,6 @@
 import { test, expect, type Page, type Locator } from '@playwright/test'
-import { login, createProject, createUserAndLogin, quickSchedule, API_BASE, DATABASE_URL } from './helpers'
-import path from 'path'
-import fs from 'fs'
+import { login, createProject, createUserAndLogin, quickSchedule, API_BASE, DATABASE_URL, csvFile } from './helpers'
 import { Client } from 'pg'
-import os from 'os'
 
 const CSV_CONTENT = [
   'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
@@ -24,11 +21,8 @@ async function seedBacklogProject(page: Page, alreadyAuthenticated = false) {
   await page.getByRole('button', { name: /backlog/i }).click()
   await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
 
-  const tmpFile = path.join(os.tmpdir(), `alloc-seed-${Date.now()}-${Math.random().toString(36).slice(2)}.csv`)
-  fs.writeFileSync(tmpFile, CSV_CONTENT)
   await page.getByRole('button', { name: /import csv/i }).click()
-  await page.locator('input[type="file"]').setInputFiles(tmpFile)
-  fs.unlinkSync(tmpFile)
+  await page.locator('input[type="file"]').setInputFiles(csvFile(CSV_CONTENT))
 
   await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
   await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })

@@ -370,7 +370,7 @@ Creates a fresh admin user (via API registration + DB role update). Tests run as
 - Use `test.beforeEach` to handle common setup (login, navigation)
 - Avoid hardcoded `page.waitForTimeout()` — use `waitFor()` or built-in auto-waiting instead
 - Tests that depend on pre-existing data should create their own data in `beforeEach`
-- File upload tests: write a temp file to `os.tmpdir()` and clean up with `fs.unlinkSync` after
+- File upload tests: build the payload in memory with `csvFile(content)` from `./helpers` and pass it to `setInputFiles`. Do not write a temp file and delete it after `setInputFiles` — the browser reads the file later (when the page's handler runs), so an early `fs.unlinkSync` intermittently fails the read and the upload never reaches the API.
 
 ### Helper reference
 
@@ -379,6 +379,7 @@ import { login, createProject, createTestUser, createUserAndLogin, TEST_EMAIL, T
 
 // login(page)                       — navigates to / and signs in with seed user, waits for /projects
 // createProject(page, name)         — clicks New Project, fills name, submits
+// csvFile(content)                  — in-memory CSV upload payload for setInputFiles
 // createTestUser(role?)             — creates unique test user (USER/ADMIN) via API + optional DB role update
 // createUserAndLogin(page, role?)   — creates test user and logs in via browser UI
 ```

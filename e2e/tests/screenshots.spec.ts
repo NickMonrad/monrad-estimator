@@ -7,7 +7,7 @@
  * Output: docs/screenshots/*.png  (relative to repo root)
  */
 import { test, expect } from '@playwright/test'
-import { login, createProject } from './helpers'
+import { login, createProject, csvFile } from './helpers'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
@@ -273,18 +273,12 @@ test('effort-review @screenshots', async ({ page }) => {
     'Task,Mobile App,iOS Build,Screen Development,Build home screen,,Developer,12,1.5,,,,,',
   ].join('\n')
 
-  const os = await import('os')
-  const tmpPath = path.join(os.tmpdir(), `screenshot-effort-${Date.now()}.csv`)
-  fs.writeFileSync(tmpPath, csvContent)
-
   await page.getByRole('button', { name: /import csv/i }).click()
-  const fileInput = page.locator('input[type="file"]')
-  await fileInput.setInputFiles(tmpPath)
+  await page.locator('input[type="file"]').setInputFiles(csvFile(csvContent))
   await page.getByRole('button', { name: /review.*confirm/i }).click()
   await page.getByRole('button', { name: /import backlog/i }).click()
   // Wait for backlog to show imported data
   await expect(page.getByText(/platform build/i)).toBeVisible({ timeout: 10_000 })
-  fs.unlinkSync(tmpPath)
 
   // Navigate to Effort Review
   await page.goto(`/projects/${projectId}/effort`)

@@ -1,8 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, createProject } from './helpers'
-import path from 'path'
-import fs from 'fs'
-import os from 'os'
+import { login, createProject, csvFile } from './helpers'
 
 const CSV_CONTENT = [
   'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
@@ -25,10 +22,7 @@ async function seedAndNavigateToEffort(page: import('@playwright/test').Page) {
 
   // Open import modal and upload the CSV
   await page.getByRole('button', { name: /import csv/i }).click()
-  const tmpFile = path.join(os.tmpdir(), `effort-review-seed-${Date.now()}.csv`)
-  fs.writeFileSync(tmpFile, CSV_CONTENT)
-  await page.locator('input[type="file"]').setInputFiles(tmpFile)
-  fs.unlinkSync(tmpFile)
+  await page.locator('input[type="file"]').setInputFiles(csvFile(CSV_CONTENT))
 
   // Two-step staging flow
   await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
