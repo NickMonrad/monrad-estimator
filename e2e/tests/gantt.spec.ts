@@ -147,6 +147,23 @@ async function dragDependencyHandle(page: Page, handle: Locator, targetFeature: 
   await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 5 })
   await page.mouse.up()
 }
+
+/**
+ * Click the middle of a dependency connector. The connector is a bezier curve,
+ * so its bounding-box centre is not necessarily on the stroke.
+ */
+async function clickDependencyConnector(page: Page, connector: Locator) {
+  await connector.scrollIntoViewIfNeeded()
+  const point = await connector.evaluate(element => {
+    const path = element as SVGPathElement
+    const midpoint = path.getPointAtLength(path.getTotalLength() / 2)
+    const matrix = path.getScreenCTM()
+    if (!matrix) throw new Error('Dependency connector geometry is unavailable')
+    const screenPoint = new DOMPoint(midpoint.x, midpoint.y).matrixTransform(matrix)
+    return { x: screenPoint.x, y: screenPoint.y }
+  })
+  await page.mouse.click(point.x, point.y)
+}
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -356,6 +373,66 @@ test.describe('Gantt Chart', () => {
     await dragDependencyHandle(page, source.getByRole('button', { name: 'Create dependency to this feature' }), target)
     await expect(page.getByRole('status')).toHaveText('Dependency created.')
     await expect(page.locator('[data-testid^="dependency-arrow-"]')).toBeVisible()
+  })
+
+  test('removes one feature dependency from its Gantt connector', async ({ page }) => {
+    test.setTimeout(90_000)
+    const { featureNames } = await setupTimeline(page, 3)
+    const [first, second, third] = featureNames
+    const projectId = new URL(page.url()).pathname.split('/')[2]
+
+    // Create A → B and A → C so one removal has to leave the other edge intact.
+    const sourceHandle = page
+      .locator(`[data-feature-name="${first}"]`)
+      .getByRole('button', { name: 'Create dependency from this feature' })
+    await dragDependencyHandle(page, sourceHandle, page.locator(`[data-feature-name="${second}"]`))
+    await expect(page.getByRole('status')).toHaveText('Dependency created.')
+    await dragDependencyHandle(page, sourceHandle, page.locator(`[data-feature-name="${third}"]`))
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(2)
+
+    const removedConnector = page.getByRole('button', { name: `Dependency ${first} → ${second}`, exact: true })
+    await expect(removedConnector).toBeVisible()
+
+    // Selecting the connector alone must not delete the dependency.
+    await clickDependencyConnector(page, removedConnector)
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(2)
+    const removeControl = page.getByRole('button', { name: `Remove dependency ${first} → ${second}`, exact: true })
+    await expect(removeControl).toBeVisible()
+
+    const removalResponse = page.waitForResponse(
+      response =>
+        new URL(response.url()).pathname.startsWith(`/api/projects/${projectId}/feature-dependencies/`) &&
+        response.request().method() === 'DELETE',
+      { timeout: 10_000 },
+    )
+    await removeControl.click()
+    expect((await removalResponse).status()).toBe(200)
+
+    await expect(page.getByRole('status')).toHaveText('Dependency removed.')
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: `Dependency ${first} → ${third}`, exact: true })).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible()
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: `Dependency ${first} → ${third}`, exact: true })).toBeVisible()
+
+    // The details panel still reports the surviving dependency.
+    await page.locator(`[title="${third}"]`).click()
+    await expect(page.getByTestId('dep-section')).toContainText(first)
+
+    // The remaining edge can be removed from the keyboard, and focus stays in the chart.
+    const remainingConnector = page.getByRole('button', { name: `Dependency ${first} → ${third}`, exact: true })
+    await remainingConnector.focus()
+    await page.keyboard.press('Enter')
+    const remainingRemoveControl = page.getByRole('button', { name: `Remove dependency ${first} → ${third}`, exact: true })
+    await expect(remainingRemoveControl).toBeVisible()
+    await remainingRemoveControl.focus()
+    await page.keyboard.press('Space')
+
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(0)
+    await expect(page.getByRole('group', { name: 'Timeline Gantt' })).toBeVisible()
+    expect(await page.evaluate(() => document.activeElement?.tagName.toLowerCase())).toBe('svg')
   })
 
   test('blocks self and duplicate dependency drops in the chart', async ({ page }) => {

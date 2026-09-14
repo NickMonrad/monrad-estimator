@@ -28,10 +28,15 @@ const entries = [
   entry('feature-2', 'Feature Two', 2),
 ]
 
-function renderChart(options: { featureDependencies?: { featureId: string; dependsOnId: string }[] } = {}) {
-  const onAddFeatureDep = vi.fn().mockResolvedValue({})
-  const onDragFeature = vi.fn()
-  render(
+type FeatureDep = { featureId: string; dependsOnId: string }
+
+function chartElement(options: {
+  featureDependencies?: FeatureDep[]
+  onAddFeatureDep?: (featureId: string, dependsOnId: string) => void | Promise<unknown>
+  onDragFeature?: (featureId: string, newStartWeek: number) => void
+  onRemoveFeatureDep?: (featureId: string, dependsOnId: string) => void | Promise<unknown>
+}) {
+  return (
     <GanttChart
       entries={entries}
       featureDependencies={options.featureDependencies ?? []}
@@ -39,19 +44,29 @@ function renderChart(options: { featureDependencies?: { featureId: string; depen
       epicDependencies={[]}
       totalWeeks={8}
       projectStartDate={null}
-      onDragFeature={onDragFeature}
+      onDragFeature={options.onDragFeature ?? vi.fn()}
       onDragStory={vi.fn()}
-      onAddFeatureDep={onAddFeatureDep}
+      onAddFeatureDep={options.onAddFeatureDep ?? vi.fn()}
       onAddStoryDep={vi.fn()}
-      onRemoveFeatureDep={vi.fn()}
+      onRemoveFeatureDep={options.onRemoveFeatureDep ?? vi.fn()}
       onRemoveStoryDep={vi.fn()}
       editingFeatureId={null}
       setEditingFeatureId={vi.fn()}
       editingStoryId={null}
       setEditingStoryId={vi.fn()}
-    />,
+    />
   )
-  return { onAddFeatureDep, onDragFeature }
+}
+
+function renderChart(options: {
+  featureDependencies?: FeatureDep[]
+  onRemoveFeatureDep?: (featureId: string, dependsOnId: string) => void | Promise<unknown>
+} = {}) {
+  const onAddFeatureDep = vi.fn().mockResolvedValue({})
+  const onDragFeature = vi.fn()
+  const onRemoveFeatureDep = options.onRemoveFeatureDep ?? vi.fn().mockResolvedValue(undefined)
+  const view = render(chartElement({ ...options, onAddFeatureDep, onDragFeature, onRemoveFeatureDep }))
+  return { onAddFeatureDep, onDragFeature, onRemoveFeatureDep, rerender: view.rerender }
 }
 
 async function visibleHandles() {
@@ -128,5 +143,92 @@ describe('Gantt feature dependency drag', () => {
 
     expect(onAddFeatureDep).not.toHaveBeenCalled()
     expect(screen.getByRole('alert')).toHaveTextContent('That dependency already exists')
+  })
+})
+
+describe('Gantt feature dependency removal', () => {
+  // Feature Two depends on Feature One, plus the reverse edge so removal has to
+  // prove it targets one specific relationship.
+  const twoDependsOnOne: FeatureDep = { featureId: 'feature-2', dependsOnId: 'feature-1' }
+  const oneDependsOnTwo: FeatureDep = { featureId: 'feature-1', dependsOnId: 'feature-2' }
+
+  function connector(name: string) {
+    return screen.getByRole('button', { name })
+  }
+
+  function removeControls() {
+    return screen.queryAllByRole('button', { name: /^remove dependency/i })
+  }
+
+  it('offers a remove control only for the selected connector', () => {
+    renderChart({ featureDependencies: [twoDependsOnOne, oneDependsOnTwo] })
+
+    expect(removeControls()).toHaveLength(0)
+
+    fireEvent.click(connector('Dependency Feature One → Feature Two'))
+
+    expect(removeControls()).toHaveLength(1)
+    expect(connector('Remove dependency Feature One → Feature Two')).toBeInTheDocument()
+  })
+
+  it('removes only the selected relationship', async () => {
+    const { onRemoveFeatureDep } = renderChart({
+      featureDependencies: [twoDependsOnOne, oneDependsOnTwo],
+    })
+
+    fireEvent.click(connector('Dependency Feature One → Feature Two'))
+    fireEvent.click(connector('Remove dependency Feature One → Feature Two'))
+
+    await waitFor(() => expect(onRemoveFeatureDep).toHaveBeenCalledWith('feature-2', 'feature-1'))
+    expect(onRemoveFeatureDep).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('dependency-arrow-feature-2-feature-1')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Dependency removed.')
+  })
+
+  it('is operable from the keyboard', async () => {
+    const { onRemoveFeatureDep } = renderChart({ featureDependencies: [twoDependsOnOne] })
+
+    const target = connector('Dependency Feature One → Feature Two')
+    target.focus()
+    fireEvent.keyDown(target, { key: 'Enter' })
+
+    const remove = connector('Remove dependency Feature One → Feature Two')
+    remove.focus()
+    fireEvent.keyDown(remove, { key: ' ' })
+
+    await waitFor(() => expect(onRemoveFeatureDep).toHaveBeenCalledWith('feature-2', 'feature-1'))
+  })
+
+  it('drops the selection when refreshed data no longer contains the dependency', () => {
+    const { onRemoveFeatureDep, rerender } = renderChart({ featureDependencies: [twoDependsOnOne] })
+
+    fireEvent.click(connector('Dependency Feature One → Feature Two'))
+    expect(removeControls()).toHaveLength(1)
+
+    rerender(chartElement({ featureDependencies: [], onRemoveFeatureDep }))
+
+    expect(removeControls()).toHaveLength(0)
+  })
+
+  it('clears the selection with Escape', () => {
+    renderChart({ featureDependencies: [twoDependsOnOne] })
+
+    const target = connector('Dependency Feature One → Feature Two')
+    fireEvent.click(target)
+    expect(removeControls()).toHaveLength(1)
+
+    fireEvent.keyDown(target, { key: 'Escape' })
+
+    expect(removeControls()).toHaveLength(0)
+  })
+
+  it('surfaces a failed removal', async () => {
+    const onRemoveFeatureDep = vi.fn().mockRejectedValue(new Error('offline'))
+    renderChart({ featureDependencies: [twoDependsOnOne], onRemoveFeatureDep })
+
+    fireEvent.click(connector('Dependency Feature One → Feature Two'))
+    fireEvent.click(connector('Remove dependency Feature One → Feature Two'))
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Failed to remove dependency.'))
   })
 })

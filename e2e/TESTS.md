@@ -206,8 +206,8 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `gantt.spec.ts` — Gantt Chart (9 tests)
-Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each basic chart test calls `setupTimeline()`, which logs in, creates a project with 1 epic + 1 feature, persists the start date while waiting for the PATCH and project/Timeline refresh responses, runs Quick schedule, and waits for the schedule response, refreshed Timeline GET, and "X features scheduled" footer. Dependency-drag tests create two features and exercise right/left handles, persistence, target validation, duplicate prevention, and server cycle rejection.
+### `gantt.spec.ts` — Gantt Chart (10 tests)
+Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each basic chart test calls `setupTimeline()`, which logs in, creates a project with 1 epic + 1 feature, persists the start date while waiting for the PATCH and project/Timeline refresh responses, runs Quick schedule, and waits for the schedule response, refreshed Timeline GET, and "X features scheduled" footer. Dependency-drag tests create two features and exercise right/left handles, persistence, target validation, duplicate prevention, and server cycle rejection. Connector-removal tests create three features and two edges so a single deletion has to leave the other edge intact.
 
 | Test | Description |
 |------|-------------|
@@ -218,6 +218,7 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 | searches and creates a feature dependency in Timeline order | Creates two epics with two features, verifies search focus and path filtering, checks Timeline-order options, selects with ArrowDown + Enter, escapes without changing dependencies, and confirms the persisted dependency after reload |
 | dragging a right dependency handle creates and persists an edge | Creates two features, drags Feature A's right handle to Feature B, confirms the arrow and dependency after reload |
 | dragging a left dependency handle maps the reverse direction | Drags Feature B's left handle to Feature A and confirms the same `Feature B depends on Feature A` edge |
+| removes one feature dependency from its Gantt connector | Creates three features and two edges from the same source handle, clicks the `A → B` connector (selection alone must not delete), activates the revealed `Remove dependency …` control, and asserts the 200 DELETE, the `Dependency removed.` status, that only the `A → C` edge survives, that the removal persists after reload, that the details panel still lists the survivor, and that the remaining edge can be removed with Enter/Space while focus stays on the chart |
 | self and duplicate dependency drops are blocked | Attempts a self-drop, creates a valid dependency, then repeats it and asserts clear inline feedback |
 | cyclic dependency rejection is surfaced | Creates one edge, attempts the reverse edge, and asserts the server's circular-reference error is shown |
 

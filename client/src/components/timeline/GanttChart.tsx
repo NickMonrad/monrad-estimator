@@ -201,7 +201,7 @@ interface GanttChartProps {
   onDragStory: (storyId: string, newStartWeek: number) => void
   onAddFeatureDep: (featureId: string, dependsOnId: string) => void | Promise<unknown>
   onAddStoryDep: (storyId: string, dependsOnId: string) => void
-  onRemoveFeatureDep: (featureId: string, dependsOnId: string) => void
+  onRemoveFeatureDep: (featureId: string, dependsOnId: string) => void | Promise<unknown>
   onRemoveStoryDep: (storyId: string, dependsOnId: string) => void
   onAddEpicDep?: (epicId: string, dependsOnId: string) => void
   onRemoveEpicDep?: (epicId: string, dependsOnId: string) => void
@@ -235,6 +235,7 @@ export default function GanttChart({
   onDragFeature,
   onDragStory,
   onAddFeatureDep,
+  onRemoveFeatureDep,
   onMoveEpic,
   onMoveFeature,
   onUpdateEpicMode,
@@ -289,6 +290,33 @@ export default function GanttChart({
   const svgRef = useRef<SVGSVGElement>(null)
   const [dependencyDrag, setDependencyDrag] = useState<DependencyDragState | null>(null)
   const [dependencyFeedback, setDependencyFeedback] = useState<DependencyFeedback | null>(null)
+  const [selectedFeatureDep, setSelectedFeatureDep] = useState<FeatureDependency | null>(null)
+
+  // A selection is only meaningful while its edge still exists, so a dependency
+  // refresh that drops the edge also drops the selection (and its remove control).
+  const activeSelectedFeatureDep = useMemo(
+    () =>
+      selectedFeatureDep &&
+      featureDependencies.some(
+        dep => dep.featureId === selectedFeatureDep.featureId && dep.dependsOnId === selectedFeatureDep.dependsOnId,
+      )
+        ? selectedFeatureDep
+        : null,
+    [featureDependencies, selectedFeatureDep],
+  )
+
+  async function removeFeatureDependency(featureId: string, dependsOnId: string) {
+    // Park focus on the chart before the connector unmounts, otherwise the
+    // browser drops focus onto the document body.
+    setSelectedFeatureDep(null)
+    svgRef.current?.focus()
+    try {
+      await onRemoveFeatureDep(featureId, dependsOnId)
+      setDependencyFeedback({ kind: 'success', message: 'Dependency removed.' })
+    } catch (error) {
+      setDependencyFeedback({ kind: 'error', message: apiErrorMessage(error, 'Failed to remove dependency.') })
+    }
+  }
 
   const getSvgPoint = useCallback((clientX: number, clientY: number) => {
     const rect = svgRef.current?.getBoundingClientRect()
@@ -519,7 +547,7 @@ export default function GanttChart({
 
       {/* Right SVG area — horizontally scrollable */}
       <div className="overflow-x-auto flex-1" ref={rightPanelRef} onScroll={onRightPanelScroll}>
-        <svg ref={svgRef} width={totalWeeks * colW} height={totalHeight} style={{ display: 'block' }}>
+        <svg ref={svgRef} tabIndex={-1} role="group" aria-label="Timeline Gantt" width={totalWeeks * colW} height={totalHeight} style={{ display: 'block' }}>
           {/* Background fill */}
           <rect x={0} y={0} width={totalWeeks * colW} height={totalHeight} fill={svgColors.bg} style={{ pointerEvents: 'none' }} />
 
@@ -535,6 +563,9 @@ export default function GanttChart({
             colW={colW}
             dragging={dragging}
             dependencyPreview={dependencyPreview}
+            selectedFeatureDep={activeSelectedFeatureDep}
+            onSelectFeatureDep={setSelectedFeatureDep}
+            onRemoveFeatureDep={removeFeatureDependency}
           />
 
           {/* Onboarding zone */}
@@ -589,7 +620,7 @@ export default function GanttChart({
 
           {/* ── Week scale header ── */}
           {scale === 'week' && Array.from({ length: totalWeeks }, (_, i) => (
-            <g key={i}>
+            <g key={i} style={{ pointerEvents: 'none' }}>
               <line x1={i * colW} y1={0} x2={i * colW} y2={totalHeight}
                 stroke={svgColors.gridLine} strokeWidth={1} />
               <text x={i * colW + colW / 2} y={HEADER_H - (projectStartDate ? 14 : 8)}
@@ -610,12 +641,12 @@ export default function GanttChart({
             <>
               {/* Mid-header separator */}
               <line x1={0} y1={HEADER_MID} x2={totalWeeks * colW} y2={HEADER_MID}
-                stroke={svgColors.weekSep} strokeWidth={1} />
+                stroke={svgColors.weekSep} strokeWidth={1} style={{ pointerEvents: 'none' }} />
               {monthGroups.map((mg, gi) => {
                 const groupX = mg.startWeek * colW
                 const groupW = (mg.endWeek - mg.startWeek) * colW
                 return (
-                  <g key={gi}>
+                  <g key={gi} style={{ pointerEvents: 'none' }}>
                     {/* Month group left border (full height) */}
                     <line x1={groupX} y1={0} x2={groupX} y2={totalHeight}
                       stroke={svgColors.weekSep} strokeWidth={1} />
@@ -651,13 +682,13 @@ export default function GanttChart({
             <>
               {/* Mid-header separator */}
               <line x1={0} y1={HEADER_MID} x2={totalWeeks * colW} y2={HEADER_MID}
-                stroke={svgColors.weekSep} strokeWidth={1} />
+                stroke={svgColors.weekSep} strokeWidth={1} style={{ pointerEvents: 'none' }} />
               {/* Quarter group labels and their left-border */}
               {quarterGroups.map((qg, qi) => {
                 const groupX = qg.startWeek * colW
                 const groupW = (qg.endWeek - qg.startWeek) * colW
                 return (
-                  <g key={qi}>
+                  <g key={qi} style={{ pointerEvents: 'none' }}>
                     <line x1={groupX} y1={0} x2={groupX} y2={totalHeight}
                       stroke={svgColors.weekSep} strokeWidth={2} />
                     <text x={groupX + groupW / 2} y={HEADER_MID - 6}
@@ -676,7 +707,7 @@ export default function GanttChart({
                   ? MONTH_ABBREVS[addDays(projectStartDate, mg.startWeek * 7).getMonth()]
                   : `M${mi + 1}`
                 return (
-                  <g key={mi}>
+                  <g key={mi} style={{ pointerEvents: 'none' }}>
                     <line x1={groupX} y1={HEADER_MID} x2={groupX} y2={totalHeight}
                       stroke={svgColors.gridLine} strokeWidth={1} />
                     {/* Week grid lines within month */}
@@ -700,13 +731,13 @@ export default function GanttChart({
           {scale === 'year' && (
             <>
               <line x1={0} y1={HEADER_MID} x2={totalWeeks * colW} y2={HEADER_MID}
-                stroke={svgColors.weekSep} strokeWidth={1} />
+                stroke={svgColors.weekSep} strokeWidth={1} style={{ pointerEvents: 'none' }} />
               {/* Half-year group labels */}
               {halfYearGroups.map((hg, hi) => {
                 const groupX = hg.startWeek * colW
                 const groupW = (hg.endWeek - hg.startWeek) * colW
                 return (
-                  <g key={hi}>
+                  <g key={hi} style={{ pointerEvents: 'none' }}>
                     <line x1={groupX} y1={0} x2={groupX} y2={totalHeight}
                       stroke={svgColors.weekSep} strokeWidth={2} />
                     <text x={groupX + groupW / 2} y={HEADER_MID - 6}
@@ -723,7 +754,7 @@ export default function GanttChart({
                 // Extract just the quarter number for the abbreviated label
                 const qLabel = qg.label.startsWith('Q') ? qg.label.split(' ')[0] : qg.label
                 return (
-                  <g key={qi}>
+                  <g key={qi} style={{ pointerEvents: 'none' }}>
                     <line x1={groupX} y1={HEADER_MID} x2={groupX} y2={totalHeight}
                       stroke={svgColors.gridLine} strokeWidth={1} />
                     <text x={groupX + groupW / 2} y={HEADER_H - 4}
@@ -738,7 +769,7 @@ export default function GanttChart({
 
           {/* Header bottom border */}
           <line x1={0} y1={HEADER_H} x2={totalWeeks * colW} y2={HEADER_H}
-            stroke={svgColors.weekSep} strokeWidth={1} />
+            stroke={svgColors.weekSep} strokeWidth={1} style={{ pointerEvents: 'none' }} />
 
           {/* Row bars */}
           {rows.map(row => {
