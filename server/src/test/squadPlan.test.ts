@@ -37,9 +37,11 @@ import {
   stripCapacityPlanMaterialization,
   buildReplayPlannerResourceTypes,
   deriveSlotWindowsByResourceType,
+  reduceEnvelopeByProtectedCapacity,
   validateDraftShape,
 } from '../routes/squadPlan.js'
 import type { CapacityPlanSlotWindow } from '../lib/capacityPlanMaterialisation.js'
+import { materializeResourceTrajectories } from '../lib/capacityPlanMaterialisation.js'
 import type {
   SchedulerInput,
   SchedulerNamedResource,
@@ -1924,6 +1926,44 @@ describe('buildReplayPlannerResourceTypes (fix 3)', () => {
     expect(result1).toEqual(result2)
   })
 })
+describe('reduceEnvelopeByProtectedCapacity (issue #503)', () => {
+  it('subtracts protected capacity per week and merges contiguous runs', () => {
+    // Reviewed envelope: weeks 2-6 at 1 FTE. The protected person is only
+    // available in weeks 4-6 at 50%, so the shortfall differs by week.
+    const periods = reduceEnvelopeByProtectedCapacity(
+      [{ startWeek: 2, endWeek: 6, allocationPercent: 100 }],
+      week => (week >= 4 ? 0.5 : 0),
+    )
+
+    expect(periods).toEqual([
+      { periodIndex: 0, startWeek: 2, endWeek: 4, headcount: 1 },
+      { periodIndex: 1, startWeek: 4, endWeek: 7, headcount: 0.5 },
+    ])
+  })
+
+  it('clamps to zero when protected capacity covers or exceeds the envelope', () => {
+    const periods = reduceEnvelopeByProtectedCapacity(
+      [{ startWeek: 0, endWeek: 3, allocationPercent: 100 }],
+      () => 2,
+    )
+
+    expect(periods).toEqual([{ periodIndex: 0, startWeek: 0, endWeek: 4, headcount: 0 }])
+  })
+
+  it('keeps fractional shortfall so planner trajectories fill it exactly', () => {
+    // 2 FTE envelope, one fractional (50%) protected person → 1.5 FTE
+    // planner-managed shortfall, decomposed into 100% + 50% slots.
+    const periods = reduceEnvelopeByProtectedCapacity(
+      [{ startWeek: 0, endWeek: 7, allocationPercent: 200 }],
+      () => 0.5,
+    )
+
+    expect(periods).toEqual([{ periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1.5 }])
+    expect(materializeResourceTrajectories(periods).map(t => t.segments.map(s => s.allocationPercent)))
+      .toEqual([[100], [50]])
+  })
+})
+
 describe('apply replay preserves generated windows', () => {
   it('replays a split zero-gap envelope with the same capacity and schedule', () => {
     const input: SchedulerInput = {

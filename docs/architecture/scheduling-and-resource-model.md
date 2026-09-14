@@ -677,11 +677,29 @@ only for `LEGACY`-source resources.
 
 ### Squad Planner composition rule
 
-Squad Planner apply persists two representations of the same active plan capacity:
+The reviewed Squad Planner envelope is **aggregate role capacity** for the role.
+Apply reconciles it against capacity the planner does not own (issue #503):
 
-- **Aggregate `ROLE` profile** with `source: 'squadPlanner'` — total headcount.
+- **Protected named resources** — manual/explicit people, including fractional
+  or windowed availability — keep their own profiles and weekly capacity. That
+  capacity counts toward the reviewed envelope and is never adopted, rewritten,
+  or zeroed by the planner.
+- **Planner-managed capacity** materialises only the remaining shortfall, i.e.
+  `max(0, reviewed envelope − protected capacity)` per week.
+
+Squad Planner apply therefore persists two representations of the same
+planner-managed capacity:
+
+- **Aggregate `ROLE` profile** with `source: 'squadPlanner'` — the
+  planner-managed share of the role envelope (equal to the full envelope when
+  the role has no protected named capacity).
 - **`PLANNED_RESOURCE` profiles** with `source: 'squadPlanner'` — individual
   trajectories (one per planned-resource slot).
+
+Resolved schedulable capacity after apply is therefore
+`protected named capacity + planned-resource trajectories`, which equals the
+reviewed envelope for every week the plan covers unless the protected people
+already exceed it.
 
 The resolver treats both as `PROFILE` source. To avoid double-counting
 (adding aggregate role capacity on top of the same planned-resource trajectories),
@@ -691,7 +709,7 @@ profiles coexist for the same resource type, the aggregate ROLE profile is
 The planned-resource trajectories remain the schedulable representation.
 
 This affects only scheduler-facing capacity (`schedulerCapacityResolver.ts`).
-The aggregate persistred ROLE profile is preserved for Resource Profile,
+The aggregate persisted ROLE profile is preserved for Resource Profile,
 export, compatibility and other non-scheduler consumers.
 
 A standalone role profile (manual source, no overlapping planned-resource profiles)
@@ -709,7 +727,7 @@ repeated resolution.
 
 | Concern | Behaviour |
 |---|---|
-| `ResourceType.count` | Remains independent role/headcount metadata. Unchanged by profile resolution. |
+| `ResourceType.count` | Remains independent role/headcount metadata. Unchanged by profile resolution; Squad Planner apply keeps it equal to the persisted named-resource identities (protected people plus planner slots) so it never contradicts the active resource identities. |
 | Phantom slots | `max(0, count − namedResources.length)` full-time slots. Used only when no `roleSegments` are present. |
 | Role profile | When authoritative, replaces phantom-slot calculation with segment capacity. |
 | Named-resource profiles | Per-resource capacity independent of count or phantom slots. |

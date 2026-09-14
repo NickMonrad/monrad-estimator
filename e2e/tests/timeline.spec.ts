@@ -2578,6 +2578,110 @@ test.describe('Squad Planner — editable draft review loop', () => {
   })
 })
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Squad Planner — apply reconciles protected named capacity (issue #503)
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe('Squad Planner — protected named capacity', () => {
+  test('persists the reviewed envelope for a role that already has an explicit person', async ({ page }) => {
+    test.setTimeout(150_000)
+    await setupOptimiserTimeline(page)
+    const projectId = page.url().match(/\/projects\/([^/]+)/)?.[1]!
+
+    // ── Seed one explicit person on the Developer role through the UI ──
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole('button', { name: /resource profile/i }).first().click()
+    const developerRow = page.locator('tr').filter({ hasText: /Developer/ }).first()
+    await expect(developerRow).toBeVisible({ timeout: 15_000 })
+    await developerRow.locator('button', { hasText: /people/i }).first().click()
+    const addPerson = page.getByRole('button', { name: /add person/i })
+    await expect(addPerson).toBeVisible({ timeout: 10_000 })
+    const addPersonResponse = page.waitForResponse(
+      response => response.url().includes('/named-resources') && response.request().method() === 'POST',
+      { timeout: 15_000 },
+    )
+    await addPerson.click()
+    expect((await addPersonResponse).status()).toBe(201)
+    // The person clones the CSV role's 100% availability-window profile: 1 FTE.
+    const protectedFte = 1
+
+    // ── Review a plan from the Timeline ──
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole('button', { name: /timeline/i }).waitFor({ timeout: 8_000 })
+    await page.getByRole('button', { name: /timeline/i }).click()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible({ timeout: 15_000 })
+    await page.getByRole('button', { name: /open squad planner/i }).click()
+    const drawer = page.getByRole('dialog', { name: /squad planner/i })
+    await expect(drawer).toBeVisible({ timeout: 8_000 })
+
+    const generatedResponse = page.waitForResponse(
+      response => response.url().endsWith(`/api/projects/${projectId}/squad-plan`)
+        && response.request().method() === 'POST'
+        && response.status() === 200,
+      { timeout: 60_000 },
+    )
+    await drawer.getByRole('button', { name: /generate capacity profile/i }).click()
+    const reviewed = await (await generatedResponse).json() as {
+      periods: Array<{
+        startWeek: number
+        endWeek: number
+        resources: Array<{ resourceTypeName: string; headcount: number }>
+      }>
+    }
+    const reviewedHeadcountByWeek = new Map<number, number>()
+    for (const period of reviewed.periods) {
+      for (const resource of period.resources) {
+        if (resource.resourceTypeName !== 'Developer') continue
+        for (let week = period.startWeek; week < period.endWeek; week++) {
+          reviewedHeadcountByWeek.set(week, resource.headcount)
+        }
+      }
+    }
+    expect(reviewedHeadcountByWeek.size).toBeGreaterThan(0)
+    expect(Math.max(...reviewedHeadcountByWeek.values())).toBeGreaterThan(0)
+
+    // ── Apply the reviewed draft, then reload the persisted capacity ──
+    page.on('dialog', dialog => dialog.accept())
+    const applyResponse = page.waitForResponse(
+      response => response.url().includes('/squad-plan/apply') && response.request().method() === 'POST',
+      { timeout: 30_000 },
+    )
+    await drawer.getByRole('button', { name: /apply capacity profile/i }).click()
+    expect((await applyResponse).status()).toBe(201)
+    await expect(drawer).not.toBeVisible({ timeout: 15_000 })
+
+    await page.reload()
+    const token = await page.evaluate(() => localStorage.getItem('token'))
+    const timelineResponse = await page.request.get(`/api/projects/${projectId}/timeline`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    expect(timelineResponse.ok()).toBeTruthy()
+    const timeline = await timelineResponse.json() as {
+      weeklyCapacity: Array<{ week: number; resourceTypeName: string; capacityDays: number }>
+    }
+    const persistedDaysByWeek = new Map<number, number>()
+    for (const row of timeline.weeklyCapacity) {
+      if (row.resourceTypeName !== 'Developer') continue
+      persistedDaysByWeek.set(row.week, row.capacityDays)
+    }
+    expect(persistedDaysByWeek.size).toBeGreaterThan(0)
+
+    let comparedWeeks = 0
+    for (const [week, reviewedHeadcount] of reviewedHeadcountByWeek) {
+      const persistedDays = persistedDaysByWeek.get(week)
+      if (persistedDays === undefined) continue
+      comparedWeeks += 1
+      // The reviewed envelope is aggregate role capacity: the pre-existing
+      // person is a floor and must never be added on top of it (#503).
+      expect(persistedDays, `week ${week} persisted capacity days`).toBeCloseTo(
+        Math.max(reviewedHeadcount, protectedFte) * 5,
+        6,
+      )
+    }
+    expect(comparedWeeks).toBeGreaterThan(0)
+  })
+})
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // Snapshot History — V4-minimum policy (issue #444): every pre-V4 snapshot is

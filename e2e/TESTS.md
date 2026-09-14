@@ -110,7 +110,7 @@ API-level tests using the `request` fixture. No browser UI involved.
 
 ---
 
-### `timeline.spec.ts` — Timeline (23 tests)
+### `timeline.spec.ts` — Timeline (24 tests)
 
 #### `Timeline` describe block (4 tests)
 
@@ -190,6 +190,12 @@ API-level tests using the `request` fixture. No browser UI involved.
 | Test | Description |
 |------|-------------|
 | edits, locks, replans, unlocks, and applies a reviewed draft | Seeds Developer + Tech Lead tasks and schedules them, generates a draft, changes period frequency and replans, then edits a returned capacity window. Confirms Apply is disabled before locking, checks the returned locked Developer capacity and consequence displays, verifies disjoint per-role request ranges and lock/unlock flags, then applies and reloads Timeline to compare persisted feature/story placements with the reviewed response. |
+
+#### `Squad Planner — protected named capacity` describe block — issue #503
+
+| Test | Description |
+|------|-------------|
+| persists the reviewed envelope for a role that already has an explicit person | Seeds Developer tasks, schedules them, and adds one explicit person to the Developer role through Resource Profile. Generates a Squad Planner draft, applies it, reloads Timeline, and asserts the persisted weekly capacity equals the reviewed envelope (never the envelope plus the pre-existing person's capacity), with the protected person left untouched and only the reviewed shortfall planned |
 
 #### `Snapshot History — retired pre-V4 display` describe block (2 tests — issue #444)
 

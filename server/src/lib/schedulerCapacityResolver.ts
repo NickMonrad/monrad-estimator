@@ -69,8 +69,11 @@ export interface ResolvedSchedulerCapacity {
 /**
  * Convert a CapacityProfileResourceData (from the adapter) to scheduler segments.
  * Handles both segment-based profiles and scalar (fixed/avail-window) profiles.
+ *
+ * Exported so apply-time shortfall reconciliation measures protected capacity
+ * through the same conversion the resolver uses (issue #503).
  */
-function profileDataToSchedulerSegments(
+export function profileDataToSchedulerSegments(
   data: CapacityProfileResourceData,
 ): SchedulerCapacitySegment[] {
   // Segment-based profile: use segments directly
