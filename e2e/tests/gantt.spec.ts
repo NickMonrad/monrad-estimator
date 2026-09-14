@@ -312,7 +312,17 @@ test.describe('Gantt Chart', () => {
     await search.fill('second')
     await search.press('ArrowDown')
     await expect(page.getByRole('option', { name: `Picker Alpha ${suffix} / Alpha Second ${suffix}` })).toHaveAttribute('aria-selected', 'true')
+    // Enter fires the create request; reloading before it settles aborts it and
+    // the dependency is never persisted.
+    const projectId = new URL(page.url()).pathname.split('/')[2]
+    const dependencyCreated = page.waitForResponse(
+      response =>
+        new URL(response.url()).pathname === `/api/projects/${projectId}/feature-dependencies` &&
+        response.request().method() === 'POST',
+      { timeout: 10_000 },
+    )
     await search.press('Enter')
+    expect((await dependencyCreated).status()).toBe(201)
 
     await page.reload()
     await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible()

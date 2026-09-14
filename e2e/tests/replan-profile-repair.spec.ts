@@ -18,10 +18,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test'
-import { login, createProject, quickSchedule } from './helpers'
-import path from 'path'
-import fs from 'fs'
-import os from 'os'
+import { login, createProject, quickSchedule, csvFile } from './helpers'
 
 const CSV_CONTENT = [
   'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
@@ -37,11 +34,8 @@ async function seedBacklogViaCsv(page: Page) {
   await page.getByRole('button', { name: /backlog/i }).click()
   await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
 
-  const tmpFile = path.join(os.tmpdir(), `replan-repair-seed-${Date.now()}.csv`)
-  fs.writeFileSync(tmpFile, CSV_CONTENT)
   await page.getByRole('button', { name: /import csv/i }).click()
-  await page.locator('input[type="file"]').setInputFiles(tmpFile)
-  fs.unlinkSync(tmpFile)
+  await page.locator('input[type="file"]').setInputFiles(csvFile(CSV_CONTENT))
 
   await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
   await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
@@ -70,10 +64,18 @@ async function seedNamedPeopleAndRepairRoleProfiles(page: Page, projectId: strin
     expect(response.ok()).toBeTruthy()
   }
 
-  return { headers, resourceTypes }
+  return { headers }
 }
 
-async function seedValidRoleProfiles(page: Page, projectId: string, headers: Record<string, string>, resourceTypes: Array<{ id: string; name: string }>) {
+async function seedValidRoleProfiles(page: Page, projectId: string, headers: Record<string, string>) {
+  // Read the roles at repair time. A concurrent global resource type change
+  // adds a role to every project, and Reset Planning discards its profile —
+  // seeding from a snapshot taken before the reset would leave that role
+  // without a profile and block completion.
+  const resourceTypesResponse = await page.request.get(`/api/projects/${projectId}/resource-types`, { headers })
+  expect(resourceTypesResponse.ok()).toBeTruthy()
+  const resourceTypes = await resourceTypesResponse.json() as Array<{ id: string; name: string }>
+
   for (const resourceType of resourceTypes) {
     const response = await page.request.put(
       `/api/projects/${projectId}/capacity-profiles/ROLE/${resourceType.id}`,
@@ -110,7 +112,7 @@ test.describe('NEEDS_REPLAN Resource Profile repair (issue #474)', () => {
     await expect(page.getByTestId('planning-needs-attention')).toBeVisible()
     // The fixture starts with valid role profiles; only named-person recovery
     // is exercised through the browser below.
-    await seedValidRoleProfiles(page, projectId, fixture.headers, fixture.resourceTypes)
+    await seedValidRoleProfiles(page, projectId, fixture.headers)
     await page.reload()
     await expect(page.getByTestId('replan-recovery-summary')).toBeVisible({ timeout: 10_000 })
 
