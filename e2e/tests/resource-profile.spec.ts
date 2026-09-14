@@ -1,8 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, createProject, quickSchedule, API_BASE } from './helpers'
-import path from 'path'
-import fs from 'fs'
-import os from 'os'
+import { login, createProject, quickSchedule, API_BASE, csvFile } from './helpers'
 
 /* ────────────────────────────────────────────────────────────────────────────
  * CSV seed data — 14-column format with Type column
@@ -30,12 +27,8 @@ async function seedAndNavigateToResourceProfile(
   await page.getByRole('button', { name: /backlog/i }).click()
   await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
 
-  const tmpFile = path.join(os.tmpdir(), `res-profile-seed-${Date.now()}.csv`)
-  fs.writeFileSync(tmpFile, CSV_CONTENT)
-
   await page.getByRole('button', { name: /import csv/i }).click()
-  await page.locator('input[type="file"]').setInputFiles(tmpFile)
-  fs.unlinkSync(tmpFile)
+  await page.locator('input[type="file"]').setInputFiles(csvFile(CSV_CONTENT))
 
   // Two-step staging flow
   await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
@@ -60,7 +53,6 @@ test.describe('Resource Profile', () => {
   test('can edit count for non-engineering resource types', async ({ page }) => {
     const suffix = Date.now()
     const projectName = `E2E ResProfile ${suffix}`
-    const tmpFile = path.join(os.tmpdir(), `res-profile-import-${suffix}.csv`)
 
     await login(page)
     await createProject(page, projectName)
@@ -79,12 +71,9 @@ test.describe('Resource Profile', () => {
       'E2E ResEpic', 'E2E ResFeature', 'E2E ResStory', 'E2E ResTask', 'Project Manager',
       '0', '0', '0', '0', '0', '8', '', 'PM task', '',
     ].join(',')
-    fs.writeFileSync(tmpFile, [headers, dataRow].join('\n'))
 
     await page.getByRole('button', { name: /import csv/i }).click()
-    const fileInput = page.locator('input[type="file"]')
-    await fileInput.setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile([headers, dataRow].join('\n')))
 
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
@@ -284,19 +273,15 @@ test.describe('Resource Profile — cache invalidation from Timeline', () => {
     await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
     await page.getByRole('button', { name: /backlog/i }).click()
 
-    const tmpFile = path.join(os.tmpdir(), `rp-cache-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, [
+    await page.getByRole('button', { name: /import csv/i }).click()
+    await page.locator('input[type="file"]').setInputFiles(csvFile([
       'Type,Epic,Feature,Story,Task,Template,ResourceType,HoursEffort,DurationDays,Description,Assumptions,EpicStatus,FeatureStatus,StoryStatus',
       'Epic,Platform Build,,,,,,,,,,,,',
       'Feature,Platform Build,Core API,,,,,,,,,,,',
       'Story,Platform Build,Core API,API Design,,,,,,,,,,',
       'Task,Platform Build,Core API,API Design,Implement,,Developer,40,5,,,,,',
       'Task,Platform Build,Core API,API Design,Review,,Tech Lead,16,2,,,,,',
-    ].join('\n'))
-
-    await page.getByRole('button', { name: /import csv/i }).click()
-    await page.locator('input[type="file"]').setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    ].join('\n')))
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
     await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
@@ -398,11 +383,8 @@ test.describe('Capacity profile editor — ROLE segments', () => {
     await page.getByRole('button', { name: /backlog/i }).click()
 
     await expect(page.getByRole('button', { name: /import csv/i })).toBeVisible({ timeout: 8_000 })
-    const tmpFile = path.join(os.tmpdir(), `cap-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, CAP_PROFILE_CSV)
     await page.getByRole('button', { name: /import csv/i }).click()
-    await page.locator('input[type="file"]').setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(CAP_PROFILE_CSV))
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
     await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
@@ -682,11 +664,8 @@ test.describe('Switch to manual capacity', () => {
       'Task,Platform Build,Core API,API Design,Implement,,Developer,40,5,,,,,',
       'Task,Platform Build,Core API,API Design,Review,,Tech Lead,16,2,,,,,',
     ].join('\n')
-    const tmpFile = path.join(os.tmpdir(), `transfer-${Date.now()}.csv`)
-    fs.writeFileSync(tmpFile, csvContent)
     await page.getByRole('button', { name: /import csv/i }).click()
-    await page.locator('input[type="file"]').setInputFiles(tmpFile)
-    fs.unlinkSync(tmpFile)
+    await page.locator('input[type="file"]').setInputFiles(csvFile(csvContent))
     await page.getByRole('button', { name: /review & confirm/i }).click({ timeout: 10_000 })
     await page.getByRole('button', { name: /import backlog/i }).click({ timeout: 10_000 })
     await expect(page.getByText('Platform Build')).toBeVisible({ timeout: 10_000 })
