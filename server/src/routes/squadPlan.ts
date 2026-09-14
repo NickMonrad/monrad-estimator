@@ -1,4 +1,10 @@
-import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
+import {
+  resolveSchedulerCapacity,
+  profileDataToSchedulerSegments,
+} from '../lib/schedulerCapacityResolver.js'
+import {
+  buildResourceCapacityProfileMap,
+} from '../lib/capacityProfileResourceAdapter.js'
 import { CapacityIntegrityError } from '../lib/capacityIntegrityError.js'
 
 /**
@@ -22,6 +28,7 @@ import {
   getWeeklyCapacity,
   runScheduler,
   type SchedulerInput,
+  type SchedulerNamedResource,
   type SchedulerResourceType,
 } from '../lib/scheduler.js'
 import { levelEpicStarts } from '../lib/leveller.js'
@@ -46,6 +53,7 @@ import {
 import {
   conflictPreflightCheck,
   findOrCreatePlannedResources,
+  isPlannerManaged,
   writePlannerProfiles,
   materializeProfilesForResourceType,
   clearOmittedPlannerCapacity,
@@ -773,6 +781,159 @@ export function buildReplayPlannerResourceTypes(
     }
   })
 }
+
+// ─── Apply-time protected capacity reconciliation (issue #503) ──────────────
+
+const SHORTFALL_EPSILON = 0.000001
+
+/**
+ * Reduce a reviewed aggregate envelope to the planner-managed shortfall: the
+ * capacity protected (planner-untouched) named resources do not already
+ * provide, week by week.
+ *
+ * Mirrors the generation-side shortfall semantics of
+ * `buildReplayPlannerResourceTypes`: protected capacity is preserved and only
+ * the remaining shortfall becomes planner-managed capacity. Emitted as
+ * contiguous runs of equal headcount so the existing trajectory
+ * materialisation derives the planner resource identities.
+ */
+export function reduceEnvelopeByProtectedCapacity(
+  envelopeWindows: ReadonlyArray<CapacityPlanSlotWindow>,
+  protectedFteForWeek: (week: number) => number,
+): Array<{ periodIndex: number; startWeek: number; endWeek: number; headcount: number }> {
+  const requiredFteByWeek = new Map<number, number>()
+  for (const window of envelopeWindows) {
+    for (let week = window.startWeek; week <= window.endWeek; week++) {
+      requiredFteByWeek.set(
+        week,
+        (requiredFteByWeek.get(week) ?? 0) + window.allocationPercent / 100,
+      )
+    }
+  }
+
+  const periods: Array<{ periodIndex: number; startWeek: number; endWeek: number; headcount: number }> = []
+  for (const week of [...requiredFteByWeek.keys()].sort((a, b) => a - b)) {
+    const required = requiredFteByWeek.get(week) ?? 0
+    const headcount = Math.max(0, required - protectedFteForWeek(week))
+    const previous = periods[periods.length - 1]
+    if (previous && previous.endWeek === week && Math.abs(previous.headcount - headcount) <= SHORTFALL_EPSILON) {
+      previous.endWeek = week + 1
+      continue
+    }
+    periods.push({ periodIndex: periods.length, startWeek: week, endWeek: week + 1, headcount })
+  }
+
+  return periods
+}
+
+/**
+ * Profile-first capacity of one role's protected (planner-untouched) named
+ * resources. Planner-managed resources are excluded because apply rewrites
+ * them from the new trajectories.
+ *
+ * Returns a null `capacityRole` when the role has no measurable protected
+ * capacity (or when its profiles are incomplete) — apply then keeps its
+ * pre-#503 behaviour rather than failing an otherwise valid plan.
+ */
+async function loadProtectedNamedCapacity(
+  tx: PrismaTransactionClient,
+  projectId: string,
+  resourceTypeId: string,
+  resourceTypeName: string,
+  roleHoursPerDay: number | null,
+  authority: PriorPlannerAuthority | null,
+): Promise<{ protectedCount: number; capacityRole: SchedulerResourceType | null }> {
+  const namedResources = await tx.namedResource.findMany({
+    where: { resourceTypeId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { id: true, name: true, pricingModel: true },
+  })
+  if (namedResources.length === 0) return { protectedCount: 0, capacityRole: null }
+
+  const ownerRows = await tx.capacityProfile.findMany({
+    where: { namedResourceId: { in: namedResources.map(nr => nr.id) } },
+    select: { namedResourceId: true, ownerKind: true, source: true, planningBasis: true },
+  })
+  const ownersByResource = new Map<string, Array<{ ownerKind: string; source: string; planningBasis: string }>>()
+  for (const owner of ownerRows) {
+    if (!owner.namedResourceId) continue
+    const list = ownersByResource.get(owner.namedResourceId)
+    if (list) list.push(owner)
+    else ownersByResource.set(owner.namedResourceId, [owner])
+  }
+  const priorActivePlan = authority?.activePlanResourceTypeIds.has(resourceTypeId) ?? false
+  const protectedResources = namedResources.filter(
+    nr => !isPlannerManaged({ id: nr.id }, ownersByResource.get(nr.id) ?? [], { priorActivePlan }),
+  )
+  if (protectedResources.length === 0) return { protectedCount: 0, capacityRole: null }
+
+  const profileRows = await tx.capacityProfile.findMany({
+    where: { namedResourceId: { in: protectedResources.map(nr => nr.id) } },
+    include: { segments: { orderBy: [{ startWeek: 'asc' }, { endWeek: 'asc' }] } },
+  })
+
+  let profileMap: ReturnType<typeof buildResourceCapacityProfileMap>
+  try {
+    profileMap = buildResourceCapacityProfileMap({
+      id: projectId,
+      resourceTypes: [{
+        id: resourceTypeId,
+        name: resourceTypeName,
+        count: 0,
+        hoursPerDay: roleHoursPerDay,
+        synthetic: false,
+        namedResources: protectedResources.map(nr => ({
+          id: nr.id,
+          name: nr.name,
+          pricingModel: nr.pricingModel ?? null,
+          synthetic: false,
+        })),
+      }],
+      capacityProfiles: profileRows,
+    })
+  } catch (error) {
+    if (!(error instanceof CapacityIntegrityError)) throw error
+    return { protectedCount: protectedResources.length, capacityRole: null }
+  }
+
+  const schedulerNamedResources: SchedulerNamedResource[] = []
+  for (const namedResource of protectedResources) {
+    const profileData = profileMap.namedResourceProfiles.get(namedResource.id)
+    if (!profileData) continue
+    schedulerNamedResources.push({
+      id: namedResource.id,
+      name: namedResource.name,
+      pricingModel: namedResource.pricingModel ?? undefined,
+      startWeek: null,
+      endWeek: null,
+      allocationPct: 0,
+      allocationMode: 'EFFORT',
+      allocationPercent: 0,
+      allocationStartWeek: null,
+      allocationEndWeek: null,
+      capacitySegments: profileDataToSchedulerSegments(profileData),
+    })
+  }
+  if (schedulerNamedResources.length === 0) {
+    return { protectedCount: protectedResources.length, capacityRole: null }
+  }
+
+  return {
+    protectedCount: protectedResources.length,
+    capacityRole: {
+      id: resourceTypeId,
+      name: resourceTypeName,
+      // Protected capacity only: neither count phantoms nor the aggregate
+      // role profile may contribute to the shortfall measurement.
+      count: 0,
+      hoursPerDay: roleHoursPerDay,
+      allocationMode: 'EFFORT',
+      roleSegments: [],
+      namedResources: schedulerNamedResources,
+    },
+  }
+}
+
 async function loadSchedulerInput(
   projectId: string,
   hoursPerDay: number,
@@ -1038,7 +1199,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
   const projectResourceTypes = await prisma.resourceType.findMany({
     where: { projectId },
-    select: { id: true, name: true },
+    select: { id: true, name: true, hoursPerDay: true },
   })
   const projectResourceTypeIds = new Set(projectResourceTypes.map(rt => rt.id))
 
@@ -1594,29 +1755,45 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
 
       // ── Profile-first: write authoritative profiles directly ────────────
       if (shouldActivate && maxHeadcountByRt) {
-        // Update RT counts for demand RTs
-        for (const [rtId, count] of maxHeadcountByRt) {
-          await tx.resourceType.update({
-            where: { id: rtId },
-            data: { count: Math.max(1, Math.ceil(count)) },
-          })
-        }
-
         // Reuse the validated project resource types for materialisation
         const rtNameById = new Map(projectResourceTypes.map(rt => [rt.id, rt.name]))
+        const rtHoursPerDayById = new Map(
+          projectResourceTypes.map(rt => [rt.id, rt.hoursPerDay] as const),
+        )
 
         // Write authoritative profiles per resource type
         for (const [rtId] of maxHeadcountByRt) {
           const rtName = rtNameById.get(rtId) ?? 'Resource'
 
-          // Compute trajectories to know required count and provide data
-          const rtPeriods = normalisedPeriods.map(p => ({
-            periodIndex: p.periodIndex,
-            startWeek: p.startWeek,
-            endWeek: p.endWeek,
-            headcount: p.entries.find(e => e.resourceTypeId === rtId)?.headcount ?? 0,
+          // The reviewed envelope is AGGREGATE role capacity. Protected
+          // (planner-untouched) named resources keep their own capacity and
+          // count toward it, so the planner materialises only the remaining
+          // shortfall (#503). The persisted ROLE profile therefore aggregates
+          // the planner-managed share of the reviewed envelope.
+          const protectedCapacity = await loadProtectedNamedCapacity(
+            tx,
+            projectId,
+            rtId,
+            rtName,
+            rtHoursPerDayById.get(rtId) ?? null,
+            transactionAuthority,
+          )
+          const roleHoursPerDay = rtHoursPerDayById.get(rtId) ?? project.hoursPerDay
+          const shortfallPeriods = reduceEnvelopeByProtectedCapacity(
+            slotWindowsByRt?.get(rtId) ?? [],
+            week => protectedCapacity.capacityRole
+              ? getWeeklyCapacity(protectedCapacity.capacityRole, week, roleHoursPerDay)
+                / (roleHoursPerDay * 5)
+              : 0,
+          )
+          const shortfallPeriodInputs: CapacityPlanPeriodInput[] = shortfallPeriods.map(period => ({
+            periodIndex: period.periodIndex,
+            startWeek: period.startWeek,
+            endWeek: period.endWeek,
+            entries: [{ resourceTypeId: rtId, headcount: period.headcount }],
           }))
-          const trajectories = materializeResourceTrajectories(rtPeriods)
+          // Compute trajectories to know required count and provide data
+          const trajectories = materializeResourceTrajectories(shortfallPeriods)
 
           // Find/create named resources with stable ordering (createdAt, id)
           const { allNamedResources } = await findOrCreatePlannedResources(
@@ -1630,7 +1807,7 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
           const materialized = materializeProfilesForResourceType(
             rtId,
             rtName,
-            normalisedPeriods as unknown as CapacityPlanPeriodInput[],
+            shortfallPeriodInputs,
             allNamedResources,
           )
           // Authoritative profile + segment persistence
@@ -1643,6 +1820,14 @@ router.post('/apply', asyncHandler(async (req: AuthRequest, res: Response) => {
             undefined,
             transactionAuthority ?? undefined,
           )
+
+          // Count stays coherent with the persisted resource identities
+          // (protected people plus planner-managed slots). It is identity
+          // metadata, never a capacity input: phantom slots stay at zero.
+          await tx.resourceType.update({
+            where: { id: rtId },
+            data: { count: protectedCapacity.protectedCount + allNamedResources.length },
+          })
         }
         await clearOmittedPlannerCapacity(tx, projectId, new Set(maxHeadcountByRt.keys()), transactionAuthority!)
       }

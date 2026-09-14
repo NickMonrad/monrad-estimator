@@ -31,6 +31,8 @@ import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@prisma/client'
 import type { $Enums } from '@prisma/client'
 import { app } from '../app.js'
+import { resolveSchedulerCapacity } from '../lib/schedulerCapacityResolver.js'
+import { getWeeklyCapacity } from '../lib/scheduler.js'
 import {
   __setApplyFailureSeam,
 } from '../lib/squadPlannerProfileWriter.js'
@@ -777,11 +779,15 @@ describeIf('Scenario 3 — Resource Profile parity via production GET', () => {
     await createMapperPersonProfile(projectId, 'nr-rp-2', 'prof-rp-2')
     await createEpicBacklog(projectId, rtId)
 
+    // The role already carries two explicit full-time people (2 FTE). #503:
+    // protected named capacity counts toward the reviewed aggregate envelope,
+    // so the envelope must exceed it for the planner to materialise any
+    // planned-resource slots at all.
     const applyRes = await request(app)
       .post(`/api/projects/${projectId}/squad-plan/apply`)
       .set('Authorization', authHeader)
       .send(buildApplyPayload(rtId, [
-        { periodIndex: 0, startWeek: 0, endWeek: 4, headcount: 2 },
+        { periodIndex: 0, startWeek: 0, endWeek: 4, headcount: 4 },
         { periodIndex: 1, startWeek: 4, endWeek: 8, headcount: 1 },
       ], { name: 'RP Parity' }))
     // eslint-disable-next-line no-console
@@ -861,7 +867,7 @@ describeIf('Scenario 3 — Resource Profile parity via production GET', () => {
       }
     }
   })
-  it('no surplus active capacity — second planned resource has zero capacity in tail', async () => {
+  it('no surplus active capacity — planner capacity stops when the envelope shrinks', async () => {
     if (!runIntegration) return
     const res = await request(app)
       .get(`/api/projects/${projectId}/resource-profile`)
@@ -873,21 +879,21 @@ describeIf('Scenario 3 — Resource Profile parity via production GET', () => {
     const engRow = resourceRows.find(r => r.resourceTypeId === rtId) as Record<string, unknown>
     const nrs = engRow.namedResources as Array<Record<string, unknown>>
 
-    // Second planned resource (surplus in period 1) should have zero overall allocatedDays
-    const secondNr = nrs.find(n => n.name === 'Planned Eng 2') as Record<string, unknown>
-    const secondCp = secondNr.capacityProfile as Record<string, unknown>
-
-    // The second resource gets surplus treatment: zero capacity in weeks 4-7
-    // Its segments should either be empty (all zero) or only cover weeks 0-3
-    const secondSegments = secondCp.segments as Array<Record<string, unknown>>
-    if (secondSegments.length > 0) {
-      // If segments exist, none should overlap period 1 (week 4-7)
-      for (const seg of secondSegments) {
-        const endWeek = seg.endWeek as number
-        expect(endWeek).toBeLessThanOrEqual(4)
+    // The envelope shrinks to 1 FTE in period 1 while the two protected people
+    // already cover it, so planner-managed capacity must not extend into the
+    // tail (weeks 4-7).
+    const plannedRows = nrs.filter(nr => nr.resourceIdentity === 'PLANNED_RESOURCE')
+    expect(plannedRows.length).toBeGreaterThanOrEqual(1)
+    for (const planned of plannedRows) {
+      const plannedCp = planned.capacityProfile as Record<string, unknown>
+      const plannedSegments = plannedCp.segments as Array<Record<string, unknown>>
+      for (const seg of plannedSegments) {
+        expect(seg.endWeek as number).toBeLessThanOrEqual(4)
       }
     }
-    // This is an explicit named-person resource, not a planner-created one
+
+    // The pre-existing people stay explicit named persons — never adopted.
+    const secondNr = nrs.find(n => n.name === 'Planned Eng 2') as Record<string, unknown>
     expect(secondNr.resourceIdentity).toBe('NAMED_PERSON')
   })
 })
@@ -918,11 +924,13 @@ describeIf('Scenario 4 — Export parity via client buildProfileCsv', () => {
     await createMapperPersonProfile(projectId, 'nr-export-1', 'prof-export-1')
     await createEpicBacklog(projectId, rtId)
 
+    // #503: the pre-existing explicit person covers the 1 FTE envelope, so the
+    // envelope must exceed protected capacity for planned slots to exist.
     const applyRes = await request(app)
       .post(`/api/projects/${projectId}/squad-plan/apply`)
       .set('Authorization', authHeader)
       .send(buildApplyPayload(rtId, [
-        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1 },
+        { periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 2 },
       ], { name: 'Export Parity' }))
     expect(applyRes.status).toBe(201)
   })
@@ -1863,5 +1871,359 @@ describeIf('Scenario 7 — reviewed draft generation/materialisation/apply parit
     expect(roleProfile?.segments).toEqual(expect.arrayContaining([
       expect.objectContaining({ startWeek: 0, endWeek: 3, capacityPercent: 100 }),
     ]))
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Scenario 8 — #503 apply reconciles the reviewed envelope with protected
+// named-resource capacity
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// The reviewed Squad Planner envelope is AGGREGATE role capacity. Named
+// resources the planner does not own (manual/explicit people, windowed or
+// fractional) keep their own capacity, so apply must materialise only the
+// remaining shortfall. Resolved persisted weekly capacity must equal the
+// reviewed plan capacity for every week the plan covers, the protected
+// person's profile must be untouched, and ResourceType.count must stay
+// coherent with the persisted resource identities.
+
+/** Expected weekly capacity days (headcount × 5) for the reviewed envelope. */
+function expectedCapacityDaysByWeek(
+  periods: Array<{ startWeek: number; endWeek: number; headcount: number }>,
+): Map<number, number> {
+  const expected = new Map<number, number>()
+  for (const period of periods) {
+    for (let week = period.startWeek; week < period.endWeek; week++) {
+      expected.set(week, period.headcount * 5)
+    }
+  }
+  return expected
+}
+
+/**
+ * Resolved persisted weekly capacity (hours) from the production resolver —
+ * the same profile-first authority the timeline, Resource Profile and
+ * optimiser consume — evaluated over the whole reviewed horizon. The timeline
+ * GET only reports weeks inside its scheduled horizon, so the reviewed window
+ * is asserted through the resolver and cross-checked against the GET rows.
+ */
+async function fetchResolvedCapacityHours(
+  projectId: string,
+  roleName: string,
+  horizonWeeks: number,
+): Promise<{
+  hoursByWeek: Map<number, number>
+  hoursPerDay: number
+  timelineDays: Map<number, number>
+}> {
+  const resolved = await resolveSchedulerCapacity(prisma, projectId)
+  const role = resolved.resourceTypes.find(rt => rt.name === roleName)
+  expect(role, `resolved role ${roleName}`).toBeDefined()
+  const hoursPerDay = role!.hoursPerDay ?? 8
+  const hoursByWeek = new Map<number, number>()
+  for (let week = 0; week <= horizonWeeks; week++) {
+    hoursByWeek.set(week, getWeeklyCapacity(role!, week, hoursPerDay))
+  }
+
+  const res = await request(app)
+    .get(`/api/projects/${projectId}/timeline`)
+    .set('Authorization', authHeader)
+  expect(res.status).toBe(200)
+  const weeklyCapacity = (res.body as Record<string, unknown>).weeklyCapacity as
+    | Array<Record<string, unknown>>
+    | undefined
+  expect(weeklyCapacity).toBeDefined()
+  const timelineDays = new Map<number, number>()
+  for (const row of weeklyCapacity!) {
+    if (row.resourceTypeName !== roleName) continue
+    timelineDays.set(row.week as number, row.capacityDays as number)
+  }
+
+  return { hoursByWeek, hoursPerDay, timelineDays }
+}
+
+interface PersistedIdentityRow {
+  id: string
+  name: string
+  ownerKind: string | null
+  source: string | null
+  defaultPercent: number | null
+  segments: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+}
+
+/** Persisted named-resource identity + profile state for one role. */
+async function fetchRoleIdentities(rtId: string): Promise<{
+  count: number
+  rows: PersistedIdentityRow[]
+}> {
+  const resourceType = await prisma.resourceType.findUnique({ where: { id: rtId } })
+  const namedResources = await prisma.namedResource.findMany({
+    where: { resourceTypeId: rtId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: {
+      capacityProfiles: {
+        include: { segments: { orderBy: [{ startWeek: 'asc' }, { endWeek: 'asc' }] } },
+      },
+    },
+  })
+  return {
+    count: resourceType?.count ?? -1,
+    rows: namedResources.map(nr => {
+      const profile = nr.capacityProfiles[0]
+      return {
+        id: nr.id,
+        name: nr.name,
+        ownerKind: profile?.ownerKind ?? null,
+        source: profile?.source ?? null,
+        defaultPercent: profile?.defaultPercent ?? null,
+        segments: (profile?.segments ?? []).map(segment => ({
+          startWeek: segment.startWeek,
+          endWeek: segment.endWeek,
+          capacityPercent: segment.capacityPercent,
+        })),
+      }
+    }),
+  }
+}
+
+/** Planner-created resources (SQUAD_PLANNER PLANNED_RESOURCE profiles). */
+function plannerIdentities(rows: PersistedIdentityRow[]): PersistedIdentityRow[] {
+  return rows.filter(row => row.ownerKind === 'PLANNED_RESOURCE' && row.source === 'SQUAD_PLANNER')
+}
+
+interface ProtectedCapacityCaseOptions {
+  suffix: string
+  roleName: string
+  people: Array<{
+    id: string
+    name: string
+    defaultPercent: number
+    segments?: Array<{ startWeek: number; endWeek: number; capacityPercent: number }>
+  }>
+  envelope: Array<{ periodIndex: number; startWeek: number; endWeek: number; headcount: number }>
+}
+
+/**
+ * Create a role with protected named people, apply a reviewed envelope through
+ * the production route, and return resolved persisted capacity + identities.
+ */
+async function applyProtectedCapacityCase(options: ProtectedCapacityCaseOptions): Promise<{
+  projectId: string
+  rtId: string
+  applyStatus: number
+  hoursByWeek: Map<number, number>
+  hoursPerDay: number
+  timelineDays: Map<number, number>
+  identities: Awaited<ReturnType<typeof fetchRoleIdentities>>
+}> {
+  const projectId = await createProject()
+  const rtId = await createResourceType(projectId, `rt-${options.suffix}`, options.roleName, {
+    count: Math.max(1, options.people.length),
+  })
+  await createEpicBacklog(projectId, rtId)
+  for (const person of options.people) {
+    await createNamedResource(projectId, rtId, person.id, person.name)
+    const segmented = (person.segments?.length ?? 0) > 0
+    await prisma.capacityProfile.create({
+      data: {
+        id: `cp-${person.id}`,
+        projectId,
+        ownerKind: 'NAMED_PERSON',
+        namedResourceId: person.id,
+        planningBasis: segmented ? 'CAPACITY_PROFILE' : 'DEMAND_FOLLOWING',
+        source: segmented ? 'MANUAL' : 'FIXED',
+        defaultPercent: person.defaultPercent,
+        startWeek: segmented ? (person.segments![0].startWeek) : null,
+        endWeek: segmented ? (person.segments![person.segments!.length - 1].endWeek) : null,
+        provenance: 'LEGACY_MAPPER',
+      },
+    })
+    if (segmented) {
+      await prisma.capacitySegment.createMany({
+        data: person.segments!.map(segment => ({
+          capacityProfileId: `cp-${person.id}`,
+          startWeek: segment.startWeek,
+          endWeek: segment.endWeek,
+          capacityPercent: segment.capacityPercent,
+          source: 'MANUAL' as const,
+        })),
+      })
+    }
+  }
+
+  const applyResponse = await request(app)
+    .post(`/api/projects/${projectId}/squad-plan/apply`)
+    .set('Authorization', authHeader)
+    .send(buildApplyPayload(rtId, options.envelope, { name: `Protected capacity ${options.suffix}` }))
+
+  const horizonWeeks = options.envelope.reduce(
+    (max, period) => Math.max(max, period.endWeek),
+    0,
+  )
+  const capacity = applyResponse.status === 201
+    ? await fetchResolvedCapacityHours(projectId, options.roleName, horizonWeeks)
+    : { hoursByWeek: new Map<number, number>(), hoursPerDay: 8, timelineDays: new Map<number, number>() }
+
+  return {
+    projectId,
+    rtId,
+    applyStatus: applyResponse.status,
+    ...capacity,
+    identities: await fetchRoleIdentities(rtId),
+  }
+}
+
+/**
+ * Assert resolved persisted weekly capacity equals the reviewed envelope for
+ * every week the plan covers, with the timeline GET agreeing for every week
+ * it reports.
+ */
+function expectReviewedCapacityParity(
+  result: {
+    hoursByWeek: Map<number, number>
+    hoursPerDay: number
+    timelineDays: Map<number, number>
+  },
+  envelope: Array<{ startWeek: number; endWeek: number; headcount: number }>,
+): void {
+  const expected = expectedCapacityDaysByWeek(envelope)
+  expect(expected.size).toBeGreaterThan(0)
+  expect(result.hoursByWeek.size).toBeGreaterThan(0)
+  let timelineRowsChecked = 0
+  for (const [week, days] of expected) {
+    const resolvedHours = result.hoursByWeek.get(week)
+    expect(resolvedHours, `week ${week} resolved capacity`).toBeDefined()
+    expect(resolvedHours!, `week ${week} resolved capacity`).toBeCloseTo(days * result.hoursPerDay, 6)
+    const timelineDays = result.timelineDays.get(week)
+    if (timelineDays !== undefined) {
+      timelineRowsChecked++
+      expect(timelineDays, `week ${week} timeline capacity days`).toBeCloseTo(days, 6)
+    }
+  }
+  expect(timelineRowsChecked, 'timeline capacity rows cross-checked').toBeGreaterThan(0)
+}
+
+describeIf('Scenario 8 — apply reconciles protected named-resource capacity', () => {
+  it('Case A — one full-time explicit person: planner fills only the shortfall', async () => {
+    if (!runIntegration) return
+    const envelope = [{ periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 2 }]
+    const result = await applyProtectedCapacityCase({
+      suffix: 'protected-full-time',
+      roleName: 'Protected Full Time Dev',
+      people: [{ id: 'nr-pft-1', name: 'Protected FT 1', defaultPercent: 100 }],
+      envelope,
+    })
+    expect(result.applyStatus).toBe(201)
+
+    // ── Reviewed envelope persists exactly ─────────────────────────────
+    expectReviewedCapacityParity(result, envelope)
+
+    // ── Protected person's profile is unchanged ────────────────────────
+    const person = result.identities.rows.find(row => row.id === 'nr-pft-1')
+    expect(person).toBeDefined()
+    expect(person!.ownerKind).toBe('NAMED_PERSON')
+    expect(person!.source).toBe('FIXED')
+    expect(person!.defaultPercent).toBe(100)
+    expect(person!.segments).toEqual([])
+
+    // ── Only the remaining shortfall became planner-managed capacity ───
+    const planner = plannerIdentities(result.identities.rows)
+    expect(planner).toHaveLength(1)
+    expect(planner[0].segments).toEqual([
+      { startWeek: 0, endWeek: 7, capacityPercent: 100 },
+    ])
+
+    // ── count stays coherent with the persisted identities ─────────────
+    expect(result.identities.rows).toHaveLength(2)
+    expect(result.identities.count).toBe(2)
+  })
+
+  it('Case B — fractional explicit person: shortfall is filled fractionally, not by whole-person subtraction', async () => {
+    if (!runIntegration) return
+    const envelope = [{ periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 2 }]
+    const result = await applyProtectedCapacityCase({
+      suffix: 'protected-fractional',
+      roleName: 'Protected Fractional Dev',
+      people: [{ id: 'nr-pfr-1', name: 'Protected Half 1', defaultPercent: 50 }],
+      envelope,
+    })
+    expect(result.applyStatus).toBe(201)
+
+    expectReviewedCapacityParity(result, envelope)
+
+    const person = result.identities.rows.find(row => row.id === 'nr-pfr-1')
+    expect(person!.ownerKind).toBe('NAMED_PERSON')
+    expect(person!.defaultPercent).toBe(50)
+
+    // 2 FTE envelope − 0.5 FTE protected = 1.5 FTE shortfall → two slots
+    // (100% + 50%), never a whole-person subtraction (which would leave 1).
+    const planner = plannerIdentities(result.identities.rows)
+    expect(planner).toHaveLength(2)
+    const plannedPercents = planner
+      .map(row => row.segments.reduce((sum, segment) => sum + segment.capacityPercent, 0))
+      .sort((a, b) => b - a)
+    expect(plannedPercents).toEqual([100, 50])
+
+    expect(result.identities.rows).toHaveLength(3)
+    expect(result.identities.count).toBe(3)
+  })
+
+  it('Case C — windowed explicit person: shortfall differs inside and outside the window', async () => {
+    if (!runIntegration) return
+    const envelope = [{ periodIndex: 0, startWeek: 0, endWeek: 12, headcount: 2 }]
+    const result = await applyProtectedCapacityCase({
+      suffix: 'protected-windowed',
+      roleName: 'Protected Windowed Dev',
+      people: [{
+        id: 'nr-pwd-1',
+        name: 'Protected Window 1',
+        defaultPercent: 100,
+        segments: [{ startWeek: 0, endWeek: 3, capacityPercent: 100 }],
+      }],
+      envelope,
+    })
+    expect(result.applyStatus).toBe(201)
+
+    // Inside the window protected capacity covers 1 FTE, outside it covers
+    // none — the resolved total is the reviewed envelope in both regimes.
+    expectReviewedCapacityParity(result, envelope)
+
+    const person = result.identities.rows.find(row => row.id === 'nr-pwd-1')
+    expect(person!.ownerKind).toBe('NAMED_PERSON')
+    expect(person!.source).toBe('MANUAL')
+    expect(person!.segments).toEqual([
+      { startWeek: 0, endWeek: 3, capacityPercent: 100 },
+    ])
+
+    const planner = plannerIdentities(result.identities.rows)
+    expect(planner).toHaveLength(2)
+    expect(planner.map(row => row.segments).sort((a, b) => b[0].endWeek - a[0].endWeek)).toEqual([
+      [{ startWeek: 0, endWeek: 11, capacityPercent: 100 }],
+      [{ startWeek: 4, endWeek: 11, capacityPercent: 100 }],
+    ])
+
+    expect(result.identities.count).toBe(result.identities.rows.length)
+  })
+
+  it('Case D — no pre-existing person: reviewed capacity still persists exactly', async () => {
+    if (!runIntegration) return
+    const envelope = [{ periodIndex: 0, startWeek: 0, endWeek: 8, headcount: 1.5 }]
+    const result = await applyProtectedCapacityCase({
+      suffix: 'no-protected-person',
+      roleName: 'Unprotected Dev',
+      people: [],
+      envelope,
+    })
+    expect(result.applyStatus).toBe(201)
+
+    expectReviewedCapacityParity(result, envelope)
+
+    const planner = plannerIdentities(result.identities.rows)
+    expect(planner).toHaveLength(2)
+    const plannedPercents = planner
+      .map(row => row.segments.reduce((sum, segment) => sum + segment.capacityPercent, 0))
+      .sort((a, b) => b - a)
+    expect(plannedPercents).toEqual([100, 50])
+    expect(result.identities.count).toBe(2)
   })
 })
