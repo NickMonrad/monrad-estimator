@@ -176,6 +176,21 @@ All levels support full CRUD (create, read, update, delete) and drag-and-drop re
 | Duration days | Auto-calculated from hours ÷ hoursPerDay; can be manually overridden |
 | Resource type | Optional link to a project-scoped resource type |
 
+### Creating a Feature
+
+Every Epic's Feature list offers two creation paths side by side:
+
+| Action | Creates |
+|---|---|
+| `+ Add feature` | A blank Feature (name, optional description and assumptions) — the manual path |
+| `Add from template` | A Feature plus a Story generated from a chosen template and the template's Tasks |
+
+**Add from template** collects the Feature name, template, complexity (**XS / S / M / L / XL**) and Story name; the Feature name and Story name must be non-empty before creation. It then calls the existing `POST /epics/:epicId/features` and `POST /api/features/:featureId/apply-template` endpoints in sequence, so the generated Story and Tasks inherit the standard template semantics — template description/assumptions, task description/assumptions, the chosen tier's hours, duration calculation, resource-type name matching, `appliedTemplateId` and `appliedTemplateComplexity`.
+
+If applying the template fails after the Feature was created, the flow best-effort deletes that newly created empty Feature (cascading to any partially created Story/Tasks) and reports the template failure instead of success, saying so explicitly when the empty Feature could not be removed. Project/backlog data refreshes once after the whole workflow settles.
+
+The per-Feature **+ Template** action described under [Template Library](#template-library) is unchanged: it still applies a template to an already-created Feature.
+
 ### Drag-and-Drop Reordering
 
 - Epics, Features, Stories, and Tasks can each be reordered within their parent via drag-and-drop
@@ -328,6 +343,8 @@ A **Feature Template** is a reusable set of tasks that can be applied to any Use
 6. Each task's `hoursEffort` is taken from the chosen complexity tier
 7. Tasks are auto-matched to project resource types by name (case-insensitive); unmatched tasks have no resource type assigned
 8. The story records `appliedTemplateId` and the chosen complexity as `appliedTemplateComplexity` for future refresh
+
+The same semantics back the **Add from template** creation path, which creates the Feature and applies the template in one step (see [Creating a Feature](#creating-a-feature)); it requires a story name, and the complexity is always an explicit choice.
 
 ### Refreshing from Template
 
