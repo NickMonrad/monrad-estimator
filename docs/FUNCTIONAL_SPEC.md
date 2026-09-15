@@ -215,7 +215,7 @@ All levels support full CRUD (create, read, update, delete) and drag-and-drop re
 
 **File naming:** `{CustomerName} - {ProjectName} - {YYYY-MM-DD}.csv`
 
-**Column structure (13 columns):**
+**Column structure:**
 
 | Column | Description |
 |---|---|
@@ -225,6 +225,7 @@ All levels support full CRUD (create, read, update, delete) and drag-and-drop re
 | `Story` | Story name |
 | `Task` | Task name |
 | `Template` | Applied template name (Story rows only) |
+| `TemplateSize` | Recorded template complexity as `XS` / `Small` / `Medium` / `Large` / `XL` (Story rows only, blank when unrecorded) |
 | `ResourceType` | Resource type name (Task rows only) |
 | `HoursEffort` | Numeric hours (Task rows only) |
 | `DurationDays` | Numeric days (Task rows only) |
@@ -281,7 +282,7 @@ Rows are matched by their full ancestry path (Epic name → Feature name → Sto
 - Story: matched by (Epic name, Feature name, Story name)
 - Task: matched by (Epic name, Feature name, Story name, Task name)
 
-Updates apply: `hoursEffort`, `durationDays`, `resourceType`, `isActive` (from status columns), `description`, `assumptions`, `appliedTemplate`.
+Updates apply: `hoursEffort`, `durationDays`, `resourceType`, `isActive` (from status columns), `description`, `assumptions`, `appliedTemplate` (with `appliedTemplateComplexity` mapped from `TemplateSize` when the row names a template).
 
 ### Backwards Compatibility
 
@@ -326,16 +327,26 @@ A **Feature Template** is a reusable set of tasks that can be applied to any Use
 5. A new User Story is created under the Feature, with one Task per template task
 6. Each task's `hoursEffort` is taken from the chosen complexity tier
 7. Tasks are auto-matched to project resource types by name (case-insensitive); unmatched tasks have no resource type assigned
-8. The story records `appliedTemplateId` for future refresh
+8. The story records `appliedTemplateId` and the chosen complexity as `appliedTemplateComplexity` for future refresh
 
 ### Refreshing from Template
 
 - Available on any story with an `appliedTemplateId`
 - Compares the story's current tasks against the template's tasks by name
-- **Matching tasks:** hours, duration days, and resource type are updated from the template
+- **Matching tasks:** description, assumptions, hours, duration days, and resource type are updated from the template
 - **New template tasks:** added to the story
 - **Tasks not in template:** left untouched (not deleted)
+- The complexity chosen for the refresh is stored as `appliedTemplateComplexity`
 - Auto-snapshot is taken before the refresh
+
+### Refreshing Every Template-backed Story
+
+The Backlog page exposes one **Refresh templates** action for the whole project. It is shown only when the loaded backlog contains stories with an `appliedTemplateId`.
+
+- Each story refreshes at its own recorded `appliedTemplateComplexity`, so mixed sizes in one project stay mixed
+- Stories recorded before the complexity existed have no stored value; the dialog lists them together and requires an explicit complexity for each before the batch can start — a complexity is never inferred from task hours, story names or feature size
+- The batch calls the single-story refresh endpoint once per story, sequentially; a failing story does not stop the remaining ones and partial failure is reported with the failing story names
+- The existing per-story **↺ Refresh** control is unchanged
 
 ### Template CSV Export
 
@@ -1044,11 +1055,12 @@ Five tiers: XS (Extra Small), S (Small), M (Medium), L (Large), XL (Extra Large)
 
 Refreshing a story from its template:
 1. **Matches** existing tasks to template tasks by exact name comparison
-2. **Updates** matched tasks: `hoursEffort`, `durationDays`, resource type name
+2. **Updates** matched tasks: `description`, `assumptions`, `hoursEffort`, `durationDays`, resource type name
 3. **Adds** any new tasks present in the template but not in the story
 4. **Does not delete** tasks in the story that are not in the template
+5. **Records** the complexity used for the refresh on the story, so a later project-level refresh reuses it
 
-This allows manual customisation of a story to survive a refresh as long as task names differ from template task names.
+This allows manual customisation of a story to survive a refresh as long as task names differ from template task names. The Backlog's **Refresh templates** action applies this same contract to every template-backed story in the project, one story at a time.
 
 ### Snapshot Rollback (Cascade Delete + Recreate)
 

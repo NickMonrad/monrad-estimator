@@ -269,7 +269,7 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
-### `templates.spec.ts` — Template Library (6 tests)
+### `templates.spec.ts` — Template Library (8 tests)
 
 #### `Template Library` describe block (5 tests)
 
@@ -286,6 +286,13 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 | Test | Description |
 |------|-------------|
 | propagates rich-text template metadata through apply and refresh | Authors template description/assumptions and task description/assumptions with the rich-text editors, verifies the saved metadata renders as sanitised content rather than raw markup, applies the template to a feature, confirms the generated Story and Task carry the template metadata via the backlog CSV export, edits the template and task metadata, adds a manual task to the generated Story, refreshes the Story from the template, and confirms the Story and name-matched Task metadata follow the template while the manual task survives |
+
+#### `Project-level Refresh templates` describe block (2 tests — issue #237)
+
+| Test | Description |
+|------|-------------|
+| refreshes every template-backed story at its own recorded complexity | Creates a template with distinct XS–XL hours, applies it to two Stories as S and L, changes the template's assumptions and task description, adds a manual task to one Story, then runs the single Backlog **Refresh templates** action and verifies through the CSV export that each Story kept its own tier (2h vs 8h), the #168 metadata propagated and the manual task survived |
+| requires a complexity choice for a template-backed story that has none | Imports a Story row that names a template without a `TemplateSize` (a story with no recorded complexity), then verifies the Backlog **Refresh templates** dialog blocks the refresh until a complexity is chosen, and that the chosen tier is persisted and round-trips through the CSV `TemplateSize` column |
 
 ---
 

@@ -54,6 +54,7 @@ router.post('/:featureId/apply-template', asyncHandler(async (req: AuthRequest, 
       featureId,
       order: existingStories.length,
       appliedTemplateId: templateId,
+      appliedTemplateComplexity: complexity,
     },
   })
 
@@ -129,7 +130,11 @@ router.post('/:featureId/refresh-template/:storyId', asyncHandler(async (req: Au
   // template-owned effort/duration/resource semantics of refresh.
   await prisma.userStory.update({
     where: { id: storyId },
-    data: { description: template.description, assumptions: template.assumptions },
+    data: {
+      description: template.description,
+      assumptions: template.assumptions,
+      appliedTemplateComplexity: complexity,
+    },
   })
 
   // Update hours/days and resource type on existing matching tasks

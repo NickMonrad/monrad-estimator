@@ -297,6 +297,31 @@ describe('POST /api/features/:featureId/apply-template metadata propagation', ()
 
     expect(prisma.feature.update).not.toHaveBeenCalled()
   })
+
+  it('records the selected complexity on the generated story', async () => {
+    mockApplySuccess()
+
+    await request(app)
+      .post('/api/features/feat-1/apply-template')
+      .set('Authorization', authHeader)
+      .send({ templateId: 'tpl-1', complexity: 'LARGE' })
+
+    expect(prisma.userStory.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ appliedTemplateId: 'tpl-1', appliedTemplateComplexity: 'LARGE' }),
+    }))
+  })
+
+  it('rejects a complexity outside the supported tiers', async () => {
+    mockApplySuccess()
+
+    const res = await request(app)
+      .post('/api/features/feat-1/apply-template')
+      .set('Authorization', authHeader)
+      .send({ templateId: 'tpl-1', complexity: 'HUGE' })
+
+    expect(res.status).toBe(400)
+    expect(prisma.userStory.create).not.toHaveBeenCalled()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -342,7 +367,7 @@ describe('POST /api/features/:featureId/refresh-template/:storyId metadata propa
     expect(res.status).toBe(200)
     expect(prisma.userStory.update).toHaveBeenCalledWith({
       where: { id: 'story-new' },
-      data: { description: TEMPLATE_DESCRIPTION, assumptions: TEMPLATE_ASSUMPTIONS },
+      data: { description: TEMPLATE_DESCRIPTION, assumptions: TEMPLATE_ASSUMPTIONS, appliedTemplateComplexity: 'SMALL' },
     })
   })
 
@@ -389,6 +414,32 @@ describe('POST /api/features/:featureId/refresh-template/:storyId metadata propa
     expect(res.body.updated).toBe(1)
     expect(prisma.task.delete).not.toHaveBeenCalled()
     expect(prisma.task.update).not.toHaveBeenCalledWith(expect.objectContaining({ where: { id: manualTask.id } }))
+  })
+
+  it('persists the complexity chosen for the refresh', async () => {
+    mockRefreshSuccess()
+
+    await request(app)
+      .post('/api/features/feat-1/refresh-template/story-new')
+      .set('Authorization', authHeader)
+      .send({ complexity: 'EXTRA_LARGE' })
+
+    expect(prisma.userStory.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ appliedTemplateComplexity: 'EXTRA_LARGE' }),
+    }))
+  })
+
+  it('rejects a complexity outside the supported tiers without writing', async () => {
+    mockRefreshSuccess()
+
+    const res = await request(app)
+      .post('/api/features/feat-1/refresh-template/story-new')
+      .set('Authorization', authHeader)
+      .send({ complexity: 'medium' })
+
+    expect(res.status).toBe(400)
+    expect(prisma.userStory.update).not.toHaveBeenCalled()
+    expect(prisma.task.update).not.toHaveBeenCalled()
   })
 })
 

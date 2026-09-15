@@ -65,6 +65,7 @@ export interface UserStory {
   order: number
   featureId: string
   appliedTemplateId?: string | null
+  appliedTemplateComplexity?: string | null
   isActive?: boolean
   tasks: Task[]
 }

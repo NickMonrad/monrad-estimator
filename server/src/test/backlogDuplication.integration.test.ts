@@ -93,7 +93,7 @@ async function createFixture(): Promise<Fixture> {
   const story = await prisma.userStory.create({
     data: {
       name: 'Source story', description: 'story description', assumptions: 'story assumptions', order: 0,
-      isActive: false, appliedTemplateId: templateId, featureId: feature.id,
+      isActive: false, appliedTemplateId: templateId, appliedTemplateComplexity: 'MEDIUM', featureId: feature.id,
     },
   })
   const siblingStory = await prisma.userStory.create({ data: { name: 'Unrelated story', order: 1, featureId: feature.id } })
@@ -174,7 +174,7 @@ describeIf('backlog subtree duplication PostgreSQL integration', () => {
     const storyResponse = await duplicate(fixture.projectId, 'story', fixture.storyId)
     expect(storyResponse.status).toBe(201)
     const storyCopy = await prisma.userStory.findUnique({ where: { id: storyResponse.body.id }, include: { tasks: true } })
-    expect(storyCopy).toMatchObject({ name: 'Copy of Source story', featureId: fixture.featureId, description: 'story description', assumptions: 'story assumptions', isActive: false, appliedTemplateId: fixture.templateId })
+    expect(storyCopy).toMatchObject({ name: 'Copy of Source story', featureId: fixture.featureId, description: 'story description', assumptions: 'story assumptions', isActive: false, appliedTemplateId: fixture.templateId, appliedTemplateComplexity: 'MEDIUM' })
     expect(storyCopy?.tasks).toHaveLength(3)
     expect(storyCopy?.tasks.every(task => task.userStoryId === storyCopy.id)).toBe(true)
     expect(storyCopy?.tasks.some(task => task.id === fixture.taskId)).toBe(false)
@@ -185,6 +185,7 @@ describeIf('backlog subtree duplication PostgreSQL integration', () => {
     expect(featureCopy).toMatchObject({ name: 'Copy of Source feature', epicId: fixture.epicId, description: 'feature description', assumptions: 'feature assumptions', featureMode: 'parallel', timelineColour: '#123456', isActive: false })
     expect(featureCopy?.timelineStartWeek).toBeNull()
     expect(featureCopy?.userStories.every(story => story.featureId === featureCopy.id)).toBe(true)
+    expect(featureCopy?.userStories.map(story => story.appliedTemplateComplexity)).toContain('MEDIUM')
 
     const epicResponse = await duplicate(fixture.projectId, 'epic', fixture.epicId)
     expect(epicResponse.status).toBe(201)
@@ -194,6 +195,7 @@ describeIf('backlog subtree duplication PostgreSQL integration', () => {
     expect(epicCopy?.features).toHaveLength(3)
     expect(epicCopy?.features.every(feature => feature.epicId === epicCopy.id)).toBe(true)
     expect(epicCopy?.features.flatMap(feature => feature.userStories).every(story => story.featureId !== fixture.featureId)).toBe(true)
+    expect(epicCopy?.features.flatMap(feature => feature.userStories).map(story => story.appliedTemplateComplexity)).toContain('MEDIUM')
     expect(epicCopy?.features.flatMap(feature => feature.userStories).flatMap(story => story.tasks).every(task => task.resourceTypeId === fixture.resourceTypeId || task.resourceTypeId === null)).toBe(true)
 
     const countsAfter = await excludedCounts(fixture.projectId)
@@ -213,6 +215,7 @@ describeIf('backlog subtree duplication PostgreSQL integration', () => {
     expect(await prisma.userStory.findUnique({ where: { id: fixture.storyId } })).toMatchObject({
       name: sourceStoryBefore?.name, description: sourceStoryBefore?.description, assumptions: sourceStoryBefore?.assumptions,
       order: sourceStoryBefore?.order, isActive: sourceStoryBefore?.isActive, appliedTemplateId: sourceStoryBefore?.appliedTemplateId,
+      appliedTemplateComplexity: sourceStoryBefore?.appliedTemplateComplexity,
     })
     expect(await prisma.task.findUnique({ where: { id: fixture.taskId } })).toMatchObject({
       name: sourceTaskBefore?.name, description: sourceTaskBefore?.description, assumptions: sourceTaskBefore?.assumptions,

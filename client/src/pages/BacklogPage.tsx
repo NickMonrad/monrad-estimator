@@ -16,6 +16,7 @@ import { useReorderEpics, useReorderFeatures, useReorderStories, useReorderTasks
 import type { Epic, Feature, UserStory, Task, ResourceType, Project } from '../types/backlog'
 import FeatureList from '../components/backlog/FeatureList'
 import CsvImportModal from '../components/backlog/CsvImportModal'
+import RefreshTemplatesModal from '../components/backlog/RefreshTemplatesModal'
 import BacklogGrid from '../components/backlog/BacklogGrid'
 import { getEpicColour, type EpicColour } from '../lib/epicColours'
 import RichTextEditor from '../components/shared/RichTextEditor'
@@ -31,6 +32,7 @@ export default function BacklogPage() {
   const [epicForm, setEpicForm] = useState({ name: '', description: '', assumptions: '' })
   const [showHistory, setShowHistory] = useState(false)
   const [showCsvImport, setShowCsvImport] = useState(false)
+  const [showRefreshTemplates, setShowRefreshTemplates] = useState(false)
   const [showGrid, setShowGrid] = useState(false)
   const [duplicateError, setDuplicateError] = useState<string | null>(null)
 
@@ -68,6 +70,22 @@ export default function BacklogPage() {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
 
   const hoursPerDay = project?.hoursPerDay ?? 7.6
+
+  /** Every Story in the loaded backlog that carries an applied template (issue #237). */
+  const templateRefreshTargets = epics.flatMap(epic =>
+    epic.features.flatMap(feature =>
+      feature.userStories
+        .filter(story => story.appliedTemplateId)
+        .map(story => ({
+          featureId: feature.id,
+          storyId: story.id,
+          storyName: story.name,
+          featureName: feature.name,
+          epicName: epic.name,
+          complexity: story.appliedTemplateComplexity ?? null,
+        })),
+    ),
+  )
 
   // Full invalidation: for mutations that affect effort/hours/active-status
   const invalidate = () => {
@@ -295,6 +313,12 @@ export default function BacklogPage() {
             className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
             ⬇ Export CSV
           </button>
+          {templateRefreshTargets.length > 0 && (
+            <button onClick={() => setShowRefreshTemplates(true)}
+              className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+              ↺ Refresh templates
+            </button>
+          )}
           <button onClick={() => setShowHistory(h => !h)}
             className="border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
             🕐 History
@@ -363,6 +387,13 @@ export default function BacklogPage() {
           projectId={projectId!}
           onClose={() => setShowCsvImport(false)}
           onImported={invalidate}
+        />
+      )}
+      {showRefreshTemplates && (
+        <RefreshTemplatesModal
+          targets={templateRefreshTargets}
+          onClose={() => setShowRefreshTemplates(false)}
+          onCompleted={invalidate}
         />
       )}
     </AppLayout>

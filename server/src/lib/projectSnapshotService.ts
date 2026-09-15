@@ -344,7 +344,7 @@ export async function restoreSnapshotCommonState(
       featureIdMap.set(feature.id, newFeature.id)
       for (const story of feature.userStories) {
         const newStory = await tx.userStory.create({
-      data: { name: story.name, description: story.description, assumptions: story.assumptions, order: story.order, featureId: newFeature.id, appliedTemplateId: story.appliedTemplateId, isActive: story.isActive ?? true },
+      data: { name: story.name, description: story.description, assumptions: story.assumptions, order: story.order, featureId: newFeature.id, appliedTemplateId: story.appliedTemplateId, appliedTemplateComplexity: story.appliedTemplateComplexity ?? null, isActive: story.isActive ?? true },
         })
         storyIdMap.set(story.id, newStory.id)
         for (const task of story.tasks) {
@@ -721,7 +721,7 @@ export async function rollbackProjectSnapshot({
           })
           for (const story of feature.userStories) {
             const newStory = await tx.userStory.create({
-              data: { name: story.name, description: story.description, assumptions: story.assumptions, order: story.order, featureId: newFeature.id, appliedTemplateId: story.appliedTemplateId, isActive: story.isActive ?? true },
+              data: { name: story.name, description: story.description, assumptions: story.assumptions, order: story.order, featureId: newFeature.id, appliedTemplateId: story.appliedTemplateId, appliedTemplateComplexity: story.appliedTemplateComplexity ?? null, isActive: story.isActive ?? true },
             })
             for (const task of story.tasks) {
               const taskRtId = task.resourceType?.name

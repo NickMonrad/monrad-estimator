@@ -81,7 +81,7 @@ describe('POST /api/projects/:projectId/backlog/duplicate', () => {
     const tx = makeTx()
     tx.userStory.findFirst.mockResolvedValue({
       id: 'story-1', name: 'Source story', description: 'desc', assumptions: 'assume', order: 2,
-      isActive: false, appliedTemplateId: 'template-1', featureId: 'feature-1',
+      isActive: false, appliedTemplateId: 'template-1', appliedTemplateComplexity: 'LARGE', featureId: 'feature-1',
       tasks: [
         { id: 'task-1', name: 'Task one', description: null, assumptions: null, hoursEffort: 4, durationDays: 1.5, order: 0, userStoryId: 'story-1', resourceTypeId: 'rt-1' },
         { id: 'task-2', name: 'Task two', description: 'two', assumptions: 'two', hoursEffort: 0, durationDays: null, order: 1, userStoryId: 'story-1', resourceTypeId: null },
@@ -98,7 +98,7 @@ describe('POST /api/projects/:projectId/backlog/duplicate', () => {
     expect(tx.userStory.updateMany).toHaveBeenCalledWith({ where: { featureId: 'feature-1', order: { gt: 2 } }, data: { order: { increment: 1 } } })
     expect(tx.userStory.create).toHaveBeenCalledWith({ data: {
       name: 'Copy of Source story', description: 'desc', assumptions: 'assume', isActive: false,
-      appliedTemplateId: 'template-1', featureId: 'feature-1', order: 3,
+      appliedTemplateId: 'template-1', appliedTemplateComplexity: 'LARGE', featureId: 'feature-1', order: 3,
     } })
     expect(tx.task.create).toHaveBeenNthCalledWith(1, { data: expect.objectContaining({ name: 'Task one', userStoryId: 'story-copy', durationDays: 1.5, resourceTypeId: 'rt-1' }) })
     expect(tx.task.create).toHaveBeenNthCalledWith(2, { data: expect.objectContaining({ name: 'Task two', userStoryId: 'story-copy', durationDays: null, resourceTypeId: null }) })
@@ -111,7 +111,7 @@ describe('POST /api/projects/:projectId/backlog/duplicate', () => {
       featureMode: 'parallel', isActive: false, timelineColour: '#123456', timelineStartWeek: 9, epicId: 'epic-1',
       userStories: [{
         id: 'story-1', name: 'Story', description: null, assumptions: null, order: 0, isActive: true,
-        appliedTemplateId: null, featureId: 'feature-1', tasks: [],
+        appliedTemplateId: null, appliedTemplateComplexity: null, featureId: 'feature-1', tasks: [],
       }],
     })
     useTx(tx)
@@ -126,7 +126,7 @@ describe('POST /api/projects/:projectId/backlog/duplicate', () => {
       name: 'Copy of Source feature', description: 'desc', assumptions: 'assume', featureMode: 'parallel',
       timelineColour: '#123456', isActive: false, epicId: 'epic-1', order: 2,
     } })
-    expect(tx.userStory.create).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Story', featureId: 'feature-copy' }) })
+    expect(tx.userStory.create).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Story', featureId: 'feature-copy', appliedTemplateComplexity: null }) })
     expect(tx.feature.updateMany).toHaveBeenCalledWith({ where: { epicId: 'epic-1', order: { gt: 1 } }, data: { order: { increment: 1 } } })
   })
 
@@ -140,7 +140,7 @@ describe('POST /api/projects/:projectId/backlog/duplicate', () => {
         isActive: true, timelineColour: '#abcdef', timelineStartWeek: 3, epicId: 'epic-1',
         userStories: [{
           id: 'story-1', name: 'Story', description: null, assumptions: null, order: 0, isActive: true,
-          appliedTemplateId: 'template-1', featureId: 'feature-1',
+          appliedTemplateId: 'template-1', appliedTemplateComplexity: 'SMALL', featureId: 'feature-1',
           tasks: [{ id: 'task-1', name: 'Task', description: null, assumptions: null, hoursEffort: 8, durationDays: 2, order: 0, userStoryId: 'story-1', resourceTypeId: 'rt-1' }],
         }],
       }],
@@ -158,7 +158,7 @@ describe('POST /api/projects/:projectId/backlog/duplicate', () => {
       scheduleMode: 'parallel', isActive: false, projectId: 'project-1', order: 1,
     } })
     expect(tx.feature.create).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Feature', epicId: 'epic-copy', timelineColour: '#abcdef' }) })
-    expect(tx.userStory.create).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Story', featureId: 'feature-copy', appliedTemplateId: 'template-1' }) })
+    expect(tx.userStory.create).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Story', featureId: 'feature-copy', appliedTemplateId: 'template-1', appliedTemplateComplexity: 'SMALL' }) })
     expect(tx.task.create).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'Task', userStoryId: 'story-copy', durationDays: 2, resourceTypeId: 'rt-1' }) })
     expect(tx.epic.create.mock.calls[0][0].data).not.toHaveProperty('timelineStartWeek')
     expect(tx.feature.create.mock.calls[0][0].data).not.toHaveProperty('timelineStartWeek')

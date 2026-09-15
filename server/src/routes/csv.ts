@@ -100,6 +100,36 @@ function pickHours(
   }
 }
 
+/**
+ * Story `UserStory.appliedTemplateComplexity` ↔ backlog CSV `TemplateSize`
+ * (issue #237). The CSV column keeps its existing labels — no new column.
+ */
+const TEMPLATE_SIZE_BY_COMPLEXITY: Record<string, string> = {
+  EXTRA_SMALL: 'XS',
+  SMALL: 'Small',
+  MEDIUM: 'Medium',
+  LARGE: 'Large',
+  EXTRA_LARGE: 'XL',
+}
+
+const COMPLEXITY_BY_TEMPLATE_SIZE: Record<string, string> = {
+  xs: 'EXTRA_SMALL',
+  small: 'SMALL',
+  medium: 'MEDIUM',
+  large: 'LARGE',
+  xl: 'EXTRA_LARGE',
+}
+
+/** Export a stored complexity as its canonical `TemplateSize` label (blank when unrecorded). */
+function templateSizeLabel(complexity: string | null | undefined): string {
+  return complexity ? TEMPLATE_SIZE_BY_COMPLEXITY[complexity] ?? '' : ''
+}
+
+/** Import a `TemplateSize` label as the stored complexity (null when blank or unrecognised). */
+function complexityFromTemplateSize(size: string | null | undefined): string | null {
+  return size ? COMPLEXITY_BY_TEMPLATE_SIZE[size.toLowerCase()] ?? null : null
+}
+
 /** Prevent CSV formula injection by prefixing dangerous characters with a single quote */
 export function sanitizeCsvCell(value: string): string {
   if (/^[=+\-@\t\r]/.test(value)) {
@@ -224,7 +254,7 @@ router.get('/export-csv', asyncHandler(async (req: AuthRequest, res: Response) =
           rows.push([
             'Story', sanitizeCsvCell(epic.name), sanitizeCsvCell(feature.name), sanitizeCsvCell(story.name), '',
             sanitizeCsvCell(story.appliedTemplate?.name ?? ''),
-            '', // TemplateSize — UserStory has no sizingTier field; exported blank
+            templateSizeLabel(story.appliedTemplateComplexity),
             '', '', '',
             sanitizeCsvCell(story.description ?? ''), sanitizeCsvCell(story.assumptions ?? ''),
             '', '', story.isActive ? 'active' : 'inactive',
@@ -657,6 +687,10 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
           : null
         const appliedTemplateId = templateRecord?.id ?? null
         const templateSize = isStoryRow ? (row.templateSize ?? '') : ''
+        // A size only describes an applied template's tier — never record one without a template.
+        const appliedTemplateComplexity = appliedTemplateId
+          ? complexityFromTemplateSize(templateSize)
+          : null
 
         let story = await tx.userStory.findFirst({ where: { featureId, name: row.story } })
         if (!story) {
@@ -668,6 +702,7 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
               order: storyCount,
               isActive: isStoryRow ? row.storyStatus : true,
               appliedTemplateId,
+              appliedTemplateComplexity: isStoryRow ? appliedTemplateComplexity : null,
               description: isStoryRow ? (row.description || null) : null,
               assumptions: isStoryRow ? (row.assumptions || null) : null,
             },
@@ -679,7 +714,7 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
             where: { id: story.id },
             data: {
               isActive: row.storyStatus,
-              ...(appliedTemplateId !== null ? { appliedTemplateId } : {}),
+              ...(appliedTemplateId !== null ? { appliedTemplateId, appliedTemplateComplexity } : {}),
               ...(row.type === 'Story' ? {
                 description: row.description || null,
                 assumptions: row.assumptions || null,
