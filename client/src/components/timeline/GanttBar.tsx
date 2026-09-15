@@ -103,6 +103,7 @@ export default function GanttBar({
           x2={totalWeeks * colW} y2={y + EPIC_ROW_H}
           stroke={svgColors.gridLine}
           strokeWidth={1}
+          style={{ pointerEvents: 'none' }}
         />
       </g>
     )
@@ -215,6 +216,7 @@ export default function GanttBar({
           x2={totalWeeks * colW} y2={y + FEAT_ROW_H}
           stroke={svgColors.rowSep}
           strokeWidth={1}
+          style={{ pointerEvents: 'none' }}
         />
       </g>
     )
@@ -260,6 +262,7 @@ export default function GanttBar({
         x2={totalWeeks * colW} y2={y + STORY_ROW_H}
         stroke={svgColors.rowSep}
         strokeWidth={1}
+        style={{ pointerEvents: 'none' }}
       />
     </g>
   )

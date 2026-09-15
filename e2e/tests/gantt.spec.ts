@@ -147,6 +147,49 @@ async function dragDependencyHandle(page: Page, handle: Locator, targetFeature: 
   await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 5 })
   await page.mouse.up()
 }
+
+/** Screen-space point at the middle of a dependency connector. */
+async function dependencyConnectorMidpoint(connector: Locator) {
+  await connector.scrollIntoViewIfNeeded()
+  return connector.evaluate(element => {
+    const path = element as SVGPathElement
+    const midpoint = path.getPointAtLength(path.getTotalLength() / 2)
+    const matrix = path.getScreenCTM()
+    if (!matrix) throw new Error('Dependency connector geometry is unavailable')
+    const screenPoint = new DOMPoint(midpoint.x, midpoint.y).matrixTransform(matrix)
+    return { x: screenPoint.x, y: screenPoint.y }
+  })
+}
+
+/**
+ * Find a point on the connector that the browser actually hit-tests to it. A
+ * connector spanning an intervening feature row is partly covered by that
+ * feature's opaque bar, so its midpoint is not always clickable.
+ */
+async function visibleConnectorPoint(connector: Locator, label: string) {
+  await connector.scrollIntoViewIfNeeded()
+  return connector.evaluate((element, ariaLabel) => {
+    const path = element as SVGPathElement
+    const matrix = path.getScreenCTM()
+    if (!matrix) throw new Error('Dependency connector geometry is unavailable')
+    const total = path.getTotalLength()
+    for (let fraction = 0.5; fraction <= 0.9; fraction += 0.02) {
+      const point = path.getPointAtLength(total * fraction)
+      const screenPoint = new DOMPoint(point.x, point.y).matrixTransform(matrix)
+      if (document.elementFromPoint(screenPoint.x, screenPoint.y)?.getAttribute('aria-label') === ariaLabel) {
+        return { x: screenPoint.x, y: screenPoint.y }
+      }
+    }
+    throw new Error('No clickable segment found on the dependency connector')
+  }, label)
+}
+
+/** Click the middle of a dependency connector. The connector is a bezier curve,
+ * so its bounding-box centre is not necessarily on the stroke. */
+async function clickDependencyConnector(page: Page, connector: Locator) {
+  const point = await dependencyConnectorMidpoint(connector)
+  await page.mouse.click(point.x, point.y)
+}
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -356,6 +399,129 @@ test.describe('Gantt Chart', () => {
     await dragDependencyHandle(page, source.getByRole('button', { name: 'Create dependency to this feature' }), target)
     await expect(page.getByRole('status')).toHaveText('Dependency created.')
     await expect(page.locator('[data-testid^="dependency-arrow-"]')).toBeVisible()
+  })
+
+  test('removes one feature dependency from its Gantt connector', async ({ page }) => {
+    test.setTimeout(90_000)
+    const { featureNames } = await setupTimeline(page, 3)
+    const [first, second, third] = featureNames
+    const projectId = new URL(page.url()).pathname.split('/')[2]
+
+    // Create A → B and A → C so one removal has to leave the other edge intact.
+    const sourceHandle = page
+      .locator(`[data-feature-name="${first}"]`)
+      .getByRole('button', { name: 'Create dependency from this feature' })
+    await dragDependencyHandle(page, sourceHandle, page.locator(`[data-feature-name="${second}"]`))
+    await expect(page.getByRole('status')).toHaveText('Dependency created.')
+    await dragDependencyHandle(page, sourceHandle, page.locator(`[data-feature-name="${third}"]`))
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(2)
+
+    const removedConnector = page.getByRole('button', { name: `Dependency ${first} → ${second}`, exact: true })
+    await expect(removedConnector).toBeVisible()
+
+    // Selecting the connector alone must not delete the dependency.
+    await clickDependencyConnector(page, removedConnector)
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(2)
+    const removeControl = page.getByRole('button', { name: `Remove dependency ${first} → ${second}`, exact: true })
+    await expect(removeControl).toBeVisible()
+
+    const removalResponse = page.waitForResponse(
+      response =>
+        new URL(response.url()).pathname.startsWith(`/api/projects/${projectId}/feature-dependencies/`) &&
+        response.request().method() === 'DELETE',
+      { timeout: 10_000 },
+    )
+    await removeControl.click()
+    expect((await removalResponse).status()).toBe(200)
+
+    await expect(page.getByRole('status')).toHaveText('Dependency removed.')
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: `Dependency ${first} → ${third}`, exact: true })).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible()
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: `Dependency ${first} → ${third}`, exact: true })).toBeVisible()
+
+    // The details panel still reports the surviving dependency.
+    await page.locator(`[title="${third}"]`).click()
+    await expect(page.getByTestId('dep-section')).toContainText(first)
+
+    // The remaining edge can be removed from the keyboard, and focus stays in the chart.
+    const remainingConnector = page.getByRole('button', { name: `Dependency ${first} → ${third}`, exact: true })
+    await remainingConnector.focus()
+    await page.keyboard.press('Enter')
+    const remainingRemoveControl = page.getByRole('button', { name: `Remove dependency ${first} → ${third}`, exact: true })
+    await expect(remainingRemoveControl).toBeVisible()
+    await remainingRemoveControl.focus()
+    await page.keyboard.press('Space')
+
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(0)
+    await expect(page.getByRole('group', { name: 'Timeline Gantt' })).toBeVisible()
+    expect(await page.evaluate(() => document.activeElement?.tagName.toLowerCase())).toBe('svg')
+  })
+
+  test('removes a dependency whose remove control sits under an intervening feature bar', async ({ page }) => {
+    test.setTimeout(90_000)
+    const { featureNames } = await setupTimeline(page, 3)
+    const [first, second, third] = featureNames
+    const projectId = new URL(page.url()).pathname.split('/')[2]
+
+    // A → B stays in place so the removal has to prove it targets one edge only.
+    const sourceHandle = page
+      .locator(`[data-feature-name="${first}"]`)
+      .getByRole('button', { name: 'Create dependency from this feature' })
+    await dragDependencyHandle(page, sourceHandle, page.locator(`[data-feature-name="${second}"]`))
+    await expect(page.getByRole('status')).toHaveText('Dependency created.')
+    await dragDependencyHandle(page, sourceHandle, page.locator(`[data-feature-name="${third}"]`))
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(2)
+
+    // A → C spans B's row, so its midpoint lands inside B's opaque bar: the
+    // remove control has to paint above that bar to stay clickable.
+    const spanning = page.getByRole('button', { name: `Dependency ${first} → ${third}`, exact: true })
+    const midpoint = await dependencyConnectorMidpoint(spanning)
+    const middleBarBox = await page.locator(`[data-feature-name="${second}"] rect`).first().boundingBox()
+    if (!middleBarBox) throw new Error('Intervening feature bar geometry is unavailable')
+    expect(midpoint.x).toBeGreaterThan(middleBarBox.x)
+    expect(midpoint.x).toBeLessThan(middleBarBox.x + middleBarBox.width)
+    expect(midpoint.y).toBeGreaterThan(middleBarBox.y)
+    expect(midpoint.y).toBeLessThan(middleBarBox.y + middleBarBox.height)
+
+    // The covered connector is still selectable from its visible segment.
+    const selectionPoint = await visibleConnectorPoint(spanning, `Dependency ${first} → ${third}`)
+    await page.mouse.click(selectionPoint.x, selectionPoint.y)
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(2)
+    await expect(spanning).toHaveAttribute('aria-pressed', 'true')
+
+    const removeControl = page.getByRole('button', { name: `Remove dependency ${first} → ${third}`, exact: true })
+    await expect(removeControl).toBeVisible()
+
+    // The foreground control — not the intervening bar — owns the covered point.
+    const expectedTestId = await removeControl.getAttribute('data-testid')
+    const hitTestId = await page.evaluate(
+      ({ x, y }) => document.elementFromPoint(x, y)?.getAttribute('data-testid') ?? null,
+      midpoint,
+    )
+    expect(hitTestId).toBe(expectedTestId)
+
+    const removalResponse = page.waitForResponse(
+      response =>
+        new URL(response.url()).pathname.startsWith(`/api/projects/${projectId}/feature-dependencies/`) &&
+        response.request().method() === 'DELETE',
+      { timeout: 10_000 },
+    )
+    await removeControl.click()
+    expect((await removalResponse).status()).toBe(200)
+
+    await expect(page.getByRole('status')).toHaveText('Dependency removed.')
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: `Dependency ${first} → ${second}`, exact: true })).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByRole('heading', { name: /timeline planner/i })).toBeVisible()
+    await expect(page.locator('[data-testid^="dependency-arrow-"]')).toHaveCount(1)
+    await expect(page.getByRole('button', { name: `Dependency ${first} → ${second}`, exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: `Dependency ${first} → ${third}`, exact: true })).toHaveCount(0)
   })
 
   test('blocks self and duplicate dependency drops in the chart', async ({ page }) => {

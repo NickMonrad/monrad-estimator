@@ -1492,7 +1492,7 @@ export default function TimelinePage() {
                   updateStoryTimeline.mutate({ storyId, startWeek: newStartWeek, durationWeeks: entry.durationWeeks })
                 }}
                 onAddFeatureDep={(featureId, dependsOnId) => addFeatureDep.mutateAsync({ featureId, dependsOnId })}
-                onRemoveFeatureDep={(featureId, dependsOnId) => removeFeatureDep.mutate({ featureId, dependsOnId })}
+                onRemoveFeatureDep={(featureId, dependsOnId) => removeFeatureDep.mutateAsync({ featureId, dependsOnId })}
                 onAddStoryDep={(storyId, dependsOnId) => addStoryDep.mutate({ storyId, dependsOnId })}
                 onRemoveStoryDep={(storyId, dependsOnId) => removeStoryDep.mutate({ storyId, dependsOnId })}
                 epicDependencies={epicDeps}
