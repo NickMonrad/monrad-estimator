@@ -13,6 +13,17 @@ interface TplRow {
   TemplateName: string; Category: string; TaskName: string
   ResourceTypeName: string; HoursExtraSmall: string; HoursSmall: string
   HoursMedium: string; HoursLarge: string; HoursExtraLarge: string
+  TemplateDescription?: string; TemplateAssumptions?: string
+  TaskDescription?: string; TaskAssumptions?: string
+}
+
+/**
+ * Imported metadata is optional: CSV files produced before these columns existed
+ * do not carry them at all. Empty/absent values become null rather than ''.
+ */
+function importMetadata(value: string | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed ? sanitizeCsvCell(trimmed) : null
 }
 
 /** Parse and validate CSV rows, return structured result (no DB writes) */
@@ -51,12 +62,12 @@ router.get('/', authenticate, asyncHandler(async (req: AuthRequest, res: Respons
 
 // POST /api/templates — auth required
 router.post('/', authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { name, category, description } = req.body
+  const { name, category, description, assumptions } = req.body
   if (!name) { res.status(400).json({ error: 'name is required' }); return }
   const existing = await prisma.featureTemplate.findUnique({ where: { name } })
   if (existing) { res.status(409).json({ error: `A template named "${name}" already exists` }); return }
   const template = await prisma.featureTemplate.create({
-    data: { name, category, description },
+    data: { name, category, description, assumptions },
     include: templateInclude,
   })
   res.status(201).json(template)
@@ -73,16 +84,18 @@ router.get('/export-csv', authenticate, asyncHandler(async (_req: AuthRequest, r
   const rows: string[][] = [headers]
 
   if (templates.length === 0) {
-    rows.push(['My Template', 'Engineering', 'My Task', 'Developer', '1', '2', '4', '8', '16'])
+    rows.push(['My Template', 'Engineering', 'My Task', 'Developer', '1', '2', '4', '8', '16', '', '', '', ''])
   } else {
     for (const tpl of templates) {
+      const tplMeta = [sanitizeCsvCell(tpl.description ?? ''), sanitizeCsvCell(tpl.assumptions ?? '')]
       for (const task of tpl.tasks) {
         rows.push([sanitizeCsvCell(tpl.name), sanitizeCsvCell(tpl.category ?? ''), sanitizeCsvCell(task.name), sanitizeCsvCell(task.resourceTypeName),
           String(task.hoursExtraSmall), String(task.hoursSmall), String(task.hoursMedium),
-          String(task.hoursLarge), String(task.hoursExtraLarge)])
+          String(task.hoursLarge), String(task.hoursExtraLarge),
+          ...tplMeta, sanitizeCsvCell(task.description ?? ''), sanitizeCsvCell(task.assumptions ?? '')])
       }
       if (tpl.tasks.length === 0) {
-        rows.push([sanitizeCsvCell(tpl.name), sanitizeCsvCell(tpl.category ?? ''), '', '', '', '', '', '', ''])
+        rows.push([sanitizeCsvCell(tpl.name), sanitizeCsvCell(tpl.category ?? ''), '', '', '', '', '', '', '', ...tplMeta, '', ''])
       }
     }
   }
@@ -109,7 +122,8 @@ router.post('/import-csv/preview', authenticate, asyncHandler(async (req: AuthRe
     const name = row.TemplateName?.trim()
     if (!name) { rowErrors.push({ row: i + 2, message: 'Missing TemplateName' }); return }
     if (!grouped.has(name)) grouped.set(name, [])
-    if (row.TaskName?.trim()) grouped.get(name)!.push(row)
+    // Retain every row so template-level metadata survives for templates with no tasks
+    grouped.get(name)!.push(row)
   })
 
   // Look up existing templates by name (case-insensitive)
@@ -125,19 +139,21 @@ router.post('/import-csv/preview', authenticate, asyncHandler(async (req: AuthRe
     after: { taskCount: number; tasks: { name: string; resourceTypeName: string }[] }
   }[] = []
 
-  for (const [name, taskRows] of grouped) {
+  for (const [name, groupRows] of grouped) {
     const existing = existingByName.get(name.toLowerCase())
-    const afterTasks = taskRows.map(r => ({ name: r.TaskName.trim(), resourceTypeName: r.ResourceTypeName?.trim() || 'Unassigned' }))
+    const category = groupRows[0]?.Category?.trim() || ''
+    const afterTasks = groupRows.filter(r => r.TaskName?.trim())
+      .map(r => ({ name: r.TaskName.trim(), resourceTypeName: r.ResourceTypeName?.trim() || 'Unassigned' }))
     if (existing) {
       updatedTemplates.push({
         id: existing.id,
         name,
-        category: taskRows[0]?.Category?.trim() || existing.category || '',
+        category: category || existing.category || '',
         before: { taskCount: existing.tasks.length, tasks: existing.tasks.map(t => ({ name: t.name, resourceTypeName: t.resourceTypeName })) },
         after: { taskCount: afterTasks.length, tasks: afterTasks },
       })
     } else {
-      newTemplates.push({ name, category: taskRows[0]?.Category?.trim() || '', taskCount: taskRows.length })
+      newTemplates.push({ name, category, taskCount: afterTasks.length })
     }
   }
 
@@ -158,7 +174,8 @@ router.post('/import-csv', authenticate, asyncHandler(async (req: AuthRequest, r
     const name = row.TemplateName?.trim()
     if (!name) return
     if (!grouped.has(name)) grouped.set(name, [])
-    if (row.TaskName?.trim()) grouped.get(name)!.push(row)
+    // Retain every row so template-level metadata survives for templates with no tasks
+    grouped.get(name)!.push(row)
   })
 
   const allExisting = await prisma.featureTemplate.findMany()
@@ -166,9 +183,31 @@ router.post('/import-csv', authenticate, asyncHandler(async (req: AuthRequest, r
 
   let created = 0, updated = 0, tasksCreated = 0
 
-  for (const [name, taskRows] of grouped) {
+  for (const [name, groupRows] of grouped) {
     const existing = existingByName.get(name.toLowerCase())
-    const category = taskRows[0]?.Category?.trim() || null
+    const taskRows = groupRows.filter(r => r.TaskName?.trim())
+    const first = groupRows[0]
+    const category = first?.Category?.trim() || null
+    // Template-level metadata is stored on every row; the first row is authoritative
+    const templateMetadata = {
+      category,
+      description: importMetadata(first?.TemplateDescription),
+      assumptions: importMetadata(first?.TemplateAssumptions),
+    }
+
+    const taskData = (row: TplRow, order: number, templateId: string) => ({
+      name: sanitizeCsvCell(row.TaskName.trim()),
+      resourceTypeName: sanitizeCsvCell(row.ResourceTypeName?.trim() || 'Unassigned'),
+      description: importMetadata(row.TaskDescription),
+      assumptions: importMetadata(row.TaskAssumptions),
+      hoursExtraSmall: parseFloat(row.HoursExtraSmall) || 0,
+      hoursSmall: parseFloat(row.HoursSmall) || 0,
+      hoursMedium: parseFloat(row.HoursMedium) || 0,
+      hoursLarge: parseFloat(row.HoursLarge) || 0,
+      hoursExtraLarge: parseFloat(row.HoursExtraLarge) || 0,
+      order,
+      templateId,
+    })
 
     if (existing) {
       // Auto-snapshot before overwrite
@@ -176,41 +215,15 @@ router.post('/import-csv', authenticate, asyncHandler(async (req: AuthRequest, r
       // Replace tasks
       await prisma.templateTask.deleteMany({ where: { templateId: existing.id } })
       for (let i = 0; i < taskRows.length; i++) {
-        const row = taskRows[i]
-        await prisma.templateTask.create({
-          data: {
-            name: sanitizeCsvCell(row.TaskName.trim()),
-            resourceTypeName: sanitizeCsvCell(row.ResourceTypeName?.trim() || 'Unassigned'),
-            hoursExtraSmall: parseFloat(row.HoursExtraSmall) || 0,
-            hoursSmall: parseFloat(row.HoursSmall) || 0,
-            hoursMedium: parseFloat(row.HoursMedium) || 0,
-            hoursLarge: parseFloat(row.HoursLarge) || 0,
-            hoursExtraLarge: parseFloat(row.HoursExtraLarge) || 0,
-            order: i,
-            templateId: existing.id,
-          },
-        })
+        await prisma.templateTask.create({ data: taskData(taskRows[i], i, existing.id) })
         tasksCreated++
       }
-      await prisma.featureTemplate.update({ where: { id: existing.id }, data: { category } })
+      await prisma.featureTemplate.update({ where: { id: existing.id }, data: templateMetadata })
       updated++
     } else {
-      const tpl = await prisma.featureTemplate.create({ data: { name, category } })
+      const tpl = await prisma.featureTemplate.create({ data: { name, ...templateMetadata } })
       for (let i = 0; i < taskRows.length; i++) {
-        const row = taskRows[i]
-        await prisma.templateTask.create({
-          data: {
-            name: sanitizeCsvCell(row.TaskName.trim()),
-            resourceTypeName: sanitizeCsvCell(row.ResourceTypeName?.trim() || 'Unassigned'),
-            hoursExtraSmall: parseFloat(row.HoursExtraSmall) || 0,
-            hoursSmall: parseFloat(row.HoursSmall) || 0,
-            hoursMedium: parseFloat(row.HoursMedium) || 0,
-            hoursLarge: parseFloat(row.HoursLarge) || 0,
-            hoursExtraLarge: parseFloat(row.HoursExtraLarge) || 0,
-            order: i,
-            templateId: tpl.id,
-          },
-        })
+        await prisma.templateTask.create({ data: taskData(taskRows[i], i, tpl.id) })
         tasksCreated++
       }
       created++
@@ -243,13 +256,15 @@ router.get('/:id/export-csv', authenticate, asyncHandler(async (req: AuthRequest
   const headers = [...TEMPLATE_CSV_HEADERS] as string[]
   const rows: string[][] = [headers]
 
+  const tplMeta = [template.description ?? '', template.assumptions ?? '']
   if (template.tasks.length === 0) {
-    rows.push([template.name, template.category ?? '', '', '', '', '', '', '', ''])
+    rows.push([template.name, template.category ?? '', '', '', '', '', '', '', '', ...tplMeta, '', ''])
   } else {
     for (const task of template.tasks) {
       rows.push([template.name, template.category ?? '', task.name, task.resourceTypeName,
         String(task.hoursExtraSmall), String(task.hoursSmall), String(task.hoursMedium),
-        String(task.hoursLarge), String(task.hoursExtraLarge)])
+        String(task.hoursLarge), String(task.hoursExtraLarge),
+        ...tplMeta, task.description ?? '', task.assumptions ?? ''])
     }
   }
 
@@ -272,13 +287,13 @@ router.get('/:id', authenticate, asyncHandler(async (req: AuthRequest, res: Resp
 
 // PUT /api/templates/:id — auth required (auto-snapshots before save)
 router.put('/:id', authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { name, category, description, snapshot: takeSnapshot, snapshotLabel } = req.body
+  const { name, category, description, assumptions, snapshot: takeSnapshot, snapshotLabel } = req.body
   if (takeSnapshot !== false) {
     await captureSnapshot(req.params.id as string, snapshotLabel ?? null, 'manual_edit')
   }
   const template = await prisma.featureTemplate.update({
     where: { id: req.params.id as string },
-    data: { name, category, description },
+    data: { name, category, description, assumptions },
     include: templateInclude,
   })
   res.json(template)
@@ -292,12 +307,12 @@ router.delete('/:id', authenticate, asyncHandler(async (req: AuthRequest, res: R
 
 // POST /api/templates/:id/tasks — auth required
 router.post('/:id/tasks', authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { name, hoursExtraSmall, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName } = req.body
+  const { name, description, assumptions, hoursExtraSmall, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName } = req.body
   if (!name || !resourceTypeName) { res.status(400).json({ error: 'name and resourceTypeName are required' }); return }
   const count = await prisma.templateTask.count({ where: { templateId: req.params.id as string } })
   const task = await prisma.templateTask.create({
     data: {
-      name, order: count,
+      name, description, assumptions, order: count,
       hoursExtraSmall: hoursExtraSmall ?? 0, hoursSmall: hoursSmall ?? 0,
       hoursMedium: hoursMedium ?? 0, hoursLarge: hoursLarge ?? 0,
       hoursExtraLarge: hoursExtraLarge ?? 0, resourceTypeName,
@@ -323,10 +338,10 @@ router.put('/:id/tasks/reorder', authenticate, asyncHandler(async (req: AuthRequ
 
 // PUT /api/templates/:id/tasks/:taskId — auth required
 router.put('/:id/tasks/:taskId', authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { name, hoursExtraSmall, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName } = req.body
+  const { name, description, assumptions, hoursExtraSmall, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName } = req.body
   const task = await prisma.templateTask.update({
     where: { id: req.params.taskId as string },
-    data: { name, hoursExtraSmall, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName },
+    data: { name, description, assumptions, hoursExtraSmall, hoursSmall, hoursMedium, hoursLarge, hoursExtraLarge, resourceTypeName },
   })
   res.json(task)
 }))
@@ -365,15 +380,23 @@ router.post('/:id/snapshots/:snapshotId/restore', authenticate, asyncHandler(asy
   // Auto-snapshot current state before restoring
   await captureSnapshot(req.params.id as string, 'Before restore', 'manual_edit')
 
-  const saved = snap.snapshot as { name: string; category: string | null; description: string | null; tasks: { name: string; order: number; hoursExtraSmall: number; hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number; resourceTypeName: string }[] }
+  // Snapshots taken before the metadata fields existed omit them entirely; treat
+  // absent values as null so restoring still succeeds and clears stale metadata.
+  const saved = snap.snapshot as { name: string; category: string | null; description: string | null; assumptions?: string | null; tasks: { name: string; description?: string | null; assumptions?: string | null; order: number; hoursExtraSmall: number; hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number; resourceTypeName: string }[] }
   await prisma.featureTemplate.update({
     where: { id: req.params.id as string },
-    data: { name: saved.name, category: saved.category, description: saved.description },
+    data: { name: saved.name, category: saved.category, description: saved.description, assumptions: saved.assumptions ?? null },
   })
   await prisma.templateTask.deleteMany({ where: { templateId: req.params.id as string } })
   for (const task of saved.tasks ?? []) {
     await prisma.templateTask.create({
-      data: { ...task, id: undefined, templateId: req.params.id as string },
+      data: {
+        ...task,
+        description: task.description ?? null,
+        assumptions: task.assumptions ?? null,
+        id: undefined,
+        templateId: req.params.id as string,
+      },
     })
   }
 

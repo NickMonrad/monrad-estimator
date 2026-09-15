@@ -368,6 +368,7 @@ model FeatureTemplate {
   name        String            @unique
   category    String?
   description String?
+  assumptions String?
   deletedAt   DateTime?
   tasks       TemplateTask[]
   snapshots   TemplateSnapshot[]
@@ -379,6 +380,8 @@ model FeatureTemplate {
 model TemplateTask {
   id                String          @id @default(cuid())
   name              String
+  description       String?
+  assumptions       String?
   order             Int             @default(0)
   hoursExtraSmall   Float           @default(0)
   hoursSmall        Float           @default(0)

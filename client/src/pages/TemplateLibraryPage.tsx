@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import DOMPurify from 'dompurify'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 import type { DragEndEvent } from '@dnd-kit/core'
@@ -8,6 +9,7 @@ import { api } from '../lib/api'
 import AppLayout from '../components/layout/AppLayout'
 import TemplateCsvImportModal from '../components/templates/TemplateCsvImportModal'
 import TemplateHistoryPanel from '../components/templates/TemplateHistoryPanel'
+import RichTextEditor from '../components/shared/RichTextEditor'
 
 const HOURS_PER_DAY = 7.6
 
@@ -23,6 +25,8 @@ interface TemplateTask {
   id: string
   templateId: string
   name: string
+  description: string | null
+  assumptions: string | null
   hoursExtraSmall: number
   hoursSmall: number
   hoursMedium: number
@@ -36,6 +40,7 @@ interface FeatureTemplate {
   name: string
   category: string | null
   description: string | null
+  assumptions: string | null
   tasks: TemplateTask[]
 }
 
@@ -45,10 +50,10 @@ export default function TemplateLibraryPage() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [templateForm, setTemplateForm] = useState({ name: '', category: '', description: '' })
+  const [templateForm, setTemplateForm] = useState({ name: '', category: '', description: '', assumptions: '' })
   const [addingTaskForId, setAddingTaskForId] = useState<string | null>(null)
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
-  const [taskForm, setTaskForm] = useState({ name: '', hoursExtraSmall: 0, hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' })
+  const [taskForm, setTaskForm] = useState({ name: '', description: '', assumptions: '', hoursExtraSmall: 0, hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' })
   const [showTplImport, setShowTplImport] = useState(false)
   const [showHistoryId, setShowHistoryId] = useState<string | null>(null)
   const [showArchived, setShowArchived] = useState(false)
@@ -67,7 +72,7 @@ export default function TemplateLibraryPage() {
 
   const createTemplate = useMutation({
     mutationFn: (data: typeof templateForm) => api.post('/templates', data),
-    onSuccess: () => { invalidate(); setAdding(false); setTemplateForm({ name: '', category: '', description: '' }) },
+    onSuccess: () => { invalidate(); setAdding(false); setTemplateForm({ name: '', category: '', description: '', assumptions: '' }) },
   })
 
   const updateTemplate = useMutation({
@@ -88,7 +93,7 @@ export default function TemplateLibraryPage() {
   const createTask = useMutation({
     mutationFn: ({ templateId, data }: { templateId: string; data: typeof taskForm }) =>
       api.post(`/templates/${templateId}/tasks`, data),
-    onSuccess: () => { invalidate(); setAddingTaskForId(null); setTaskForm({ name: '', hoursExtraSmall: 0, hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' }) },
+    onSuccess: () => { invalidate(); setAddingTaskForId(null); setTaskForm({ name: '', description: '', assumptions: '', hoursExtraSmall: 0, hoursSmall: 0, hoursMedium: 0, hoursLarge: 0, hoursExtraLarge: 0, resourceTypeName: '' }) },
   })
 
   const updateTask = useMutation({
@@ -181,7 +186,7 @@ export default function TemplateLibraryPage() {
                 {editingId === tpl.id ? (
                   <div className="p-4">
                     <TemplateForm
-                      initial={{ name: tpl.name, category: tpl.category ?? '', description: tpl.description ?? '' }}
+                      initial={{ name: tpl.name, category: tpl.category ?? '', description: tpl.description ?? '', assumptions: tpl.assumptions ?? '' }}
                       onSave={(data) => updateTemplate.mutate({ id: tpl.id, data })}
                       onCancel={() => setEditingId(null)}
                       saving={updateTemplate.isPending}
@@ -198,7 +203,18 @@ export default function TemplateLibraryPage() {
                           <span className="text-xs text-purple-600 bg-purple-50 px-2 py-0.5 rounded">{tpl.category}</span>
                         )}
                       </div>
-                      {tpl.description && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">{tpl.description}</p>}
+                      {tpl.description && (
+                        <div
+                          className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate rich-text-content"
+                          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(tpl.description) }}
+                        />
+                      )}
+                      {tpl.assumptions && (
+                        <div
+                          className="text-xs text-gray-400 dark:text-gray-500 mt-0.5 truncate rich-text-content"
+                          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(tpl.assumptions) }}
+                        />
+                      )}
                     </div>
                     <span className="text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">
                       {tpl.tasks.length} task{tpl.tasks.length !== 1 ? 's' : ''}
@@ -256,7 +272,7 @@ export default function TemplateLibraryPage() {
                                   <tr key={task.id}>
                                     <td colSpan={9} className="py-2">
                                       <TaskForm
-                                       initial={{ name: task.name, hoursExtraSmall: task.hoursExtraSmall, hoursSmall: task.hoursSmall, hoursMedium: task.hoursMedium, hoursLarge: task.hoursLarge, hoursExtraLarge: task.hoursExtraLarge, resourceTypeName: task.resourceTypeName }}
+                                       initial={{ name: task.name, description: task.description ?? '', assumptions: task.assumptions ?? '', hoursExtraSmall: task.hoursExtraSmall, hoursSmall: task.hoursSmall, hoursMedium: task.hoursMedium, hoursLarge: task.hoursLarge, hoursExtraLarge: task.hoursExtraLarge, resourceTypeName: task.resourceTypeName }}
                                         globalResourceTypes={globalResourceTypes}
                                         onSave={(data) => updateTask.mutate({ templateId: tpl.id, taskId: task.id, data })}
                                         onCancel={() => setEditingTaskId(null)}
@@ -327,13 +343,13 @@ export default function TemplateLibraryPage() {
 }
 
 function TemplateForm({ initial, onSave, onCancel, saving }: {
-  initial: { name: string; category: string; description: string }
+  initial: { name: string; category: string; description: string; assumptions: string }
   onSave: (data: typeof initial) => void
   onCancel: () => void
   saving: boolean
 }) {
   const [form, setForm] = useState(initial)
-  const f = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+  const f = (field: 'name' | 'category') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm(v => ({ ...v, [field]: e.target.value }))
 
   return (
@@ -344,8 +360,20 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
         <input placeholder="Category (e.g. Security, Auth)" value={form.category} onChange={f('category')}
           className="border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
       </div>
-      <textarea placeholder="Description" value={form.description} onChange={f('description')} rows={2}
-        className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-lab3-blue" />
+      <RichTextEditor
+        value={form.description}
+        onChange={v => setForm(prev => ({ ...prev, description: v }))}
+        placeholder="Description"
+        ariaLabel="Template description"
+        className="text-sm"
+      />
+      <RichTextEditor
+        value={form.assumptions}
+        onChange={v => setForm(prev => ({ ...prev, assumptions: v }))}
+        placeholder="Assumptions"
+        ariaLabel="Template assumptions"
+        className="text-sm"
+      />
       <div className="flex gap-2">
         <button onClick={() => onSave(form)} disabled={!form.name || saving}
           className="bg-lab3-navy text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-lab3-blue disabled:opacity-50">
@@ -358,7 +386,7 @@ function TemplateForm({ initial, onSave, onCancel, saving }: {
 }
 
 function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
-  initial: { name: string; hoursExtraSmall: number; hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number; resourceTypeName: string }
+  initial: { name: string; description: string; assumptions: string; hoursExtraSmall: number; hoursSmall: number; hoursMedium: number; hoursLarge: number; hoursExtraLarge: number; resourceTypeName: string }
   globalResourceTypes: GlobalResourceType[]
   onSave: (data: typeof initial) => void
   onCancel: () => void
@@ -386,6 +414,20 @@ function TaskForm({ initial, globalResourceTypes, onSave, onCancel, saving }: {
             className="border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400" />
         )}
       </div>
+      <RichTextEditor
+        value={form.description}
+        onChange={v => setForm(prev => ({ ...prev, description: v }))}
+        placeholder="Description"
+        ariaLabel="Task description"
+        className="text-sm"
+      />
+      <RichTextEditor
+        value={form.assumptions}
+        onChange={v => setForm(prev => ({ ...prev, assumptions: v }))}
+        placeholder="Assumptions"
+        ariaLabel="Task assumptions"
+        className="text-sm"
+      />
       <div className="grid grid-cols-5 gap-2">
         {(['hoursExtraSmall', 'hoursSmall', 'hoursMedium', 'hoursLarge', 'hoursExtraLarge'] as const).map((field, i) => (
           <div key={field}>
@@ -414,6 +456,8 @@ function SortableTaskRow({ task, fmt, onEdit, onDelete }: {
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }
+  const [metaOpen, setMetaOpen] = useState(false)
+  const hasMetadata = Boolean(task.description || task.assumptions)
 
   return (
     <tr ref={setNodeRef} style={style} className="group border-b border-gray-50 dark:border-gray-700 last:border-0 bg-white dark:bg-gray-800">
@@ -423,7 +467,43 @@ function SortableTaskRow({ task, fmt, onEdit, onDelete }: {
           ⠿
         </span>
       </td>
-      <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">{task.name}</td>
+      <td className="py-2 pr-4 text-gray-800 dark:text-gray-200">
+        {task.name}
+        {hasMetadata && (
+          <div className="mt-0.5">
+            <button
+              type="button"
+              onClick={() => setMetaOpen(open => !open)}
+              aria-expanded={metaOpen}
+              className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            >
+              {metaOpen ? '▾ Hide description & assumptions' : '▸ Description & assumptions'}
+            </button>
+            {metaOpen && (
+              <div className="mt-1 space-y-1 max-w-md">
+                {task.description && (
+                  <div>
+                    <span className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">Description</span>
+                    <div
+                      className="text-xs text-gray-500 dark:text-gray-400 rich-text-content"
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(task.description) }}
+                    />
+                  </div>
+                )}
+                {task.assumptions && (
+                  <div>
+                    <span className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">Assumptions</span>
+                    <div
+                      className="text-xs text-gray-500 dark:text-gray-400 rich-text-content"
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(task.assumptions) }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </td>
       <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">{task.resourceTypeName}</td>
       <td className="py-2 pr-3 text-right text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">{fmt(task.hoursExtraSmall)}</td>
       <td className="py-2 pr-3 text-right text-gray-600 dark:text-gray-400 text-xs whitespace-nowrap">{fmt(task.hoursSmall)}</td>

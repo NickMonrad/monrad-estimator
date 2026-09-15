@@ -269,6 +269,10 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
+### `templates.spec.ts` — Template Library (6 tests)
+
+#### `Template Library` describe block (5 tests)
+
 | Test | Description |
 |------|-------------|
 | template library page loads | Templates nav link → "Template Library" heading |
@@ -276,6 +280,12 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 | can create a template task with XS complexity hours | Add task form shows "XS hours" field; XS column visible in task table |
 | Export CSV button is visible | "⬇ Export CSV" button present on Templates page |
 | Import CSV button opens modal with template download | Import modal shows "Download blank CSV template" link |
+
+#### `Template metadata propagation` describe block (1 test — issue #168)
+
+| Test | Description |
+|------|-------------|
+| propagates rich-text template metadata through apply and refresh | Authors template description/assumptions and task description/assumptions with the rich-text editors, verifies the saved metadata renders as sanitised content rather than raw markup, applies the template to a feature, confirms the generated Story and Task carry the template metadata via the backlog CSV export, edits the template and task metadata, adds a manual task to the generated Story, refreshes the Story from the template, and confirms the Story and name-matched Task metadata follow the template while the manual task survives |
 
 ---
 

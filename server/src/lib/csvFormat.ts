@@ -46,6 +46,7 @@ export function serializeBacklogCsv(rows: string[][]): string {
 export const TEMPLATE_CSV_HEADERS = [
   'TemplateName', 'Category', 'TaskName', 'ResourceTypeName',
   'HoursExtraSmall', 'HoursSmall', 'HoursMedium', 'HoursLarge', 'HoursExtraLarge',
+  'TemplateDescription', 'TemplateAssumptions', 'TaskDescription', 'TaskAssumptions',
 ] as const
 
 export type TemplateCsvField = (typeof TEMPLATE_CSV_HEADERS)[number]
