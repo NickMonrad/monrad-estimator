@@ -49,6 +49,8 @@ router.post('/:featureId/apply-template', asyncHandler(async (req: AuthRequest, 
   const story = await prisma.userStory.create({
     data: {
       name: storyName?.trim() || `${template.name} \u2014 ${complexity}`,
+      description: template.description,
+      assumptions: template.assumptions,
       featureId,
       order: existingStories.length,
       appliedTemplateId: templateId,
@@ -67,6 +69,8 @@ router.post('/:featureId/apply-template', asyncHandler(async (req: AuthRequest, 
     await prisma.task.create({
       data: {
         name: tmplTask.name,
+        description: tmplTask.description,
+        assumptions: tmplTask.assumptions,
         hoursEffort,
         durationDays: calcDurationDays(hoursEffort, hoursPerDay),
         resourceTypeId: matchedRt.id,
@@ -121,6 +125,13 @@ router.post('/:featureId/refresh-template/:storyId', asyncHandler(async (req: Au
   const existingTasks = template.tasks.filter(t => existingTaskNames.has(t.name.toLowerCase()))
   const baseOrder = story.tasks.length
 
+  // Template metadata follows the current template, matching the existing
+  // template-owned effort/duration/resource semantics of refresh.
+  await prisma.userStory.update({
+    where: { id: storyId },
+    data: { description: template.description, assumptions: template.assumptions },
+  })
+
   // Update hours/days and resource type on existing matching tasks
   for (const tmplTask of existingTasks) {
     const storyTask = story.tasks.find(t => t.name.toLowerCase() === tmplTask.name.toLowerCase())
@@ -132,6 +143,8 @@ router.post('/:featureId/refresh-template/:storyId', asyncHandler(async (req: Au
     await prisma.task.update({
       where: { id: storyTask.id },
       data: {
+        description: tmplTask.description,
+        assumptions: tmplTask.assumptions,
         hoursEffort,
         durationDays: calcDurationDays(hoursEffort, hoursPerDay),
         ...(matchedRt ? { resourceTypeId: matchedRt.id } : {}),
@@ -149,6 +162,8 @@ router.post('/:featureId/refresh-template/:storyId', asyncHandler(async (req: Au
     await prisma.task.create({
       data: {
         name: tmplTask.name,
+        description: tmplTask.description,
+        assumptions: tmplTask.assumptions,
         hoursEffort,
         durationDays: calcDurationDays(hoursEffort, hoursPerDay),
         resourceTypeId: matchedRt.id,

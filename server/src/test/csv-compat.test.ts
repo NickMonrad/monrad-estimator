@@ -291,6 +291,67 @@ describe('round-trip', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Template metadata columns
+// ---------------------------------------------------------------------------
+
+describe('template metadata columns', () => {
+  it('declares the four approved metadata columns', () => {
+    expect([...TEMPLATE_CSV_HEADERS]).toEqual(expect.arrayContaining([
+      'TemplateDescription', 'TemplateAssumptions', 'TaskDescription', 'TaskAssumptions',
+    ]))
+  })
+
+  it('round-trips rich HTML metadata containing commas and newlines', () => {
+    const description = '<p>Scope, effort and risk</p>\n<ul><li>One, two</li></ul>'
+    const assumptions = '<p>Team available, budget approved</p>'
+
+    const csv = serializeTemplateCsv([
+      templateData({
+        TemplateName: 'API', Category: 'Engineering', TaskName: 'Auth', ResourceTypeName: 'Developer',
+        HoursExtraSmall: '1', HoursSmall: '2', HoursMedium: '4', HoursLarge: '8', HoursExtraLarge: '16',
+        TemplateDescription: description, TemplateAssumptions: assumptions,
+        TaskDescription: description, TaskAssumptions: assumptions,
+      }),
+    ])
+
+    const reparsed = parseTemplateCsv(csv)
+    expect(reparsed[0].TemplateDescription).toBe(description)
+    expect(reparsed[0].TemplateAssumptions).toBe(assumptions)
+    expect(reparsed[0].TaskDescription).toBe(description)
+    expect(reparsed[0].TaskAssumptions).toBe(assumptions)
+    expect(reparsed[0].HoursExtraLarge).toBe('16')
+  })
+
+  it('round-trips template metadata for a template with no tasks', () => {
+    const csv = serializeTemplateCsv([
+      templateData({ TemplateName: 'Empty', TemplateDescription: '<p>Desc</p>', TemplateAssumptions: '<p>Assumption</p>' }),
+    ])
+
+    const reparsed = parseTemplateCsv(csv)
+    expect(reparsed).toHaveLength(1)
+    expect(reparsed[0].TaskName).toBe('')
+    expect(reparsed[0].TemplateDescription).toBe('<p>Desc</p>')
+    expect(reparsed[0].TemplateAssumptions).toBe('<p>Assumption</p>')
+  })
+
+  it('accepts a legacy 9-column template CSV with metadata columns absent', () => {
+    const legacy = [
+      'TemplateName,Category,TaskName,ResourceTypeName,HoursExtraSmall,HoursSmall,HoursMedium,HoursLarge,HoursExtraLarge',
+      'API,Engineering,Auth,Developer,1,2,4,8,16',
+    ].join('\n')
+
+    const rows = parseTemplateCsv(legacy)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].TemplateName).toBe('API')
+    expect(rows[0].TaskName).toBe('Auth')
+    expect(rows[0].TemplateDescription).toBeUndefined()
+    expect(rows[0].TemplateAssumptions).toBeUndefined()
+    expect(rows[0].TaskDescription).toBeUndefined()
+    expect(rows[0].TaskAssumptions).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Formula injection via production sanitisation path
 // ---------------------------------------------------------------------------
 
