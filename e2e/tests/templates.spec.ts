@@ -34,6 +34,51 @@ async function exportBacklog(page: Page) {
   return { lines, field }
 }
 
+/** The template task name and XS → XL hours used by the shared tiered template. */
+const TIERED_TASK_NAME = 'E2E Bulk Task'
+const TIER_HOURS = ['1', '2', '4', '8', '16']
+const TIERED_TEMPLATE_DESCRIPTION = 'E2E bulk template description'
+const TIERED_TASK_DESCRIPTION = 'E2E bulk task description'
+
+/** Author a template whose tiers give each Story a distinct effort. */
+async function createTieredTemplate(page: Page, templateName: string) {
+  await page.goto('/templates')
+  await page.getByRole('button', { name: /new template/i }).click()
+  await page.getByPlaceholder(/template name/i).fill(templateName)
+  await setRichText(page, 'Template description', TIERED_TEMPLATE_DESCRIPTION)
+  await saveAndWaitForWrite(page, /^save template$/i, 'POST', /^\/api\/templates$/)
+  await expect(page.getByText(templateName).first()).toBeVisible({ timeout: 10_000 })
+
+  await page.getByText(templateName).first().click()
+  await page.getByRole('button', { name: /add task/i }).click()
+  await page.getByPlaceholder(/task name/i).fill(TIERED_TASK_NAME)
+
+  const rtInput = page.getByPlaceholder(/resource type name/i)
+  const rtSelect = page.locator('select').filter({ hasText: /resource type/i })
+  if (await rtInput.isVisible()) {
+    await rtInput.fill('Developer')
+  } else {
+    await rtSelect.selectOption({ index: 1 })
+  }
+
+  for (const [index, hours] of TIER_HOURS.entries()) {
+    await page.locator('input[type="number"]').nth(index).fill(hours)
+  }
+  await setRichText(page, 'Task description', TIERED_TASK_DESCRIPTION)
+  await saveAndWaitForWrite(page, /^save task$/i, 'POST', /^\/api\/templates\/[^/]+\/tasks$/)
+  await expect(page.locator('tr').filter({ hasText: TIERED_TASK_NAME })).toBeVisible({ timeout: 8_000 })
+}
+
+/** Create a project and open its Backlog, returning the Backlog URL. */
+async function openBacklog(page: Page, projectName: string) {
+  await page.goto('/')
+  await createProject(page, projectName)
+  await page.getByRole('heading', { name: projectName, exact: true }).first().click()
+  await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
+  await page.getByRole('button', { name: /backlog/i }).click()
+  return page.url()
+}
+
 test.describe('Template Library', () => {
   test.beforeEach(async ({ page }) => {
     await login(page)
@@ -284,7 +329,6 @@ test.describe('Template metadata propagation', () => {
  */
 test.describe('Project-level Refresh templates', () => {
   const TEMPLATE_BASE = `E2E Bulk Template ${Date.now()}`
-  const TASK_NAME = 'E2E Bulk Task'
   const MANUAL_TASK_NAME = 'E2E Bulk Manual Task'
   const PROJECT_BASE = `E2E Bulk Refresh ${Date.now()}`
   const EPIC_NAME = 'E2E Bulk Epic'
@@ -293,13 +337,8 @@ test.describe('Project-level Refresh templates', () => {
   const STORY_LARGE = 'E2E Bulk Story Large'
   const LEGACY_STORY_NAME = 'E2E Bulk Legacy Story'
 
-  const TEMPLATE_DESCRIPTION = 'E2E bulk template description'
-  const TASK_DESCRIPTION = 'E2E bulk task description'
   const UPDATED_TEMPLATE_ASSUMPTIONS = 'E2E bulk updated assumptions'
   const UPDATED_TASK_DESCRIPTION = 'E2E bulk updated task description'
-
-  /** XS → XL hours, so every tier produces a distinguishable effort. */
-  const TIER_HOURS = ['1', '2', '4', '8', '16']
 
   test.beforeEach(async ({ page }) => {
     await login(page)
@@ -308,45 +347,6 @@ test.describe('Project-level Refresh templates', () => {
   test.afterAll(async () => {
     await deleteTemplatesByName(TEMPLATE_BASE)
   })
-
-  /** Author a template whose tiers give each Story a distinct effort. */
-  async function createTieredTemplate(page: Page, templateName: string) {
-    await page.goto('/templates')
-    await page.getByRole('button', { name: /new template/i }).click()
-    await page.getByPlaceholder(/template name/i).fill(templateName)
-    await setRichText(page, 'Template description', TEMPLATE_DESCRIPTION)
-    await saveAndWaitForWrite(page, /^save template$/i, 'POST', /^\/api\/templates$/)
-    await expect(page.getByText(templateName).first()).toBeVisible({ timeout: 10_000 })
-
-    await page.getByText(templateName).first().click()
-    await page.getByRole('button', { name: /add task/i }).click()
-    await page.getByPlaceholder(/task name/i).fill(TASK_NAME)
-
-    const rtInput = page.getByPlaceholder(/resource type name/i)
-    const rtSelect = page.locator('select').filter({ hasText: /resource type/i })
-    if (await rtInput.isVisible()) {
-      await rtInput.fill('Developer')
-    } else {
-      await rtSelect.selectOption({ index: 1 })
-    }
-
-    for (const [index, hours] of TIER_HOURS.entries()) {
-      await page.locator('input[type="number"]').nth(index).fill(hours)
-    }
-    await setRichText(page, 'Task description', TASK_DESCRIPTION)
-    await saveAndWaitForWrite(page, /^save task$/i, 'POST', /^\/api\/templates\/[^/]+\/tasks$/)
-    await expect(page.locator('tr').filter({ hasText: TASK_NAME })).toBeVisible({ timeout: 8_000 })
-  }
-
-  /** Create a project and open its Backlog, returning the Backlog URL. */
-  async function openBacklog(page: Page, projectName: string) {
-    await page.goto('/')
-    await createProject(page, projectName)
-    await page.getByRole('heading', { name: projectName, exact: true }).first().click()
-    await page.getByRole('button', { name: /backlog/i }).waitFor({ timeout: 8_000 })
-    await page.getByRole('button', { name: /backlog/i }).click()
-    return page.url()
-  }
 
   /** Add an epic and a feature to the open Backlog. */
   async function createEpicAndFeature(page: Page) {
@@ -393,7 +393,7 @@ test.describe('Project-level Refresh templates', () => {
     await saveAndWaitForWrite(page, /^save template$/i, 'PUT', /^\/api\/templates\/[^/]+$/)
 
     await templateHeader.getByText(templateName).first().click()
-    const editTaskRow = page.locator('tr').filter({ hasText: TASK_NAME })
+    const editTaskRow = page.locator('tr').filter({ hasText: TIERED_TASK_NAME })
     await expect(editTaskRow).toBeVisible({ timeout: 8_000 })
     await editTaskRow.getByRole('button', { name: 'Edit' }).click()
     await setRichText(page, 'Task description', UPDATED_TASK_DESCRIPTION)
@@ -432,7 +432,7 @@ test.describe('Project-level Refresh templates', () => {
     // ── Each story kept its own tier; #168 metadata propagated; manual task survived
     const csv = await exportBacklog(page)
     const templateTaskLineFor = (story: string) => csv.lines.find(line =>
-      line.startsWith('Task,') && csv.field(line, 'Story') === story && csv.field(line, 'Task') === TASK_NAME)
+      line.startsWith('Task,') && csv.field(line, 'Story') === story && csv.field(line, 'Task') === TIERED_TASK_NAME)
 
     const smallTask = templateTaskLineFor(STORY_SMALL)
     const largeTask = templateTaskLineFor(STORY_LARGE)
@@ -487,5 +487,91 @@ test.describe('Project-level Refresh templates', () => {
       line.startsWith('Story,') && csv.field(line, 'Story') === LEGACY_STORY_NAME)!
     expect(csv.field(storyLine, 'Template')).toBe(templateName)
     expect(csv.field(storyLine, 'TemplateSize')).toBe('Medium')
+  })
+})
+
+/**
+ * Issue #295 — create a Feature together with the Story and Tasks a template
+ * generates, from the same area as the blank `+ Add feature` action, without
+ * creating an empty Feature first.
+ */
+test.describe('Add feature from template', () => {
+  const TEMPLATE_NAME = `E2E Create Template ${Date.now()}`
+  const PROJECT_NAME = `E2E Create From Template ${Date.now()}`
+  const EPIC_NAME = 'E2E Create Epic'
+  const FEATURE_NAME = 'E2E Create Feature'
+  const MANUAL_FEATURE_NAME = 'E2E Create Manual Feature'
+  const STORY_NAME = 'E2E Create Story'
+
+  test.beforeEach(async ({ page }) => {
+    await login(page)
+  })
+
+  test.afterAll(async () => {
+    await deleteTemplatesByName(TEMPLATE_NAME)
+  })
+
+  test('creates the feature, its template story and its template tasks from the Add Feature area', async ({ page }) => {
+    await createTieredTemplate(page, TEMPLATE_NAME)
+    await openBacklog(page, PROJECT_NAME)
+
+    await page.getByRole('button', { name: /add epic/i }).click()
+    await page.getByPlaceholder(/epic name/i).fill(EPIC_NAME)
+    await page.getByRole('button', { name: /save epic/i }).click()
+    await expect(page.getByText(EPIC_NAME)).toBeVisible()
+
+    // ── Both creation paths are offered together, and they are different controls
+    await expect(page.getByRole('button', { name: '+ Add feature', exact: true })).toBeVisible({ timeout: 5_000 })
+    await page.getByRole('button', { name: 'Add from template', exact: true }).click()
+
+    const dialog = page.getByRole('dialog', { name: 'Add feature from template' })
+    await expect(dialog).toBeVisible()
+
+    const createButton = dialog.getByRole('button', { name: /create feature/i })
+    await expect(createButton).toBeDisabled()
+    await dialog.getByLabel('Feature name').fill(FEATURE_NAME)
+    await expect(createButton).toBeDisabled()
+
+    // ── A non-default tier, so the chosen tier has to show up in the created work
+    await dialog.getByLabel('Template', { exact: true }).selectOption({ label: TEMPLATE_NAME })
+    await dialog.getByRole('button', { name: 'L', exact: true }).click()
+    await dialog.getByLabel('Story name').fill(STORY_NAME)
+    await expect(createButton).toBeEnabled()
+
+    const featureWrite = page.waitForResponse(res =>
+      res.request().method() === 'POST' && /^\/api\/epics\/[^/]+\/features$/.test(new URL(res.url()).pathname))
+    const applyWrite = page.waitForResponse(res =>
+      res.request().method() === 'POST' && /^\/api\/features\/[^/]+\/apply-template$/.test(new URL(res.url()).pathname))
+    await createButton.click()
+    expect((await featureWrite).status()).toBeLessThan(300)
+    expect((await applyWrite).status()).toBeLessThan(300)
+
+    // ── The new feature is shown with its template-backed story
+    await expect(dialog).toBeHidden()
+    await expect(page.getByText(FEATURE_NAME)).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText(STORY_NAME)).toBeVisible({ timeout: 10_000 })
+
+    await page.getByText(STORY_NAME).first().click()
+    await expect(page.getByText(TIERED_TASK_NAME, { exact: true })).toBeVisible({ timeout: 8_000 })
+
+    // ── The story recorded the template and tier; the task used that tier's hours
+    const csv = await exportBacklog(page)
+    const storyLine = csv.lines.find(line =>
+      line.startsWith('Story,') && csv.field(line, 'Story') === STORY_NAME)!
+    expect(csv.field(storyLine, 'Feature')).toBe(FEATURE_NAME)
+    expect(csv.field(storyLine, 'Template')).toBe(TEMPLATE_NAME)
+    expect(csv.field(storyLine, 'TemplateSize')).toBe('Large')
+
+    const taskLine = csv.lines.find(line =>
+      line.startsWith('Task,') && csv.field(line, 'Story') === STORY_NAME && csv.field(line, 'Task') === TIERED_TASK_NAME)!
+    expect(csv.field(taskLine, 'HoursEffort')).toBe('8')
+    expect(csv.field(taskLine, 'Description')).toBe(`<p>${TIERED_TASK_DESCRIPTION}</p>`)
+
+    // ── The existing per-feature template action and blank creation path are intact
+    await expect(page.getByRole('button', { name: '+ Template', exact: true }).first()).toBeVisible()
+    await page.getByRole('button', { name: '+ Add feature', exact: true }).click()
+    await page.getByPlaceholder('Feature name *').fill(MANUAL_FEATURE_NAME)
+    await page.getByRole('button', { name: /^save$/i }).click()
+    await expect(page.getByText(MANUAL_FEATURE_NAME)).toBeVisible({ timeout: 8_000 })
   })
 })

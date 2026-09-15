@@ -9,6 +9,7 @@ import type { EpicColour } from '../../lib/epicColours'
 import { invalidateProjectAll, invalidateProjectDocumentData } from '../../lib/projectInvalidation'
 import StoryList from './StoryList'
 import ApplyTemplateModal from './ApplyTemplateModal'
+import AddFeatureFromTemplateModal from './AddFeatureFromTemplateModal'
 import RichTextEditor from '../shared/RichTextEditor'
 interface Props {
   epicId: string
@@ -157,6 +158,7 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
   const qc = useQueryClient()
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [adding, setAdding] = useState(false)
+  const [addingFromTemplate, setAddingFromTemplate] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState({ name: '', description: '', assumptions: '' })
   const [applyTemplateFeatureId, setApplyTemplateFeatureId] = useState<string | null>(null)
@@ -223,6 +225,19 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
           onClose={() => setApplyTemplateFeatureId(null)}
         />
       )}
+      {addingFromTemplate && (
+        <AddFeatureFromTemplateModal
+          epicId={epicId}
+          onClose={() => setAddingFromTemplate(false)}
+          onSettled={(createdFeatureId) => {
+            // One refresh for the whole two-call workflow (issue #295).
+            invalidate()
+            if (!createdFeatureId) return
+            setAddingFromTemplate(false)
+            setExpandedIds(s => { const n = new Set(s); n.add(createdFeatureId); return n })
+          }}
+        />
+      )}
       <SortableContext items={features.map(f => 'feature-' + f.id)} strategy={verticalListSortingStrategy}>
         {features.map(feature => (
           <SortableFeatureItem
@@ -263,9 +278,14 @@ export default function FeatureList({ epicId, features, resourceTypes, projectId
           saving={createFeature.isPending}
         />
       ) : (
-        <button onClick={() => setAdding(true)} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 flex items-center gap-1 py-1 pl-1 ml-2">
-          + Add feature
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={() => setAdding(true)} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 flex items-center gap-1 py-1 pl-1 ml-2">
+            + Add feature
+          </button>
+          <button onClick={() => setAddingFromTemplate(true)} className="text-xs text-purple-500 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300 flex items-center gap-1 py-1">
+            Add from template
+          </button>
+        </div>
       )}
     </div>
   )

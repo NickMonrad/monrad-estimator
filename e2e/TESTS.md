@@ -269,7 +269,7 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 
 ---
 
-### `templates.spec.ts` — Template Library (8 tests)
+### `templates.spec.ts` — Template Library (9 tests)
 
 #### `Template Library` describe block (5 tests)
 
@@ -293,6 +293,12 @@ Selectors target the SVG-based Gantt introduced after the CSS-grid rewrite. Each
 |------|-------------|
 | refreshes every template-backed story at its own recorded complexity | Creates a template with distinct XS–XL hours, applies it to two Stories as S and L, changes the template's assumptions and task description, adds a manual task to one Story, then runs the single Backlog **Refresh templates** action and verifies through the CSV export that each Story kept its own tier (2h vs 8h), the #168 metadata propagated and the manual task survived |
 | requires a complexity choice for a template-backed story that has none | Imports a Story row that names a template without a `TemplateSize` (a story with no recorded complexity), then verifies the Backlog **Refresh templates** dialog blocks the refresh until a complexity is chosen, and that the chosen tier is persisted and round-trips through the CSV `TemplateSize` column |
+
+#### `Add feature from template` describe block (1 test — issue #295)
+
+| Test | Description |
+|------|-------------|
+| creates the feature, its template story and its template tasks from the Add Feature area | Creates a template with distinct XS–XL hours and an Epic, then verifies `+ Add feature` and `Add from template` are offered together. Confirms creation is blocked until the feature name, template and story name are supplied, creates at a non-default tier (**L**), waits for the `POST /epics/:id/features` and `POST /api/features/:id/apply-template` writes, and asserts the new Feature expands to its template-backed Story and Task. The CSV export proves the Story recorded the template and `TemplateSize=Large` while the Task took the L tier's 8h and the template's description metadata. Finally re-asserts the per-Feature `+ Template` action and that `+ Add feature` still creates a blank Feature |
 
 ---
 

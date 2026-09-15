@@ -1,35 +1,8 @@
 import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
-
-interface TemplateTask {
-  id: string
-  name: string
-  hoursExtraSmall: number
-  hoursSmall: number
-  hoursMedium: number
-  hoursLarge: number
-  hoursExtraLarge: number
-  resourceTypeName: string
-}
-
-interface FeatureTemplate {
-  id: string
-  name: string
-  category: string | null
-  description: string | null
-  tasks: TemplateTask[]
-}
-
-type Complexity = 'EXTRA_SMALL' | 'SMALL' | 'MEDIUM' | 'LARGE' | 'EXTRA_LARGE'
-
-const COMPLEXITY_LABELS: Record<Complexity, string> = {
-  EXTRA_SMALL: 'XS',
-  SMALL: 'S',
-  MEDIUM: 'M',
-  LARGE: 'L',
-  EXTRA_LARGE: 'XL',
-}
+import { ComplexityPicker, TemplateSelect } from './TemplateFields'
+import { useFeatureTemplates, type Complexity } from '../../lib/featureTemplates'
 
 interface Props {
   featureId: string
@@ -43,10 +16,7 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
   const [complexity, setComplexity] = useState<Complexity>('MEDIUM')
   const [storyName, setStoryName] = useState<string>('')
 
-  const { data: templates = [] } = useQuery<FeatureTemplate[]>({
-    queryKey: ['templates'],
-    queryFn: () => api.get('/templates').then(r => r.data),
-  })
+  const { data: templates = [] } = useFeatureTemplates()
 
   const apply = useMutation({
     mutationFn: () => api.post(`/features/${featureId}/apply-template`, {
@@ -68,18 +38,11 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
         <div className="space-y-4">
           <div>
             <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">Template</label>
-            <select
+            <TemplateSelect
+              templates={templates}
               value={selectedTemplateId}
-              onChange={e => setSelectedTemplateId(e.target.value)}
-              className="w-full border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-lab3-blue"
-            >
-              <option value="">Select a template…</option>
-              {templates.map(tpl => (
-                <option key={tpl.id} value={tpl.id}>
-                  {tpl.name}{tpl.category ? ` (${tpl.category})` : ''}
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedTemplateId}
+            />
           </div>
 
           {selectedTemplateId && (
@@ -92,21 +55,7 @@ export default function ApplyTemplateModal({ featureId, projectId, onClose }: Pr
 
           <div>
             <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-2">Complexity</label>
-            <div className="flex gap-2">
-              {(Object.keys(COMPLEXITY_LABELS) as Complexity[]).map(c => (
-                <button
-                  key={c}
-                  onClick={() => setComplexity(c)}
-                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    complexity === c
-                      ? 'bg-lab3-navy text-white'
-                      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
-                  }`}
-                >
-                  {COMPLEXITY_LABELS[c]}
-                </button>
-              ))}
-            </div>
+            <ComplexityPicker value={complexity} onChange={setComplexity} />
           </div>
 
           {selectedTemplateId && (
