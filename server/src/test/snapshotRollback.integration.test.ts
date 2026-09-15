@@ -3129,5 +3129,117 @@ describeIf('Scenario K — V4 restores scope and scheduling fields', () => {
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Test count: 13 total (A:2, B:1, C:1, D:6, E:1, F:1, G:1)
+// Scenario L — applied template complexity round-trips through snapshots
+// ═════════════════════════════════════════════════════════════════════════════
+
+describeIf('Scenario L — snapshots carry applied template complexity (issue #237)', () => {
+  let projectId: string
+  let templateId: string
+  let currentSnapshotId: string
+  let preFieldSnapshotId: string
+
+  beforeAll(async () => {
+    if (!runIntegration) return
+    projectId = await createProject()
+    const rtId = await createResourceType(projectId, 'rt-l-dev', 'Developer', {})
+    await createProfile(
+      projectId, 'prof-l-role', 'ROLE', rtId, null,
+      {
+        planningBasis: 'AVAILABILITY_WINDOW',
+        source: 'AVAILABILITY_WINDOW',
+        defaultPercent: 100,
+      },
+    )
+
+    const template = await prisma.featureTemplate.create({
+      data: { name: `Snapshot complexity template ${Date.now()}`, category: 'Engineering' },
+    })
+    templateId = template.id
+
+    const backlog = await createEpicBacklog(projectId, rtId, templateId)
+    await prisma.userStory.update({
+      where: { id: backlog.storyId },
+      data: { appliedTemplateComplexity: 'EXTRA_LARGE' },
+    })
+
+    const snapshot = await buildSnapshot(projectId, prisma)
+    currentSnapshotId = (
+      await prisma.backlogSnapshot.create({
+        data: {
+          projectId,
+          label: 'Recorded complexity snapshot',
+          trigger: 'manual',
+          snapshot: snapshot as unknown as object,
+          createdById: userId,
+        },
+      })
+    ).id
+
+    // A snapshot row written before issue #237 carries no per-story complexity.
+    const preField = structuredClone(snapshot)
+    for (const epic of preField.epics) {
+      for (const feature of epic.features) {
+        for (const story of feature.userStories) {
+          delete story.appliedTemplateComplexity
+        }
+      }
+    }
+    preFieldSnapshotId = (
+      await prisma.backlogSnapshot.create({
+        data: {
+          projectId,
+          label: 'Pre-#237 snapshot',
+          trigger: 'manual',
+          snapshot: preField as unknown as object,
+          createdById: userId,
+        },
+      })
+    ).id
+  })
+
+  afterAll(async () => {
+    if (!runIntegration) return
+    if (templateId) await prisma.featureTemplate.deleteMany({ where: { id: templateId } })
+  })
+
+  /** Rollback recreates the story row, so each step re-reads the current one. */
+  async function currentStory() {
+    const story = await prisma.userStory.findFirst({ where: { feature: { epic: { projectId } } } })
+    if (!story) throw new Error('Scenario L story fixture missing')
+    return story
+  }
+
+  it('restores the complexity recorded in the snapshot', async () => {
+    const before = await currentStory()
+    await prisma.userStory.update({
+      where: { id: before.id },
+      data: { appliedTemplateComplexity: 'SMALL' },
+    })
+
+    await rollbackProjectSnapshot({ projectId, snapshotId: currentSnapshotId, userId, db: prisma })
+
+    expect(await currentStory()).toMatchObject({
+      appliedTemplateId: templateId,
+      appliedTemplateComplexity: 'EXTRA_LARGE',
+    })
+  })
+
+  it('restores a snapshot predating the field as null without failing', async () => {
+    const before = await currentStory()
+    await prisma.userStory.update({
+      where: { id: before.id },
+      data: { appliedTemplateComplexity: 'SMALL' },
+    })
+
+    await rollbackProjectSnapshot({ projectId, snapshotId: preFieldSnapshotId, userId, db: prisma })
+
+    expect(await currentStory()).toMatchObject({
+      appliedTemplateId: templateId,
+      appliedTemplateComplexity: null,
+    })
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Test count: 15 total (A:2, B:1, C:1, D:6, E:1, F:1, G:1, K:1, L:2)
 // All under describeIf — skipped when INTEGRATION_TEST is not 'true'.

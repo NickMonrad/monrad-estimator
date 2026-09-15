@@ -321,6 +321,7 @@ router.post('/:id/clone', asyncHandler(async (req: AuthRequest, res: Response) =
               order: story.order,
               isActive: story.isActive,
               appliedTemplateId: story.appliedTemplateId,
+              appliedTemplateComplexity: story.appliedTemplateComplexity,
               featureId: newFeature.id,
             },
           })

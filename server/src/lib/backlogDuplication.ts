@@ -32,6 +32,7 @@ type StorySource = {
   order: number
   isActive: boolean
   appliedTemplateId: string | null
+  appliedTemplateComplexity: string | null
   featureId: string
   tasks: TaskSource[]
 }
@@ -128,6 +129,7 @@ async function copyStory(
       assumptions: source.assumptions,
       isActive: source.isActive,
       appliedTemplateId: source.appliedTemplateId,
+      appliedTemplateComplexity: source.appliedTemplateComplexity,
       featureId,
       order,
     },

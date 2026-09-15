@@ -219,4 +219,158 @@ describe('GET /api/projects/:projectId/backlog/export-csv', () => {
     expect(parsed).toHaveLength(1)
     expect(parsed[0].Epic).toBe("'=HYPERLINK(\"http://evil\")")
   })
+
+  it('exports the recorded template complexity through the existing TemplateSize column', async () => {
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([
+      {
+        id: 'epic-1', projectId, name: 'Platform',
+        description: null, assumptions: null, isActive: true, featureMode: 'sequential', order: 0,
+        features: [{
+          id: 'feat-1', name: 'Auth', description: null, assumptions: null, isActive: true,
+          featureMode: 'sequential', timelineColour: null, order: 0,
+          userStories: [
+            {
+              id: 'story-1', name: 'Login', description: null, assumptions: null, order: 0,
+              isActive: true, appliedTemplateComplexity: 'EXTRA_LARGE',
+              appliedTemplate: { id: 'tpl-1', name: 'Login Flow' }, tasks: [],
+            },
+            {
+              id: 'story-2', name: 'Pre-existing', description: null, assumptions: null, order: 1,
+              isActive: true, appliedTemplateComplexity: null,
+              appliedTemplate: { id: 'tpl-1', name: 'Login Flow' }, tasks: [],
+            },
+          ],
+        }],
+      },
+    ] as never)
+
+    const res = await request(app)
+      .get(`/api/projects/${projectId}/backlog/export-csv`)
+      .set('Authorization', authHeader)
+
+    const { parse } = await import('csv-parse/sync')
+    const parsed = parse(res.text, { columns: true, skip_empty_lines: true, trim: true }) as Record<string, string>[]
+    const templated = parsed.find(row => row.Story === 'Login')!
+    expect(templated.Template).toBe('Login Flow')
+    expect(templated.TemplateSize).toBe('XL')
+    expect(parsed.find(row => row.Story === 'Pre-existing')!.TemplateSize).toBe('')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Issue #237 — applied template complexity from the existing TemplateSize
+// ---------------------------------------------------------------------------
+
+describe('POST /api/projects/:projectId/backlog/import-csv applied template complexity', () => {
+  /** Canonical Story row as produced by stage-csv, with #237 fields overridable. */
+  function storyRow(overrides: Record<string, unknown> = {}) {
+    return {
+      rowIndex: 0,
+      type: 'Story',
+      epic: 'Platform',
+      feature: 'Auth',
+      story: 'Login',
+      task: '',
+      epicStatus: true,
+      featureStatus: true,
+      storyStatus: true,
+      epicMode: 'sequential',
+      featureMode: 'sequential',
+      epicDependsOn: [],
+      featureDependsOn: [],
+      template: 'Login Flow',
+      templateSize: '',
+      resourceType: '',
+      hoursExtraSmall: 0,
+      hoursSmall: 0,
+      hoursMedium: 0,
+      hoursLarge: 0,
+      hoursExtraLarge: 0,
+      hoursEffort: 0,
+      durationDays: 0,
+      description: '',
+      assumptions: '',
+      errors: [],
+      warnings: [],
+      ...overrides,
+    }
+  }
+
+  /** Run the route's transaction callback against a fake client that records story writes. */
+  function useImportTransaction(existingStory: unknown) {
+    const storyCreate = vi.fn().mockResolvedValue({ id: 'story-created' })
+    const storyUpdate = vi.fn().mockResolvedValue({ id: 'story-existing' })
+    const tx = {
+      epic: { findFirst: vi.fn().mockResolvedValue({ id: 'epic-1' }), create: vi.fn(), update: vi.fn(), count: vi.fn().mockResolvedValue(1) },
+      feature: { findFirst: vi.fn().mockResolvedValue({ id: 'feat-1' }), create: vi.fn(), update: vi.fn(), count: vi.fn().mockResolvedValue(1) },
+      userStory: {
+        findFirst: vi.fn().mockResolvedValue(existingStory),
+        create: storyCreate,
+        update: storyUpdate,
+        count: vi.fn().mockResolvedValue(0),
+      },
+      featureTemplate: { findUnique: vi.fn().mockResolvedValue({ id: 'tpl-1', tasks: [] }) },
+      task: { count: vi.fn().mockResolvedValue(0), findFirst: vi.fn().mockResolvedValue(null), create: vi.fn() },
+      templateTask: { findFirst: vi.fn().mockResolvedValue(null) },
+    }
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn: unknown) => {
+      // The route hands its callback to $transaction; run it against the fake client.
+      const runInTransaction = fn as (client: unknown) => Promise<unknown>
+      return runInTransaction(tx)
+    })
+    return { storyCreate, storyUpdate }
+  }
+
+  beforeEach(() => {
+    vi.mocked(prisma.project.findFirst).mockResolvedValue(mockProject as never)
+    vi.mocked(prisma.epic.findMany).mockResolvedValue([] as never)
+    vi.mocked(prisma.resourceType.findMany).mockResolvedValue([
+      { id: 'rt-dev', name: 'Developer', hoursPerDay: 8 },
+    ] as never)
+  })
+
+  it('stores the complexity mapped from a valid TemplateSize', async () => {
+    const { storyCreate, storyUpdate } = useImportTransaction(null)
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/backlog/import-csv`)
+      .set('Authorization', authHeader)
+      .send({ rows: [storyRow({ templateSize: 'Large' })] })
+
+    expect(res.status).toBe(200)
+    expect(storyCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ appliedTemplateId: 'tpl-1', appliedTemplateComplexity: 'LARGE' }),
+    }))
+    expect(storyUpdate).not.toHaveBeenCalled()
+  })
+
+  it('records no complexity for a legacy row whose TemplateSize is absent', async () => {
+    const { storyCreate } = useImportTransaction(null)
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/backlog/import-csv`)
+      .set('Authorization', authHeader)
+      .send({ rows: [storyRow({ templateSize: '' })] })
+
+    expect(res.status).toBe(200)
+    expect(storyCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ appliedTemplateId: 'tpl-1', appliedTemplateComplexity: null }),
+    }))
+  })
+
+  it('updates an existing story with the complexity named by its Story row', async () => {
+    const { storyCreate, storyUpdate } = useImportTransaction({ id: 'story-existing' })
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/backlog/import-csv`)
+      .set('Authorization', authHeader)
+      .send({ rows: [storyRow({ templateSize: 'XS' })] })
+
+    expect(res.status).toBe(200)
+    expect(storyCreate).not.toHaveBeenCalled()
+    expect(storyUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'story-existing' },
+      data: expect.objectContaining({ appliedTemplateId: 'tpl-1', appliedTemplateComplexity: 'EXTRA_SMALL' }),
+    }))
+  })
 })

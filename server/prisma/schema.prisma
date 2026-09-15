@@ -324,22 +324,23 @@ model StoryTimelineEntry {
 }
 
 model UserStory {
-  id                String   @id @default(cuid())
-  name              String
-  description       String?
-  assumptions       String?
-  order             Int      @default(0)
-  isActive          Boolean  @default(true)
-  appliedTemplateId String?
-  appliedTemplate   FeatureTemplate? @relation(fields: [appliedTemplateId], references: [id])
-  feature           Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
-  featureId         String
-  tasks             Task[]
-  dependencies      StoryDependency[]     @relation("StoryDeps")
-  dependents        StoryDependency[]     @relation("StoryDepsOn")
-  timelineEntry     StoryTimelineEntry?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id                        String   @id @default(cuid())
+  name                      String
+  description               String?
+  assumptions               String?
+  order                     Int      @default(0)
+  isActive                  Boolean  @default(true)
+  appliedTemplateId         String?
+  appliedTemplateComplexity String?
+  appliedTemplate           FeatureTemplate? @relation(fields: [appliedTemplateId], references: [id])
+  feature                   Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  featureId                 String
+  tasks                     Task[]
+  dependencies              StoryDependency[]     @relation("StoryDeps")
+  dependents                StoryDependency[]     @relation("StoryDepsOn")
+  timelineEntry             StoryTimelineEntry?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
 
   @@index([featureId, order])
 }

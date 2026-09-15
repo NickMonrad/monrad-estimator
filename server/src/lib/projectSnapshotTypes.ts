@@ -116,6 +116,12 @@ export type SnapshotUserStory = {
   order: number
   isActive: boolean | null
   appliedTemplateId: string | null
+  /**
+   * Template complexity recorded when the story's template was applied or last
+   * refreshed (issue #237). Absent on snapshots created before the field
+   * existed; those restore as null so no complexity is ever inferred.
+   */
+  appliedTemplateComplexity?: string | null
   featureId: string
   tasks: SnapshotTask[]
 }

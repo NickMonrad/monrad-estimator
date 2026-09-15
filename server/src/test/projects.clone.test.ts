@@ -435,6 +435,77 @@ describe('POST /api/projects/:id/clone', () => {
     expect(teData[0].isManual).toBe(true)
   })
 
+  // ── Template-backed stories ──────────────────────────────────────────
+
+  it('clones the applied template reference and its recorded complexity', async () => {
+    const src = {
+      ...mockSource,
+      epics: [
+        {
+          id: 'epic-1',
+          featureMode: 'sequential',
+          scheduleMode: 'sequential',
+          timelineStartWeek: null,
+          epicDependencies: [],
+          epicDependents: [],
+          features: [
+            {
+              id: 'feat-1',
+              featureMode: 'sequential',
+              timelineColour: null,
+              timelineStartWeek: null,
+              dependencies: [],
+              dependents: [],
+              timelineEntry: null,
+              userStories: [
+                {
+                  id: 'story-1',
+                  name: 'Templated story',
+                  description: null,
+                  assumptions: null,
+                  order: 0,
+                  isActive: true,
+                  appliedTemplateId: 'tpl-1',
+                  appliedTemplateComplexity: 'LARGE',
+                  dependencies: [],
+                  dependents: [],
+                  timelineEntry: null,
+                  tasks: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }
+    const storyData: Array<Record<string, unknown>> = []
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
+      const tx = baseTx()
+      tx.project.findFirst
+        .mockResolvedValueOnce(src as unknown as Record<string, unknown>)
+        .mockResolvedValueOnce(mockClonedProject as unknown as Record<string, unknown>)
+      tx.project.create = vi.fn().mockResolvedValue({ id: 'proj-clone-1' })
+      tx.epic.create = vi.fn().mockResolvedValue({ id: 'epic-clone-1' })
+      tx.feature.create = vi.fn().mockResolvedValue({ id: 'feat-clone-1' })
+      tx.userStory.create = vi.fn((args: { data: Record<string, unknown> }) => {
+        storyData.push(args.data)
+        return { id: 'story-clone-1' }
+      })
+      tx.capacityProfile.findMany.mockResolvedValue([])
+      tx.$queryRaw.mockResolvedValue([])
+      return (fn as (tx: unknown) => Promise<unknown>)(tx)
+    })
+
+    await request(app).post('/api/projects/proj-1/clone').set('Authorization', authHeader)
+
+    expect(storyData).toHaveLength(1)
+    expect(storyData[0]).toMatchObject({
+      featureId: 'feat-clone-1',
+      appliedTemplateId: 'tpl-1',
+      appliedTemplateComplexity: 'LARGE',
+    })
+  })
+
   // ── Story deps and story timeline entries ────────────────────────────
 
   it('story dependencies and story timeline entries use cloned IDs and preserve values', async () => {
