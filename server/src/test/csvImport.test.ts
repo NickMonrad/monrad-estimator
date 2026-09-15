@@ -297,7 +297,7 @@ describe('POST /api/projects/:projectId/backlog/import-csv applied template comp
   }
 
   /** Run the route's transaction callback against a fake client that records story writes. */
-  function useImportTransaction(existingStory: unknown) {
+  function useImportTransaction(existingStory: unknown, resolvedTemplate: unknown = { id: 'tpl-1', tasks: [] }) {
     const storyCreate = vi.fn().mockResolvedValue({ id: 'story-created' })
     const storyUpdate = vi.fn().mockResolvedValue({ id: 'story-existing' })
     const tx = {
@@ -309,7 +309,7 @@ describe('POST /api/projects/:projectId/backlog/import-csv applied template comp
         update: storyUpdate,
         count: vi.fn().mockResolvedValue(0),
       },
-      featureTemplate: { findUnique: vi.fn().mockResolvedValue({ id: 'tpl-1', tasks: [] }) },
+      featureTemplate: { findUnique: vi.fn().mockResolvedValue(resolvedTemplate) },
       task: { count: vi.fn().mockResolvedValue(0), findFirst: vi.fn().mockResolvedValue(null), create: vi.fn() },
       templateTask: { findFirst: vi.fn().mockResolvedValue(null) },
     }
@@ -342,6 +342,30 @@ describe('POST /api/projects/:projectId/backlog/import-csv applied template comp
       data: expect.objectContaining({ appliedTemplateId: 'tpl-1', appliedTemplateComplexity: 'LARGE' }),
     }))
     expect(storyUpdate).not.toHaveBeenCalled()
+  })
+
+  it('never records complexity for a Story row whose template did not resolve', async () => {
+    const { storyCreate } = useImportTransaction(null, null)
+
+    const res = await request(app)
+      .post(`/api/projects/${projectId}/backlog/import-csv`)
+      .set('Authorization', authHeader)
+      .send({
+        rows: [
+          // Blank Template with a size, and a size for a template name that does not exist
+          storyRow({ template: '', templateSize: 'Medium' }),
+          storyRow({ story: 'Signup', template: 'Retired Flow', templateSize: 'Large' }),
+        ],
+      })
+
+    expect(res.status).toBe(200)
+    expect(storyCreate).toHaveBeenCalledTimes(2)
+    for (const call of storyCreate.mock.calls) {
+      expect(call[0].data).toEqual(expect.objectContaining({
+        appliedTemplateId: null,
+        appliedTemplateComplexity: null,
+      }))
+    }
   })
 
   it('records no complexity for a legacy row whose TemplateSize is absent', async () => {

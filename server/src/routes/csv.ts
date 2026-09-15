@@ -687,7 +687,10 @@ router.post('/import-csv', asyncHandler(async (req: AuthRequest, res: Response) 
           : null
         const appliedTemplateId = templateRecord?.id ?? null
         const templateSize = isStoryRow ? (row.templateSize ?? '') : ''
-        const appliedTemplateComplexity = complexityFromTemplateSize(templateSize)
+        // A size only describes an applied template's tier — never record one without a template.
+        const appliedTemplateComplexity = appliedTemplateId
+          ? complexityFromTemplateSize(templateSize)
+          : null
 
         let story = await tx.userStory.findFirst({ where: { featureId, name: row.story } })
         if (!story) {
