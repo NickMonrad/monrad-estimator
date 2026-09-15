@@ -29,6 +29,52 @@ function isSameFeatureDep(a: FeatureDependency | null, b: FeatureDependency | nu
   return a !== null && b !== null && a.featureId === b.featureId && a.dependsOnId === b.dependsOnId
 }
 
+interface FeatureDepGeometry {
+  predEntry: TimelineEntry
+  succEntry: TimelineEntry
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  midX: number
+  midY: number
+}
+
+/**
+ * SVG endpoints and curve midpoint for one feature dependency, shared by the
+ * connector layer and the foreground remove control so both agree on where the
+ * relationship is drawn. The bezier control points are symmetric, so the curve
+ * midpoint is the mean of both endpoints.
+ */
+function featureDepGeometry(
+  dep: FeatureDependency,
+  featureById: Map<string, TimelineEntry>,
+  rowY: Map<string, number>,
+  weekOffset: number,
+  colW: number,
+  dragging: GanttDraggingState | null,
+): FeatureDepGeometry | null {
+  const predEntry = featureById.get(dep.dependsOnId)
+  const succEntry = featureById.get(dep.featureId)
+  if (!predEntry || !succEntry) return null
+
+  const predY = rowY.get(`feature-${predEntry.featureId}`)
+  const succY = rowY.get(`feature-${succEntry.featureId}`)
+  if (predY === undefined || succY === undefined) return null
+
+  const predStart =
+    dragging?.type === 'feature' && dragging.id === predEntry.featureId ? dragging.currentStart : predEntry.startWeek
+  const succStart =
+    dragging?.type === 'feature' && dragging.id === succEntry.featureId ? dragging.currentStart : succEntry.startWeek
+
+  const x1 = (predStart + weekOffset + predEntry.durationWeeks) * colW
+  const y1 = predY + FEAT_ROW_H / 2
+  const x2 = (succStart + weekOffset) * colW
+  const y2 = succY + FEAT_ROW_H / 2
+
+  return { predEntry, succEntry, x1, y1, x2, y2, midX: (x1 + x2) / 2, midY: (y1 + y2) / 2 }
+}
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -54,7 +100,6 @@ interface GanttDependencyArrowsProps {
   dependencyPreview?: GanttDependencyDragPreview | null
   selectedFeatureDep: FeatureDependency | null
   onSelectFeatureDep: (dep: FeatureDependency | null) => void
-  onRemoveFeatureDep: (featureId: string, dependsOnId: string) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +119,6 @@ export default function GanttDependencyArrows({
   dependencyPreview,
   selectedFeatureDep,
   onSelectFeatureDep,
-  onRemoveFeatureDep,
 }: GanttDependencyArrowsProps) {
   // Hover/keyboard-focus emphasis for feature connectors. Selection lives in the
   // parent because it survives across dependency refreshes.
@@ -111,31 +155,13 @@ export default function GanttDependencyArrows({
 
       {/* Feature dependency arrows */}
       {featureDependencies.map(dep => {
-        const predEntry = featureById.get(dep.dependsOnId)
-        const succEntry = featureById.get(dep.featureId)
-        if (!predEntry || !succEntry) return null
+        const geometry = featureDepGeometry(dep, featureById, rowY, weekOffset, colW, dragging)
+        if (!geometry) return null
 
-        const predY = rowY.get(`feature-${predEntry.featureId}`)
-        const succY = rowY.get(`feature-${succEntry.featureId}`)
-        if (predY === undefined || succY === undefined) return null
-
-        const predDragging = dragging?.type === 'feature' && dragging.id === predEntry.featureId
-        const succDragging = dragging?.type === 'feature' && dragging.id === succEntry.featureId
-        const predStart = predDragging ? dragging!.currentStart : predEntry.startWeek
-        const succStart = succDragging ? dragging!.currentStart : succEntry.startWeek
-
-        const x1 = (predStart + weekOffset + predEntry.durationWeeks) * colW
-        const y1 = predY + FEAT_ROW_H / 2
-        const x2 = (succStart + weekOffset) * colW
-        const y2 = succY + FEAT_ROW_H / 2
-
+        const { predEntry, succEntry, x1, y1, x2, y2 } = geometry
         const isSelected = isSameFeatureDep(selectedFeatureDep, dep)
         const isEmphasised = isSelected || isSameFeatureDep(activeFeatureDep, dep)
         const depLabel = `${predEntry.featureName} → ${succEntry.featureName}`
-        // The bezier control points are symmetric, so the curve midpoint is the
-        // mean of both endpoints.
-        const midX = (x1 + x2) / 2
-        const midY = (y1 + y2) / 2
 
         return (
           <g key={`fdep-${dep.dependsOnId}-${dep.featureId}`}>
@@ -175,41 +201,6 @@ export default function GanttDependencyArrows({
                 }
               }}
             />
-            {isSelected && (
-              <>
-                <circle
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Remove dependency ${depLabel}`}
-                  data-testid={`dependency-remove-${dep.dependsOnId}-${dep.featureId}`}
-                  cx={midX}
-                  cy={midY}
-                  r={9}
-                  fill={DEP_REMOVE_COLOR}
-                  stroke="#ffffff"
-                  strokeWidth={1.5}
-                  className="cursor-pointer focus:outline-none hover:[stroke-width:3px] focus:[stroke:#1d245b] focus:[stroke-width:4px] dark:focus:[stroke:#ffffff]"
-                  style={{ pointerEvents: 'all' }}
-                  onClick={() => onRemoveFeatureDep(dep.featureId, dep.dependsOnId)}
-                  onKeyDown={event => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      onRemoveFeatureDep(dep.featureId, dep.dependsOnId)
-                    }
-                  }}
-                />
-                <text
-                  x={midX}
-                  y={midY + 4}
-                  textAnchor="middle"
-                  fontSize={11}
-                  fill="#ffffff"
-                  style={{ pointerEvents: 'none', userSelect: 'none' }}
-                >
-                  ✕
-                </text>
-              </>
-            )}
           </g>
         )
       })}
@@ -274,6 +265,76 @@ export default function GanttDependencyArrows({
           />
         )
       })}
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Component — renders inside an existing <svg>, after the row bars
+// ---------------------------------------------------------------------------
+export interface GanttFeatureDepRemoveControlProps {
+  dep: FeatureDependency
+  featureById: Map<string, TimelineEntry>
+  rowY: Map<string, number>
+  weekOffset: number
+  colW: number
+  dragging: GanttDraggingState | null
+  onRemoveFeatureDep: (featureId: string, dependsOnId: string) => void
+}
+
+/**
+ * Remove control for the selected feature dependency. The chart renders it after
+ * the row bars, because a connector spanning an intervening feature row has its
+ * midpoint under that feature's opaque bar — the control would otherwise be
+ * neither visible nor clickable.
+ */
+export function GanttFeatureDepRemoveControl({
+  dep,
+  featureById,
+  rowY,
+  weekOffset,
+  colW,
+  dragging,
+  onRemoveFeatureDep,
+}: GanttFeatureDepRemoveControlProps) {
+  const geometry = featureDepGeometry(dep, featureById, rowY, weekOffset, colW, dragging)
+  if (!geometry) return null
+
+  const remove = () => onRemoveFeatureDep(dep.featureId, dep.dependsOnId)
+
+  return (
+    <>
+      <circle
+        role="button"
+        tabIndex={0}
+        aria-label={`Remove dependency ${geometry.predEntry.featureName} → ${geometry.succEntry.featureName}`}
+        data-testid={`dependency-remove-${dep.dependsOnId}-${dep.featureId}`}
+        cx={geometry.midX}
+        cy={geometry.midY}
+        r={9}
+        fill={DEP_REMOVE_COLOR}
+        stroke="#ffffff"
+        strokeWidth={1.5}
+        className="cursor-pointer focus:outline-none hover:[stroke-width:3px] focus:[stroke:#1d245b] focus:[stroke-width:4px] dark:focus:[stroke:#ffffff]"
+        style={{ pointerEvents: 'all' }}
+        onClick={remove}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            remove()
+          }
+        }}
+      />
+      <text
+        x={geometry.midX}
+        y={geometry.midY + 4}
+        textAnchor="middle"
+        fontSize={11}
+        fill="#ffffff"
+        style={{ pointerEvents: 'none', userSelect: 'none' }}
+      >
+        ✕
+      </text>
     </>
   )
 }

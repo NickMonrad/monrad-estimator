@@ -18,7 +18,7 @@ import type {
   DependencyDragDirection,
 } from '../../hooks/useGanttLayout'
 import GanttBar from './GanttBar'
-import GanttDependencyArrows, { type GanttDependencyDragPreview } from './GanttDependencyArrows'
+import GanttDependencyArrows, { GanttFeatureDepRemoveControl, type GanttDependencyDragPreview } from './GanttDependencyArrows'
 import GanttLabelPanel from './GanttLabelPanel'
 import TimelineTooltip from './TimelineTooltip'
 
@@ -565,7 +565,6 @@ export default function GanttChart({
             dependencyPreview={dependencyPreview}
             selectedFeatureDep={activeSelectedFeatureDep}
             onSelectFeatureDep={setSelectedFeatureDep}
-            onRemoveFeatureDep={removeFeatureDependency}
           />
 
           {/* Onboarding zone */}
@@ -802,6 +801,19 @@ export default function GanttChart({
               />
             )
           })}
+
+          {/* Selected dependency remove control — must paint above the row bars */}
+          {activeSelectedFeatureDep && (
+            <GanttFeatureDepRemoveControl
+              dep={activeSelectedFeatureDep}
+              featureById={featureById}
+              rowY={rowY}
+              weekOffset={weekOffset}
+              colW={colW}
+              dragging={dragging}
+              onRemoveFeatureDep={removeFeatureDependency}
+            />
+          )}
         </svg>
       </div>
 
